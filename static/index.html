@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SZL Org Health · live</title>
+<style>
+  :root{
+    --bg:#171614; --surface:#1c1b19; --surface2:#201f1d; --border:#393836;
+    --text:#e9e8e6; --muted:#9a9996; --faint:#5a5957;
+    --green:#6daa45; --amber:#e8af34; --red:#dd6974; --gray:#5a5957; --teal:#4f98a3;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.5;
+    -webkit-font-smoothing:antialiased;padding:32px 20px 64px}
+  .wrap{max-width:1080px;margin:0 auto}
+  header{display:flex;align-items:baseline;justify-content:space-between;
+    flex-wrap:wrap;gap:12px;margin-bottom:8px}
+  h1{font-size:22px;font-weight:650;letter-spacing:-.01em}
+  h1 .live{color:var(--teal);font-size:12px;font-weight:600;text-transform:uppercase;
+    letter-spacing:.08em;vertical-align:middle;margin-left:10px}
+  .meta{color:var(--muted);font-size:13px;font-family:var(--mono)}
+  .subtitle{color:var(--muted);font-size:14px;margin-bottom:28px;max-width:70ch}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+    padding:18px 18px 14px;min-width:0}
+  .card h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;
+    color:var(--muted);margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .kpi{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
+  .kpi .val{font-size:30px;font-weight:680;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+  .kpi .unit{color:var(--muted);font-size:13px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:7px 0;border-top:1px solid var(--surface2);font-size:14px}
+  .row:first-of-type{border-top:none}
+  .row .name{font-family:var(--mono);font-size:13px;color:var(--text);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chip{font-size:11px;font-weight:650;padding:2px 9px;border-radius:20px;
+    letter-spacing:.02em;white-space:nowrap;font-variant-numeric:tabular-nums}
+  .chip.ok{background:rgba(109,170,69,.16);color:var(--green)}
+  .chip.warn{background:rgba(232,175,52,.16);color:var(--amber)}
+  .chip.bad{background:rgba(221,105,116,.18);color:var(--red)}
+  .chip.unk{background:rgba(90,89,87,.22);color:var(--muted)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none}
+  .dot.ok{background:var(--green)} .dot.warn{background:var(--amber)}
+  .dot.bad{background:var(--red)} .dot.unk{background:var(--gray)}
+  .foot{margin-top:26px;color:var(--faint);font-size:12px;font-family:var(--mono)}
+  .foot a{color:var(--teal);text-decoration:none}
+  .loading{color:var(--muted);font-size:14px;padding:40px 0}
+  .err{color:var(--red);font-size:13px}
+  .note{color:var(--faint);font-size:11.5px;margin-top:10px;line-height:1.4}
+  button.refresh{background:var(--surface2);border:1px solid var(--border);color:var(--text);
+    font:inherit;font-size:13px;padding:6px 14px;border-radius:8px;cursor:pointer}
+  button.refresh:hover{border-color:var(--teal)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>SZL Org Health<span class="live" id="modebadge">● loading</span></h1>
+    <div style="display:flex;align-items:center;gap:14px">
+      <span class="meta" id="ts">—</span>
+      <button class="refresh" id="refresh">Refresh</button>
+    </div>
+  </header>
+  <p class="subtitle">Every value is a real reading from GitHub, Hugging Face, and DNS.
+    When served with the live backend it re-fetches on demand; when served as a static snapshot it shows the captured reading, honestly timestamped.
+    Unverifiable data is shown as <span style="color:var(--muted)">UNKNOWN</span> — never fabricated, never guessed green.</p>
+
+  <div id="content"><div class="loading">Pulling live data from the estate…</div></div>
+
+  <div class="foot">
+    szl-org-health · reads api.github.com, huggingface.co, and DNS directly ·
+    cache 60s · <a href="/api/health">raw JSON</a>
+  </div>
+</div>
+
+<script>
+const el = document.getElementById('content');
+const tsEl = document.getElementById('ts');
+
+function chip(label, cls){ return `<span class="chip ${cls}">${label}</span>`; }
+function dot(cls){ return `<span class="dot ${cls}"></span>`; }
+
+function ciCls(c){ if(c==='success')return'ok'; if(c==='unknown'||c==null)return'unk';
+  if(['failure','startup_failure','timed_out','cancelled'].includes(c))return'bad'; return'warn'; }
+function protChip(p){ if(p===true)return chip('protected','ok'); if(p===false)return chip('none','bad');
+  return chip('unknown','unk'); }
+function num(n){ return n==null ? '—' : n; }
+function alertChip(n, warnAt){ if(n==null)return chip('unknown','unk');
+  if(n===0)return chip('0','ok'); return chip(String(n), n>=warnAt?'bad':'warn'); }
+
+function render(d){
+  tsEl.textContent = 'as of ' + (d.generated_at||'—');
+  const S = d.sources||{};
+  let html = '<div class="grid">';
+
+  // ---- GitHub CI + security ----
+  const gh = (S.github&&S.github.ok) ? S.github.data : null;
+  html += '<div class="card"><h2>'+dot(gh?'ok':'unk')+'GitHub — CI &amp; security</h2>';
+  if(gh){
+    const repos = gh.repos||{};
+    const names = Object.keys(repos);
+    const green = names.filter(r=>repos[r].ci==='success').length;
+    html += `<div class="kpi"><span class="val">${green}/${names.length}</span><span class="unit">repos CI green</span></div>`;
+    html += `<div class="row"><span class="name">open code-scanning</span>${alertChip(gh.alerts.code_scanning_open,20)}</div>`;
+    html += `<div class="row"><span class="name">└ high severity</span>${alertChip(gh.alerts.code_scanning_high,10)}</div>`;
+    html += `<div class="row"><span class="name">secret-scanning</span>${alertChip(gh.alerts.secret_scanning_open,1)}</div>`;
+    html += `<div class="row"><span class="name">dependabot</span>${alertChip(gh.alerts.dependabot_open,5)}</div>`;
+    html += `<div class="row"><span class="name">open PRs</span>${chip(num(gh.open_prs),'warn')}</div>`;
+    html += `<div class="row"><span class="name">open issues</span>${chip(num(gh.open_issues),'warn')}</div>`;
+    html += '<div class="note">Alert counts / branch-protection need an admin-scoped token; shown UNKNOWN when this token can\'t read them.</div>';
+  } else { html += '<div class="err">source unreachable</div>'; }
+  html += '</div>';
+
+  // ---- per-repo CI + protection ----
+  if(gh){
+    const repos = gh.repos||{};
+    html += '<div class="card"><h2>'+dot('ok')+'Repositories</h2>';
+    Object.keys(repos).sort().forEach(r=>{
+      const v=repos[r];
+      html += `<div class="row"><span class="name">${r}</span><span style="display:flex;gap:6px">${chip(v.ci,ciCls(v.ci))}${protChip(v.protected)}</span></div>`;
+    });
+    html += '</div>';
+  }
+
+  // ---- HF Spaces ----
+  const sp = (S.spaces&&S.spaces.ok) ? S.spaces.data : null;
+  html += '<div class="card"><h2>'+dot(sp?'ok':'unk')+'Hugging Face Spaces</h2>';
+  if(sp){
+    const keys=Object.keys(sp);
+    const running=keys.filter(k=>sp[k].stage==='RUNNING').length;
+    html += `<div class="kpi"><span class="val">${running}/${keys.length}</span><span class="unit">RUNNING</span></div>`;
+    keys.sort((a,b)=> (sp[b].monitored?1:0)-(sp[a].monitored?1:0)).forEach(k=>{
+      const v=sp[k];
+      const stageCls = v.stage==='RUNNING'?'ok':(v.stage==='unknown'?'unk':'warn');
+      let hz='';
+      if(v.monitored){ hz = v.healthz===200?chip('/healthz 200','ok'):(v.healthz?chip('/healthz '+v.healthz,'bad'):chip('/healthz —','unk')); }
+      html += `<div class="row"><span class="name">${k}</span><span style="display:flex;gap:6px">${chip(v.stage,stageCls)}${hz}</span></div>`;
+    });
+  } else { html += '<div class="err">source unreachable</div>'; }
+  html += '</div>';
+
+  // ---- Sites ----
+  const st = (S.sites&&S.sites.ok) ? S.sites.data : null;
+  html += '<div class="card"><h2>'+dot(st?'ok':'unk')+'Sites — reachability &amp; headers</h2>';
+  if(st){
+    Object.keys(st).forEach(s=>{
+      const v=st[s];
+      const up = v.http>=200&&v.http<400;
+      const hdrs=['hsts','csp','xfo','nosniff'].filter(h=>v[h]);
+      html += `<div class="row"><span class="name">${s}</span><span style="display:flex;gap:6px">${chip(v.http||'down',up?'ok':'bad')}${chip(hdrs.length+'/4 hdrs',hdrs.length>=2?'ok':'warn')}</span></div>`;
+    });
+    html += '<div class="note">Headers checked: HSTS, CSP, X-Frame-Options, X-Content-Type-Options.</div>';
+  } else { html += '<div class="err">source unreachable</div>'; }
+  html += '</div>';
+
+  // ---- DNS / email auth ----
+  const dns = (S.dns&&S.dns.ok) ? S.dns.data : null;
+  html += '<div class="card"><h2>'+dot(dns?'ok':'unk')+'DNS — email auth (SPF/DMARC)</h2>';
+  if(dns){
+    Object.keys(dns).forEach(dm=>{
+      const v=dns[dm];
+      const spf = v.spf?chip('SPF','ok'):chip('SPF','bad');
+      let dmarc;
+      if(v.dmarc_reject) dmarc=chip('DMARC reject','ok');
+      else if(v.dmarc) dmarc=chip('DMARC weak','warn');
+      else dmarc=chip('no DMARC','bad');
+      html += `<div class="row"><span class="name">${dm}</span><span style="display:flex;gap:6px">${spf}${dmarc}</span></div>`;
+    });
+    html += '<div class="note">DNS resolved live. Zones behind pending nameserver cutover may read as missing until activation.</div>';
+  } else { html += '<div class="err">source unreachable</div>'; }
+  html += '</div>';
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+async function load(){
+  el.innerHTML = '<div class="loading">Loading estate health…</div>';
+  // Prefer the live backend (dev sandbox, real-time). Fall back to the static
+  // snapshot (data.json) when no backend is present (deployed static build).
+  try{
+    const r = await fetch('/api/health?t='+Date.now());
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    render(await r.json());
+    document.getElementById('modebadge').textContent = '● live';
+    document.getElementById('modebadge').style.color = 'var(--teal)';
+    return;
+  }catch(e){ /* fall through to static snapshot */ }
+  try{
+    const r = await fetch('./data.json?t='+Date.now());
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d = await r.json();
+    render(d);
+    tsEl.textContent = 'snapshot ' + (d.generated_at||'—');
+    const mb=document.getElementById('modebadge');
+    mb.textContent = '● snapshot'; mb.style.color = 'var(--muted)';
+  }catch(e){ el.innerHTML = '<div class="err">Failed to load: '+e.message+'</div>'; }
+}
+document.getElementById('refresh').onclick = load;
+load();
+</script>
+</body>
+</html>
