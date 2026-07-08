@@ -48,12 +48,19 @@ _CACHE: dict = {"data": None, "ts": 0.0}
 _CACHE_TTL = 60  # seconds — don't hammer the APIs on every browser refresh
 
 
+# Optional override set by refresh_snapshot.py to keep scheduled runs bounded.
+_GH_TIMEOUT_OVERRIDE = None  # type: ignore
+
+
 def _gh(path: str, timeout: float = 20.0, retries: int = 2):
     """GET the GitHub API with retry. Returns (json, None) or (None, error_str).
 
     On the last failure returns (None, error) so callers can render an explicit
     UNKNOWN — never a fabricated green/false.
     """
+    if _GH_TIMEOUT_OVERRIDE is not None:
+        timeout = _GH_TIMEOUT_OVERRIDE
+        retries = 1
     req = urllib.request.Request(f"{GH}{path}", headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": "szl-org-health/1.0",
@@ -97,6 +104,13 @@ def _dig_txt(name: str) -> str:
 
 # ---- collectors ------------------------------------------------------------
 
+# FAST_MODE (set by the scheduled snapshot refresh) skips the per-repo branch-
+# protection probe. That probe needs an admin-scoped token to return signal and
+# otherwise reads UNKNOWN anyway, but it doubles the GitHub call count and is the
+# main cause of slow/timed-out refreshes. CI conclusion is the high-value field.
+FAST_MODE = False
+
+
 def collect_github() -> dict:
     repos = {}
 
@@ -105,28 +119,22 @@ def collect_github() -> dict:
         runs, err = _gh(f"/repos/{ORG}/{repo}/actions/runs?per_page=8")
         ci = "unknown"
         if runs and runs.get("workflow_runs"):
-            # most recent completed conclusion
             for r in runs["workflow_runs"]:
                 if r.get("conclusion"):
                     ci = r["conclusion"]
                     break
-        elif err:
-            ci = "unknown"
+        if FAST_MODE:
+            return repo, {"ci": ci, "protected": None}
         # branch protection on default branch.
-        # protected = True (has protection), False (404 = explicitly none),
-        # None = UNKNOWN (read failed/timed out) — never fabricate a False.
+        # protected = True (has protection); None = UNKNOWN (can't verify /
+        # timed out / token lacks scope) — never fabricate a False.
         meta, _ = _gh(f"/repos/{ORG}/{repo}")
         default = (meta or {}).get("default_branch") or "main"
         prot, perr = _gh(f"/repos/{ORG}/{repo}/branches/{default}/protection")
         if prot and ("enforce_admins" in prot or "required_pull_request_reviews" in prot):
             protected = True
-        elif perr in ("http403", "http404"):
-            # 403/404 here means THIS token can't see the protection endpoint
-            # (needs admin scope). We cannot verify => honest UNKNOWN, not False.
-            # (An unprotected branch also 404s, so we refuse to guess either way.)
-            protected = None
         else:
-            protected = None  # timeout / transport error => honest UNKNOWN
+            protected = None
         return repo, {"ci": ci, "protected": protected}
 
     with cf.ThreadPoolExecutor(max_workers=8) as ex:
