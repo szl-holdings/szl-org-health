@@ -17,6 +17,7 @@ green when it could not be verified.
 
 - A value is either a **real reading this request** or an explicit **UNKNOWN** (gray) — never a fabricated green/false.
 - Endpoints requiring an admin-scoped token (org alert counts, branch protection) render `UNKNOWN` when the running token can't read them, rather than guessing.
+- DNS tool absence, timeout, and resolver failure render `UNKNOWN` (`null` in the API). Only a successful TXT lookup with no matching record is shown as a negative SPF/DMARC result.
 - No secret values are ever surfaced.
 
 ## Run
