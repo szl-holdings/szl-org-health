@@ -1,31 +1,50 @@
-import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import dns.exception
+import dns.resolver
+
 import app
 
 
+class TxtRecord:
+    def __init__(self, *chunks: bytes):
+        self.strings = chunks
+
+
 class DnsTruthTests(unittest.TestCase):
-    @patch("app.subprocess.run")
-    def test_successful_empty_lookup_is_a_measured_negative(self, run):
-        run.return_value = subprocess.CompletedProcess(
-            args=["dig"], returncode=0, stdout="", stderr=""
+    @patch("app.dns.resolver.resolve", side_effect=dns.resolver.NoAnswer())
+    def test_nodata_is_a_measured_negative(self, _resolve):
+        self.assertEqual(app._resolve_txt("example.test"), "")
+
+    @patch("app.dns.resolver.resolve", side_effect=dns.resolver.NXDOMAIN())
+    def test_nxdomain_is_a_measured_negative(self, _resolve):
+        self.assertEqual(app._resolve_txt("example.test"), "")
+
+    @patch("app.dns.resolver.resolve", side_effect=dns.resolver.NoNameservers())
+    def test_servfail_or_refused_is_unknown(self, _resolve):
+        self.assertIsNone(app._resolve_txt("example.test"))
+
+    @patch("app.dns.resolver.resolve", side_effect=dns.exception.Timeout())
+    def test_timeout_is_unknown(self, _resolve):
+        self.assertIsNone(app._resolve_txt("example.test"))
+
+    @patch("app.dns.resolver.resolve")
+    def test_txt_chunks_and_records_are_decoded(self, resolve):
+        resolve.return_value = [
+            TxtRecord(b"v=spf1 ", b"include:example.test"),
+            TxtRecord(b"second-record"),
+        ]
+        self.assertEqual(
+            app._resolve_txt("example.test"),
+            "v=spf1 include:example.test\nsecond-record",
         )
-        self.assertEqual(app._dig_txt("example.test"), "")
-
-    @patch("app.subprocess.run")
-    def test_failed_lookup_is_unknown(self, run):
-        run.return_value = subprocess.CompletedProcess(
-            args=["dig"], returncode=9, stdout="", stderr="resolver failed"
+        resolve.assert_called_once_with(
+            "example.test", "TXT", search=False, lifetime=8.0
         )
-        self.assertIsNone(app._dig_txt("example.test"))
 
-    @patch("app.subprocess.run", side_effect=FileNotFoundError("dig"))
-    def test_missing_dig_is_unknown(self, _run):
-        self.assertIsNone(app._dig_txt("example.test"))
-
-    @patch("app._dig_txt", return_value=None)
+    @patch("app._resolve_txt", return_value=None)
     def test_collector_preserves_unknown_dns_state(self, _dig):
         result = app.collect_dns()
         for record in result.values():
@@ -33,7 +52,7 @@ class DnsTruthTests(unittest.TestCase):
             self.assertIsNone(record["dmarc"])
             self.assertIsNone(record["dmarc_reject"])
 
-    @patch("app._dig_txt")
+    @patch("app._resolve_txt")
     def test_collector_reports_only_measured_records(self, dig):
         dig.side_effect = lambda name: (
             '"v=DMARC1; p=reject"'

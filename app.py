@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import json
-import subprocess
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import dns.exception
+import dns.resolver
 
 ORG = "szl-holdings"
 HF_ORG = "SZLHOLDINGS"
@@ -86,25 +88,29 @@ def _http_probe(url: str, timeout: float = 12.0):
         return {"http": 0, "error": str(e)[:80]}
 
 
-def _dig_txt(name: str) -> str | None:
-    """Return TXT output, or ``None`` when DNS cannot be measured.
+def _resolve_txt(name: str, timeout: float = 8.0) -> str | None:
+    """Resolve TXT data without collapsing resolver failure into absence.
 
-    An empty string is a valid negative DNS result. Tool absence, timeout, and
-    resolver failure are UNKNOWN and must not be collapsed into that result.
+    ``""`` means a measured NXDOMAIN/NODATA response. ``None`` means the
+    resolver could not produce an authoritative result in the allowed time.
     """
     try:
-        result = subprocess.run(
-            ["dig", "+short", "TXT", name],
-            capture_output=True,
-            text=True,
-            timeout=8,
-            check=False,
+        answer = dns.resolver.resolve(
+            name,
+            "TXT",
+            search=False,
+            lifetime=timeout,
         )
-        if result.returncode != 0:
-            return None
-        return result.stdout.strip()
-    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+        return ""
+    except (dns.exception.Timeout, dns.resolver.NoNameservers, OSError):
         return None
+
+    records = []
+    for record in answer:
+        chunks = getattr(record, "strings", ())
+        records.append("".join(bytes(chunk).decode("utf-8", "replace") for chunk in chunks))
+    return "\n".join(records)
 
 
 # ---- collectors ------------------------------------------------------------
@@ -239,9 +245,9 @@ def collect_sites() -> dict:
 def collect_dns() -> dict:
     out = {}
     for d in DOMAINS:
-        spf = _dig_txt(d)
+        spf = _resolve_txt(d)
         spf_ok = None if spf is None else "v=spf1" in spf.lower()
-        dmarc = _dig_txt(f"_dmarc.{d}")
+        dmarc = _resolve_txt(f"_dmarc.{d}")
         dmarc_present = None if dmarc is None else "v=dmarc1" in dmarc.lower()
         dmarc_reject = None if dmarc is None else "p=reject" in dmarc.lower()
         out[d] = {"spf": spf_ok, "dmarc": dmarc_present, "dmarc_reject": dmarc_reject}
