@@ -48,19 +48,12 @@ _CACHE: dict = {"data": None, "ts": 0.0}
 _CACHE_TTL = 60  # seconds — don't hammer the APIs on every browser refresh
 
 
-# Optional override set by refresh_snapshot.py to keep scheduled runs bounded.
-_GH_TIMEOUT_OVERRIDE = None  # type: ignore
-
-
 def _gh(path: str, timeout: float = 20.0, retries: int = 2):
     """GET the GitHub API with retry. Returns (json, None) or (None, error_str).
 
     On the last failure returns (None, error) so callers can render an explicit
     UNKNOWN — never a fabricated green/false.
     """
-    if _GH_TIMEOUT_OVERRIDE is not None:
-        timeout = _GH_TIMEOUT_OVERRIDE
-        retries = 1
     req = urllib.request.Request(f"{GH}{path}", headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": "szl-org-health/1.0",
@@ -104,37 +97,52 @@ def _dig_txt(name: str) -> str:
 
 # ---- collectors ------------------------------------------------------------
 
-# FAST_MODE (set by the scheduled snapshot refresh) skips the per-repo branch-
-# protection probe. That probe needs an admin-scoped token to return signal and
-# otherwise reads UNKNOWN anyway, but it doubles the GitHub call count and is the
-# main cause of slow/timed-out refreshes. CI conclusion is the high-value field.
-FAST_MODE = False
+def collect_github(
+    *,
+    request_timeout: float = 20.0,
+    retries: int = 2,
+    include_branch_protection: bool = True,
+) -> dict:
+    """Collect GitHub health with explicit, per-run network bounds.
 
-
-def collect_github() -> dict:
+    Scheduled snapshots may skip the expensive protection probe, but the
+    resulting value remains honest UNKNOWN rather than an inferred False.
+    """
     repos = {}
+
+    def github_get(path: str):
+        return _gh(path, timeout=request_timeout, retries=retries)
 
     def one_repo(repo: str):
         # latest run on default branch
-        runs, err = _gh(f"/repos/{ORG}/{repo}/actions/runs?per_page=8")
+        runs, err = github_get(f"/repos/{ORG}/{repo}/actions/runs?per_page=8")
         ci = "unknown"
         if runs and runs.get("workflow_runs"):
+            # most recent completed conclusion
             for r in runs["workflow_runs"]:
                 if r.get("conclusion"):
                     ci = r["conclusion"]
                     break
-        if FAST_MODE:
+        elif err:
+            ci = "unknown"
+        if not include_branch_protection:
             return repo, {"ci": ci, "protected": None}
+
         # branch protection on default branch.
-        # protected = True (has protection); None = UNKNOWN (can't verify /
-        # timed out / token lacks scope) — never fabricate a False.
-        meta, _ = _gh(f"/repos/{ORG}/{repo}")
+        # protected = True (has protection), False (404 = explicitly none),
+        # None = UNKNOWN (read failed/timed out) — never fabricate a False.
+        meta, _ = github_get(f"/repos/{ORG}/{repo}")
         default = (meta or {}).get("default_branch") or "main"
-        prot, perr = _gh(f"/repos/{ORG}/{repo}/branches/{default}/protection")
+        prot, perr = github_get(f"/repos/{ORG}/{repo}/branches/{default}/protection")
         if prot and ("enforce_admins" in prot or "required_pull_request_reviews" in prot):
             protected = True
-        else:
+        elif perr in ("http403", "http404"):
+            # 403/404 here means THIS token can't see the protection endpoint
+            # (needs admin scope). We cannot verify => honest UNKNOWN, not False.
+            # (An unprotected branch also 404s, so we refuse to guess either way.)
             protected = None
+        else:
+            protected = None  # timeout / transport error => honest UNKNOWN
         return repo, {"ci": ci, "protected": protected}
 
     with cf.ThreadPoolExecutor(max_workers=8) as ex:
@@ -143,12 +151,14 @@ def collect_github() -> dict:
 
     # org-wide alert counts
     def count(path):
-        d, err = _gh(path)
+        d, err = github_get(path)
         if err or not isinstance(d, list):
             return None  # UNKNOWN — this token/endpoint not readable; never fabricate 0
         return len(d)
 
-    code_alerts_raw, _ = _gh(f"/orgs/{ORG}/code-scanning/alerts?state=open&per_page=100")
+    code_alerts_raw, _ = github_get(
+        f"/orgs/{ORG}/code-scanning/alerts?state=open&per_page=100"
+    )
     code_high = None
     code_total = None
     if isinstance(code_alerts_raw, list):
@@ -157,8 +167,8 @@ def collect_github() -> dict:
                         if (a.get("rule", {}) or {}).get("security_severity_level") == "high")
 
     # open PRs / issues via search
-    prs, _ = _gh(f"/search/issues?q=org:{ORG}+is:pr+is:open&per_page=1")
-    iss, _ = _gh(f"/search/issues?q=org:{ORG}+is:issue+is:open&per_page=1")
+    prs, _ = github_get(f"/search/issues?q=org:{ORG}+is:pr+is:open&per_page=1")
+    iss, _ = github_get(f"/search/issues?q=org:{ORG}+is:issue+is:open&per_page=1")
 
     return {
         "repos": repos,
@@ -226,16 +236,26 @@ def collect_dns() -> dict:
     return out
 
 
-def build_report() -> dict:
+def build_report(
+    *,
+    use_cache: bool = True,
+    github_timeout: float = 20.0,
+    github_retries: int = 2,
+    include_branch_protection: bool = True,
+) -> dict:
     now = time.time()
-    if _CACHE["data"] and (now - _CACHE["ts"] < _CACHE_TTL):
+    if use_cache and _CACHE["data"] and (now - _CACHE["ts"] < _CACHE_TTL):
         return _CACHE["data"]
 
     report = {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
               "sources": {}}
     # run collectors; each is isolated so one failure => UNKNOWN, not a crash
     collectors = {
-        "github": collect_github,
+        "github": lambda: collect_github(
+            request_timeout=github_timeout,
+            retries=github_retries,
+            include_branch_protection=include_branch_protection,
+        ),
         "spaces": collect_spaces,
         "sites": collect_sites,
         "dns": collect_dns,

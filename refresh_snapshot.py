@@ -20,7 +20,6 @@ import sys
 
 # Reuse the exact collectors from the backend so snapshot == live semantics.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import app  # noqa: E402
 from app import build_report  # noqa: E402
 
 # Hard overall deadline (seconds). A scheduled refresh must never hang; if the
@@ -33,16 +32,18 @@ def _timeout(_sig, _frame):
 
 
 def main() -> int:
-    # Tighten per-request timeouts + retries and skip the heavy per-repo
-    # protection probe so the scheduled run stays inside the deadline.
-    app._GH_TIMEOUT_OVERRIDE = 8.0  # noqa: SLF001
-    app.FAST_MODE = True
-    app._CACHE = {"data": None, "ts": 0.0}  # force a fresh pull, ignore 60s cache
     if hasattr(signal, "SIGALRM"):
         signal.signal(signal.SIGALRM, _timeout)
         signal.alarm(DEADLINE_S)
     try:
-        report = build_report()
+        # Use real collector parameters rather than mutating no-op module
+        # globals. Protection is explicitly UNKNOWN in bounded snapshot mode.
+        report = build_report(
+            use_cache=False,
+            github_timeout=8.0,
+            github_retries=1,
+            include_branch_protection=False,
+        )
     except TimeoutError as e:
         print(f"WARN: {e} — writing no snapshot this run (keeping prior)", file=sys.stderr)
         return 2
