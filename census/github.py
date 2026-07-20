@@ -1,4 +1,4 @@
-"""Dynamic GitHub organization census with latest-per-workflow CI truth."""
+"""Dynamic GitHub organization census with bounded, fail-closed evidence."""
 from __future__ import annotations
 
 import concurrent.futures as cf
@@ -10,6 +10,8 @@ from .common import paginate_json, request_json, token_header
 ORG = "szl-holdings"
 GH = "https://api.github.com"
 API_VERSION = "2022-11-28"
+RUN_WINDOW = 100
+MAX_PAGES = 20
 
 KEY_REPOS_FALLBACK = [
     "a11oy",
@@ -77,13 +79,19 @@ def gh(path: str, timeout: float = 20.0, retries: int = 2):
     return data, error
 
 
-def gh_paginate(path: str, timeout: float, retries: int):
+def gh_paginate(
+    path: str,
+    timeout: float,
+    retries: int,
+    *,
+    max_pages: int = MAX_PAGES,
+):
     return paginate_json(
         f"{GH}{path}",
         headers=github_headers(),
         timeout=timeout,
         retries=retries,
-        max_pages=20,
+        max_pages=max_pages,
     )
 
 
@@ -111,7 +119,7 @@ def classify_repo(repo: dict[str, Any]) -> str:
 
 
 def aggregate_workflow_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
-    """Use latest run per workflow so unrelated green runs cannot hide a red."""
+    """Use the latest observed run per workflow so unrelated green cannot hide red."""
     latest: dict[str, dict[str, Any]] = {}
     for run in runs:
         key = str(
@@ -165,23 +173,34 @@ def _repo_census(
     default = str(repo.get("default_branch") or "main")
     archived = bool(repo.get("archived"))
     if archived:
-        aggregate = {
+        aggregate: dict[str, Any] = {
             "ci": "archived",
             "workflow_count": 0,
             "failing_workflows": [],
             "pending_workflows": [],
             "error": None,
+            "ci_scope": "archived",
+            "run_window_observed": 0,
+            "default_branch_push_runs_total": 0,
         }
     else:
         runs, run_error = gh(
             f"/repos/{ORG}/{urllib.parse.quote(name)}/actions/runs"
-            f"?branch={urllib.parse.quote(default)}&event=push&per_page=100",
+            f"?branch={urllib.parse.quote(default)}&event=push&per_page={RUN_WINDOW}",
             timeout=request_timeout,
             retries=retries,
         )
         if isinstance(runs, dict) and isinstance(runs.get("workflow_runs"), list):
-            aggregate = aggregate_workflow_runs(runs["workflow_runs"])
-            aggregate["error"] = None
+            observed = runs["workflow_runs"]
+            aggregate = aggregate_workflow_runs(observed)
+            aggregate.update(
+                {
+                    "error": None,
+                    "ci_scope": "latest-per-workflow-within-recent-default-branch-push-window",
+                    "run_window_observed": len(observed),
+                    "default_branch_push_runs_total": runs.get("total_count"),
+                }
+            )
         else:
             aggregate = {
                 "ci": "unknown",
@@ -189,6 +208,9 @@ def _repo_census(
                 "failing_workflows": [],
                 "pending_workflows": [],
                 "error": run_error or "workflow runs unavailable",
+                "ci_scope": "unavailable",
+                "run_window_observed": None,
+                "default_branch_push_runs_total": None,
             }
 
     protected: bool | None = None
@@ -225,6 +247,21 @@ def _repo_census(
     }
 
 
+def _all_alerts(
+    path: str,
+    *,
+    request_timeout: float,
+    retries: int,
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Read all alert pages within the hard cap; overflow/failure stays UNKNOWN."""
+    return gh_paginate(
+        path,
+        request_timeout,
+        retries,
+        max_pages=MAX_PAGES,
+    )
+
+
 def collect_github(
     *,
     request_timeout: float = 20.0,
@@ -259,21 +296,35 @@ def collect_github(
             name, info = future.result()
             repos[name] = info
 
-    def count(path: str):
-        data, error = gh(path, timeout=request_timeout, retries=retries)
-        return None if error or not isinstance(data, list) else len(data)
+    alert_paths = {
+        "code": f"/orgs/{ORG}/code-scanning/alerts?state=open&per_page=100",
+        "secret": f"/orgs/{ORG}/secret-scanning/alerts?state=open&per_page=100",
+        "dependabot": f"/orgs/{ORG}/dependabot/alerts?state=open&per_page=100",
+    }
+    alerts: dict[str, list[dict[str, Any]] | None] = {}
+    alert_errors: dict[str, str | None] = {}
+    with cf.ThreadPoolExecutor(max_workers=3) as executor:
+        future_map = {
+            executor.submit(
+                _all_alerts,
+                path,
+                request_timeout=request_timeout,
+                retries=retries,
+            ): name
+            for name, path in alert_paths.items()
+        }
+        for future in cf.as_completed(future_map):
+            name = future_map[future]
+            items, error = future.result()
+            alerts[name] = items
+            alert_errors[name] = error
 
-    code_alerts_raw, _ = gh(
-        f"/orgs/{ORG}/code-scanning/alerts?state=open&per_page=100",
-        timeout=request_timeout,
-        retries=retries,
-    )
-    code_total = len(code_alerts_raw) if isinstance(code_alerts_raw, list) else None
+    code_alerts = alerts.get("code")
     code_high = None
-    if isinstance(code_alerts_raw, list):
+    if code_alerts is not None:
         code_high = sum(
             1
-            for alert in code_alerts_raw
+            for alert in code_alerts
             if ((alert.get("rule") or {}).get("security_severity_level") == "high")
         )
 
@@ -310,14 +361,23 @@ def collect_github(
         },
         "repos": dict(sorted(repos.items())),
         "alerts": {
-            "code_scanning_open": code_total,
+            "code_scanning_open": (
+                len(code_alerts) if code_alerts is not None else None
+            ),
             "code_scanning_high": code_high,
-            "secret_scanning_open": count(
-                f"/orgs/{ORG}/secret-scanning/alerts?state=open&per_page=100"
+            "secret_scanning_open": (
+                len(alerts["secret"]) if alerts.get("secret") is not None else None
             ),
-            "dependabot_open": count(
-                f"/orgs/{ORG}/dependabot/alerts?state=open&per_page=100"
+            "dependabot_open": (
+                len(alerts["dependabot"])
+                if alerts.get("dependabot") is not None
+                else None
             ),
+            "complete": all(value is None for value in alert_errors.values()),
+            "errors": {
+                name: error for name, error in alert_errors.items() if error is not None
+            },
+            "page_cap": MAX_PAGES,
         },
         "open_prs": (prs or {}).get("total_count") if isinstance(prs, dict) else None,
         "open_issues": (
