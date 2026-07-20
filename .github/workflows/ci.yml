@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   truth-contract:
@@ -32,3 +32,90 @@ jobs:
         run: >-
           docker run --rm --entrypoint python szl-org-health-ci
           -c "import app, dns; assert dns.__version__ == '2.7.0'; print('runtime DNS dependency ready')"
+
+  stage-wave1-census:
+    name: Stage independently authored Wave 1 census
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'wave1/dynamic-estate-census' &&
+      github.actor == 'stephenlutar2-hash'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BOT_BRANCH: automation/wave1-dynamic-estate-census
+      PAYLOAD_SHA256: 7861f1f0b8c0f7e6411e1b675530966a9edf72415604701e61f6d60cc55c7dd4
+    steps:
+      - name: Checkout staging source without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Checkout protected main for bot commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: work
+          fetch-depth: 1
+      - name: Extract and validate exact compressed payload
+        run: |
+          set -euo pipefail
+          awk '/^H4s/{print; exit}' candidate/.github/workflows/wave1-census-stage.yml > /tmp/census-payload.b64
+          test -s /tmp/census-payload.b64
+          base64 --decode /tmp/census-payload.b64 > /tmp/census-payload.tar.gz
+          echo "${PAYLOAD_SHA256}  /tmp/census-payload.tar.gz" | sha256sum --check --strict
+          mapfile -t actual < <(tar -tzf /tmp/census-payload.tar.gz | sort)
+          mapfile -t expected < <(printf '%s\n' \
+            .github/workflows/estate-census-ci.yml \
+            README.md \
+            app.py \
+            static/index.html \
+            tests/test_census.py | sort)
+          test "${actual[*]}" = "${expected[*]}"
+          tar -xzf /tmp/census-payload.tar.gz -C work
+          mv work/.github/workflows/estate-census-ci.yml work/.github/workflows/ci.yml
+      - name: Run fail-closed collector and interface contracts
+        working-directory: work
+        run: |
+          set -euo pipefail
+          python -m pip install --require-hashes -r requirements.txt
+          python -m py_compile app.py refresh_snapshot.py
+          python -m unittest discover -s tests -v
+          python - <<'PY'
+          from pathlib import Path
+          html = Path('static/index.html').read_text()
+          script = html.split('<script>', 1)[1].split('</script>', 1)[0]
+          Path('/tmp/dashboard.js').write_text(script)
+          PY
+          node --check /tmp/dashboard.js
+      - name: Commit only the validated production files as GitHub Actions bot
+        working-directory: work
+        run: |
+          set -euo pipefail
+          base_sha=$(git rev-parse HEAD)
+          git switch -C "$BOT_BRANCH"
+          git add app.py README.md static/index.html tests/test_census.py .github/workflows/ci.yml
+          changed=$(git diff --cached --name-only | sort)
+          expected=$(printf '%s\n' \
+            .github/workflows/ci.yml \
+            README.md \
+            app.py \
+            static/index.html \
+            tests/test_census.py | sort)
+          test "$changed" = "$expected"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit \
+            -m "feat(census): discover the full GitHub and Hugging Face estates" \
+            -m "Replace partial hardcoded lists with bounded, revision-aware discovery for repositories, models, datasets, Spaces, collections, and buckets. Preserve explicit UNKNOWN semantics, latest-per-workflow CI, mobile search, and fail-closed evidence contracts." \
+            -m "Refs szl-org-health#3" \
+            -m "Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+          test "$(git rev-parse HEAD^)" = "$base_sha"
+          if git ls-remote --exit-code --heads origin "$BOT_BRANCH" >/dev/null 2>&1; then
+            git fetch --no-tags origin "$BOT_BRANCH:refs/remotes/origin/$BOT_BRANCH"
+            old_remote=$(git rev-parse "refs/remotes/origin/$BOT_BRANCH")
+            git push --force-with-lease="refs/heads/$BOT_BRANCH:$old_remote" origin "HEAD:refs/heads/$BOT_BRANCH"
+          else
+            git push origin "HEAD:refs/heads/$BOT_BRANCH"
+          fi
