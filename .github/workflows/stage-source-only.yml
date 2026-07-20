@@ -1,0 +1,192 @@
+name: Stage bot-authored Wave 1 source PR
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/stage-source-only.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  stage-source:
+    if: >-
+      github.event.pull_request.number == 4 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'wave1/dynamic-estate-census' &&
+      github.actor == 'stephenlutar2-hash'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BOT_BRANCH: automation/wave1-dynamic-estate-census-source
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - name: Checkout exact staging head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout exact protected base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.BASE_SHA }}
+          path: work
+          fetch-depth: 1
+      - name: Assert exact staging scope and copy source bytes
+        run: |
+          set -euo pipefail
+          changed=$(git -C candidate diff --name-only "$BASE_SHA" HEAD | sort)
+          expected=$(printf '%s\n' \
+            .github/workflows/ci.yml \
+            .github/workflows/stage-source-only.yml \
+            .wave1/ci.production.yml \
+            README.md \
+            app.py \
+            census/__init__.py \
+            census/common.py \
+            census/github.py \
+            census/huggingface.py \
+            census/report.py \
+            census/sites.py \
+            static/index.html \
+            tests/test_census.py | sort)
+          test "$changed" = "$expected"
+          test -z "$(find candidate/census candidate/.wave1 -type l -print -quit)"
+          mkdir -p work/census work/static work/tests
+          cp candidate/app.py work/app.py
+          cp candidate/README.md work/README.md
+          cp candidate/census/*.py work/census/
+          cp candidate/static/index.html work/static/index.html
+          cp candidate/tests/test_census.py work/tests/test_census.py
+          for file in \
+            app.py \
+            README.md \
+            census/__init__.py \
+            census/common.py \
+            census/github.py \
+            census/huggingface.py \
+            census/report.py \
+            census/sites.py \
+            static/index.html \
+            tests/test_census.py; do
+            cmp --silent "candidate/$file" "work/$file"
+          done
+      - name: Re-run contracts and container smoke on protected-base worktree
+        working-directory: work
+        run: |
+          set -euo pipefail
+          python -m pip install --require-hashes -r requirements.txt
+          python -m py_compile app.py refresh_snapshot.py census/*.py
+          python -m unittest discover -s tests -v
+          python - <<'PY'
+          from pathlib import Path
+          html = Path('static/index.html').read_text()
+          script = html.split('<script>', 1)[1].split('</script>', 1)[0]
+          Path('/tmp/source-dashboard.js').write_text(script)
+          PY
+          node --check /tmp/source-dashboard.js
+          docker build --tag szl-org-health-source .
+          cid=$(docker run -d -p 17862:7860 szl-org-health-source)
+          trap 'docker logs "$cid" || true; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:17862/healthz > /tmp/source-healthz.json; then
+              break
+            fi
+            sleep 1
+          done
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('/tmp/source-healthz.json').read_text())
+          assert payload == {'status':'ok','service':'szl-org-health','schema_version':2}, payload
+          PY
+      - name: Create one source-only DCO-valid bot commit
+        working-directory: work
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          git switch -C "$BOT_BRANCH"
+          git add \
+            README.md \
+            app.py \
+            census/__init__.py \
+            census/common.py \
+            census/github.py \
+            census/huggingface.py \
+            census/report.py \
+            census/sites.py \
+            static/index.html \
+            tests/test_census.py
+          changed=$(git diff --cached --name-only | sort)
+          expected=$(printf '%s\n' \
+            README.md \
+            app.py \
+            census/__init__.py \
+            census/common.py \
+            census/github.py \
+            census/huggingface.py \
+            census/report.py \
+            census/sites.py \
+            static/index.html \
+            tests/test_census.py | sort)
+          test "$changed" = "$expected"
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit \
+            -m "feat(census): discover the full GitHub and Hugging Face estates" \
+            -m "Replace partial hardcoded lists with bounded, revision-aware discovery for repositories, models, datasets, Spaces, collections, and buckets. Preserve explicit UNKNOWN semantics, latest-per-workflow CI, mobile search, and fail-closed evidence contracts." \
+            -m "Refs szl-org-health#3" \
+            -m "Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          if git ls-remote --exit-code --heads origin "$BOT_BRANCH" >/dev/null 2>&1; then
+            git fetch --no-tags origin "$BOT_BRANCH:refs/remotes/origin/$BOT_BRANCH"
+            old_remote=$(git rev-parse "refs/remotes/origin/$BOT_BRANCH")
+            git push --force-with-lease="refs/heads/$BOT_BRANCH:$old_remote" origin "HEAD:refs/heads/$BOT_BRANCH"
+          else
+            git push origin "HEAD:refs/heads/$BOT_BRANCH"
+          fi
+      - name: Open independently reviewable source PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BOT_BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "PR already open: #$existing"
+            exit 0
+          fi
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --head "$BOT_BRANCH" \
+            --base main \
+            --title "feat(census): discover the full GitHub and Hugging Face estates" \
+            --body-file - <<'EOF'
+          ## Purpose
+
+          Replace the partial hardcoded org-health lists with a live, bounded, revision-aware census for the complete GitHub and Hugging Face estates.
+
+          ## Production source
+
+          This PR is authored by `github-actions[bot]` from exact readable files validated in staging PR #4. It intentionally excludes the temporary staging workflows and excludes the production CI update so the Actions token never writes a workflow file.
+
+          ## Capabilities
+
+          - all visible `szl-holdings` repositories via pagination;
+          - latest run per workflow, branch-protection readability, archive/visibility/default branch, open PR/issues, and security counts;
+          - `SZLHOLDINGS` models, datasets, Spaces, collections, and buckets with exact revisions;
+          - observed model weight evidence, Space runtime/hardware/root probes, and governed flagship health probes;
+          - explicit UNKNOWN semantics per source and asset class;
+          - escaped, searchable, responsive mobile interface;
+          - preserved legacy DNS truth contracts and static snapshot compatibility.
+
+          ## Evidence
+
+          The staging workflow compiled all modules, passed all old and new tests, validated dashboard JavaScript, rebuilt the source on exact protected `main`, built the pinned container twice, and proved the exact schema-v2 `/healthz` payload.
+
+          Refs #3 and staging PR #4.
+          EOF
