@@ -3,206 +3,175 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>SZL Org Health · live</title>
+<title>SZL Estate Census · live</title>
 <style>
   :root{
-    --bg:#171614; --surface:#1c1b19; --surface2:#201f1d; --border:#393836;
-    --text:#e9e8e6; --muted:#9a9996; --faint:#5a5957;
-    --green:#6daa45; --amber:#e8af34; --red:#dd6974; --gray:#5a5957; --teal:#4f98a3;
-    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+    --bg:#151412;--surface:#1c1b18;--surface2:#23211e;--border:#3b3935;
+    --text:#efede8;--muted:#aaa69f;--faint:#706c65;--green:#7ab85b;
+    --amber:#e3b34e;--red:#df6d78;--gray:#716e68;--teal:#62a4ad;
+    --blue:#7f9ec9;--mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.5;
     -webkit-font-smoothing:antialiased;padding:32px 20px 64px}
-  .wrap{max-width:1080px;margin:0 auto}
-  header{display:flex;align-items:baseline;justify-content:space-between;
-    flex-wrap:wrap;gap:12px;margin-bottom:8px}
-  h1{font-size:22px;font-weight:650;letter-spacing:-.01em}
-  h1 .live{color:var(--teal);font-size:12px;font-weight:600;text-transform:uppercase;
-    letter-spacing:.08em;vertical-align:middle;margin-left:10px}
-  .meta{color:var(--muted);font-size:13px;font-family:var(--mono)}
-  .subtitle{color:var(--muted);font-size:14px;margin-bottom:28px;max-width:70ch}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
-  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;
-    padding:18px 18px 14px;min-width:0}
-  .card h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;
-    color:var(--muted);margin-bottom:14px;display:flex;align-items:center;gap:8px}
-  .kpi{display:flex;align-items:baseline;gap:8px;margin-bottom:6px}
-  .kpi .val{font-size:30px;font-weight:680;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
-  .kpi .unit{color:var(--muted);font-size:13px}
-  .row{display:flex;align-items:center;justify-content:space-between;gap:10px;
-    padding:7px 0;border-top:1px solid var(--surface2);font-size:14px}
+  .wrap{max-width:1280px;margin:0 auto}
+  header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;
+    flex-wrap:wrap;margin-bottom:10px}
+  h1{font-size:25px;font-weight:690;letter-spacing:-.025em}
+  h1 .live{color:var(--teal);font-size:11px;font-weight:700;text-transform:uppercase;
+    letter-spacing:.09em;vertical-align:middle;margin-left:10px}
+  .meta{color:var(--muted);font-size:12px;font-family:var(--mono)}
+  .subtitle{color:var(--muted);font-size:14px;margin-bottom:24px;max-width:82ch}
+  .toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  button,.filter{background:var(--surface2);border:1px solid var(--border);color:var(--text);
+    font:inherit;font-size:13px;padding:7px 12px;border-radius:8px}
+  button{cursor:pointer}button:hover,button:focus-visible,.filter:focus{border-color:var(--teal);outline:none}
+  .filter{min-width:220px}
+  .summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:18px 0}
+  .metric{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:15px}
+  .metric .label{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+  .metric .value{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:3px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:16px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px;min-width:0}
+  .card.wide{grid-column:1/-1}
+  .card h2{font-size:12px;font-weight:650;text-transform:uppercase;letter-spacing:.075em;
+    color:var(--muted);margin-bottom:13px;display:flex;align-items:center;gap:8px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;
+    border-top:1px solid var(--surface2);font-size:13px}
   .row:first-of-type{border-top:none}
-  .row .name{font-family:var(--mono);font-size:13px;color:var(--text);
-    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .chip{font-size:11px;font-weight:650;padding:2px 9px;border-radius:20px;
-    letter-spacing:.02em;white-space:nowrap;font-variant-numeric:tabular-nums}
-  .chip.ok{background:rgba(109,170,69,.16);color:var(--green)}
-  .chip.warn{background:rgba(232,175,52,.16);color:var(--amber)}
-  .chip.bad{background:rgba(221,105,116,.18);color:var(--red)}
-  .chip.unk{background:rgba(90,89,87,.22);color:var(--muted)}
+  .name{font-family:var(--mono);color:var(--text);overflow-wrap:anywhere}
+  .secondary{font-size:11px;color:var(--faint);margin-top:2px;overflow-wrap:anywhere}
+  .chips{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}
+  .chip{font-size:10.5px;font-weight:680;padding:2px 8px;border-radius:20px;white-space:nowrap;
+    font-variant-numeric:tabular-nums}
+  .chip.ok{background:rgba(122,184,91,.16);color:var(--green)}
+  .chip.warn{background:rgba(227,179,78,.16);color:var(--amber)}
+  .chip.bad{background:rgba(223,109,120,.18);color:var(--red)}
+  .chip.unk{background:rgba(113,110,104,.22);color:var(--muted)}
+  .chip.info{background:rgba(127,158,201,.16);color:var(--blue)}
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex:none}
-  .dot.ok{background:var(--green)} .dot.warn{background:var(--amber)}
-  .dot.bad{background:var(--red)} .dot.unk{background:var(--gray)}
-  .foot{margin-top:26px;color:var(--faint);font-size:12px;font-family:var(--mono)}
-  .foot a{color:var(--teal);text-decoration:none}
-  .loading{color:var(--muted);font-size:14px;padding:40px 0}
-  .err{color:var(--red);font-size:13px}
-  .note{color:var(--faint);font-size:11.5px;margin-top:10px;line-height:1.4}
-  button.refresh{background:var(--surface2);border:1px solid var(--border);color:var(--text);
-    font:inherit;font-size:13px;padding:6px 14px;border-radius:8px;cursor:pointer}
-  button.refresh:hover{border-color:var(--teal)}
+  .dot.ok{background:var(--green)}.dot.warn{background:var(--amber)}
+  .dot.bad{background:var(--red)}.dot.unk{background:var(--gray)}
+  .note{color:var(--faint);font-size:11.5px;margin-top:10px;line-height:1.45}
+  .err{color:var(--red);font-size:13px}.loading{color:var(--muted);padding:40px 0}
+  details{border-top:1px solid var(--surface2)}details:first-of-type{border-top:none}
+  summary{cursor:pointer;list-style:none;padding:9px 0;display:flex;justify-content:space-between;gap:12px}
+  summary::-webkit-details-marker{display:none}summary::after{content:'+';color:var(--muted)}details[open] summary::after{content:'−'}
+  a{color:inherit;text-decoration:none}a:hover{text-decoration:underline;text-decoration-color:var(--teal)}
+  .foot{margin-top:28px;color:var(--faint);font-size:11.5px;font-family:var(--mono)}
+  .hidden{display:none!important}
+  @media(max-width:640px){
+    body{padding:20px 12px 44px}.grid{grid-template-columns:1fr}.card{padding:15px}
+    .summary{grid-template-columns:repeat(2,minmax(0,1fr))}.metric .value{font-size:24px}
+    .toolbar{width:100%}.filter{width:100%;min-width:0}.row{align-items:flex-start}
+    .chips{max-width:48%}h1{font-size:22px}
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>SZL Org Health<span class="live" id="modebadge">● loading</span></h1>
-    <div style="display:flex;align-items:center;gap:14px">
-      <span class="meta" id="ts">—</span>
-      <button class="refresh" id="refresh">Refresh</button>
+    <div>
+      <h1>SZL Estate Census<span class="live" id="modebadge">● loading</span></h1>
+      <div class="meta" id="ts">—</div>
+    </div>
+    <div class="toolbar">
+      <input class="filter" id="filter" type="search" aria-label="Filter estate assets" placeholder="Filter repos, models, datasets…" />
+      <button id="refresh" type="button">Refresh</button>
     </div>
   </header>
-  <p class="subtitle">Every value is a real reading from GitHub, Hugging Face, and DNS.
-    When served with the live backend it re-fetches on demand; when served as a static snapshot it shows the captured reading, honestly timestamped.
-    Unverifiable data is shown as <span style="color:var(--muted)">UNKNOWN</span> — never fabricated, never guessed green.</p>
-
-  <div id="content"><div class="loading">Pulling live data from the estate…</div></div>
-
-  <div class="foot">
-    szl-org-health · reads api.github.com, huggingface.co, and DNS directly ·
-    cache 60s · <a href="/api/health">raw JSON</a>
-  </div>
+  <p class="subtitle">Live, revision-aware inventory across GitHub, Hugging Face, sites, and DNS. A failed or unauthorized source remains <strong>UNKNOWN</strong>; it is never converted into zero, healthy, or operational.</p>
+  <div id="content"><div class="loading">Collecting bounded live evidence from the estate…</div></div>
+  <div class="foot">szl-org-health schema v2 · source APIs queried directly · 60-second cache · <a href="/api/health">raw JSON</a></div>
 </div>
-
 <script>
-const el = document.getElementById('content');
-const tsEl = document.getElementById('ts');
+const content=document.getElementById('content');
+const tsEl=document.getElementById('ts');
+const filterEl=document.getElementById('filter');
+let lastData=null;
+const esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+const chip=(label,cls='unk')=>`<span class="chip ${cls}">${esc(label)}</span>`;
+const dot=cls=>`<span class="dot ${cls}"></span>`;
+const known=n=>n==null?'—':n;
+function ciClass(value){if(value==='success'||value==='archived')return'ok';if(value==='failure')return'bad';if(value==='pending')return'warn';return'unk'}
+function stageClass(value){if(value==='RUNNING')return'ok';if(value==='unknown'||value==null)return'unk';return'warn'}
+function sourceData(S,key){return S[key]&&S[key].ok?S[key].data:null}
+function metric(label,value,cls=''){return `<div class="metric ${cls}"><div class="label">${esc(label)}</div><div class="value">${esc(known(value))}</div></div>`}
+function itemRow(name,secondary,chips,href=''){
+  const label=href?`<a href="${esc(href)}" target="_blank" rel="noopener">${esc(name)}</a>`:esc(name);
+  return `<div class="row asset-row" data-search="${esc((name+' '+(secondary||'')).toLowerCase())}"><div><div class="name">${label}</div>${secondary?`<div class="secondary">${esc(secondary)}</div>`:''}</div><div class="chips">${chips}</div></div>`;
+}
+function assetSection(title,asset,renderer){
+  const ok=asset&&asset.ok;let html=`<div class="card wide"><h2>${dot(ok?'ok':'unk')}${esc(title)} · ${esc(known(asset&&asset.count))}</h2>`;
+  if(!asset){return html+'<div class="err">not present in this snapshot</div></div>'}
+  if(!ok){return html+`<div class="err">UNKNOWN — ${esc(asset.error||'source unavailable')}</div></div>`}
+  const items=asset.items||[];
+  if(!items.length){return html+'<div class="note">Measured zero assets in this class.</div></div>'}
+  html+=items.map(renderer).join('')+'</div>';return html;
+}
+function render(data){
+  lastData=data;tsEl.textContent=`as of ${data.generated_at||'—'} · schema ${data.schema_version||1}`;
+  const S=data.sources||{};const gh=sourceData(S,'github');const hf=sourceData(S,'huggingface');
+  const legacySpaces=sourceData(S,'spaces');
+  let html='<div class="summary">';
+  html+=metric('GitHub repositories',gh&&gh.summary?gh.summary.total:(gh?Object.keys(gh.repos||{}).length:null));
+  html+=metric('Open pull requests',gh?gh.open_prs:null);
+  html+=metric('HF models',hf&&hf.summary?hf.summary.models:null);
+  html+=metric('HF datasets',hf&&hf.summary?hf.summary.datasets:null);
+  html+=metric('HF Spaces',hf&&hf.summary?hf.summary.spaces:(legacySpaces?Object.keys(legacySpaces).length:null));
+  html+=metric('HF collections',hf&&hf.summary?hf.summary.collections:null);
+  html+='</div><div class="grid">';
 
-function chip(label, cls){ return `<span class="chip ${cls}">${label}</span>`; }
-function dot(cls){ return `<span class="dot ${cls}"></span>`; }
-
-function ciCls(c){ if(c==='success')return'ok'; if(c==='unknown'||c==null)return'unk';
-  if(['failure','startup_failure','timed_out','cancelled'].includes(c))return'bad'; return'warn'; }
-function protChip(p){ if(p===true)return chip('protected','ok'); if(p===false)return chip('none','bad');
-  return chip('unknown','unk'); }
-function num(n){ return n==null ? '—' : n; }
-function alertChip(n, warnAt){ if(n==null)return chip('unknown','unk');
-  if(n===0)return chip('0','ok'); return chip(String(n), n>=warnAt?'bad':'warn'); }
-
-function render(d){
-  tsEl.textContent = 'as of ' + (d.generated_at||'—');
-  const S = d.sources||{};
-  let html = '<div class="grid">';
-
-  // ---- GitHub CI + security ----
-  const gh = (S.github&&S.github.ok) ? S.github.data : null;
-  html += '<div class="card"><h2>'+dot(gh?'ok':'unk')+'GitHub — CI &amp; security</h2>';
+  html+=`<div class="card"><h2>${dot(gh?'ok':'unk')}GitHub control plane</h2>`;
   if(gh){
-    const repos = gh.repos||{};
-    const names = Object.keys(repos);
-    const green = names.filter(r=>repos[r].ci==='success').length;
-    html += `<div class="kpi"><span class="val">${green}/${names.length}</span><span class="unit">repos CI green</span></div>`;
-    html += `<div class="row"><span class="name">open code-scanning</span>${alertChip(gh.alerts.code_scanning_open,20)}</div>`;
-    html += `<div class="row"><span class="name">└ high severity</span>${alertChip(gh.alerts.code_scanning_high,10)}</div>`;
-    html += `<div class="row"><span class="name">secret-scanning</span>${alertChip(gh.alerts.secret_scanning_open,1)}</div>`;
-    html += `<div class="row"><span class="name">dependabot</span>${alertChip(gh.alerts.dependabot_open,5)}</div>`;
-    html += `<div class="row"><span class="name">open PRs</span>${chip(num(gh.open_prs),'warn')}</div>`;
-    html += `<div class="row"><span class="name">open issues</span>${chip(num(gh.open_issues),'warn')}</div>`;
-    html += '<div class="note">Alert counts / branch-protection need an admin-scoped token; shown UNKNOWN when this token can\'t read them.</div>';
-  } else { html += '<div class="err">source unreachable</div>'; }
-  html += '</div>';
+    const s=gh.summary||{};const d=gh.discovery||{};
+    html+=itemRow('Discovery',d.scope||'legacy snapshot',chip(d.complete===false?'incomplete':'complete',d.complete===false?'warn':'ok'));
+    html+=itemRow('Default-branch CI',`${known(s.ci_green)} green · ${known(s.ci_red)} red · ${known(s.ci_unknown)} unknown`,chip(`${known(s.ci_green)}/${known(s.total)}`,(s.ci_red||0)>0?'warn':'ok'));
+    html+=itemRow('Security alerts','Code scanning / secret scanning / Dependabot',chip(known(gh.alerts&&gh.alerts.code_scanning_open),(gh.alerts&&gh.alerts.code_scanning_open)===0?'ok':'warn')+chip(known(gh.alerts&&gh.alerts.secret_scanning_open),(gh.alerts&&gh.alerts.secret_scanning_open)===0?'ok':'warn')+chip(known(gh.alerts&&gh.alerts.dependabot_open),(gh.alerts&&gh.alerts.dependabot_open)===0?'ok':'warn'));
+    if(d.error)html+=`<div class="note">Discovery limitation: ${esc(d.error)}</div>`;
+  }else html+='<div class="err">GitHub source unavailable</div>';
+  html+='</div>';
 
-  // ---- per-repo CI + protection ----
+  html+=`<div class="card"><h2>${dot(hf?'ok':'unk')}Hugging Face estate</h2>`;
+  if(hf){
+    const s=hf.summary||{};
+    html+=itemRow('Spaces runtime',`${known(s.running_spaces)} RUNNING · ${known(s.reachable_spaces)} reachable`,chip(`${known(s.running_spaces)}/${known(s.spaces)}`,s.running_spaces===s.spaces?'ok':'warn'));
+    html+=itemRow('Model artifacts',`${known(s.models_with_observed_weights)} with observed weight files`,chip(`${known(s.models_with_observed_weights)}/${known(s.models)}`,s.models_with_observed_weights===s.models?'ok':'warn'));
+    const unknown=Object.entries((hf.assets||{})).filter(([,v])=>!v.ok).map(([k])=>k);
+    html+=itemRow('Asset-class coverage',unknown.length?`UNKNOWN: ${unknown.join(', ')}`:'all listed classes readable',chip(unknown.length?'partial':'complete',unknown.length?'warn':'ok'));
+  }else if(legacySpaces){html+=itemRow('Legacy snapshot','Space-only schema',chip('partial','warn'))}
+  else html+='<div class="err">Hugging Face source unavailable</div>';
+  html+='</div>';
+
   if(gh){
-    const repos = gh.repos||{};
-    html += '<div class="card"><h2>'+dot('ok')+'Repositories</h2>';
-    Object.keys(repos).sort().forEach(r=>{
-      const v=repos[r];
-      html += `<div class="row"><span class="name">${r}</span><span style="display:flex;gap:6px">${chip(v.ci,ciCls(v.ci))}${protChip(v.protected)}</span></div>`;
-    });
-    html += '</div>';
+    const repos=gh.repos||{};
+    html+='<div class="card wide"><h2>'+dot('ok')+`GitHub repositories · ${Object.keys(repos).length}</h2>`;
+    Object.keys(repos).sort().forEach(name=>{const r=repos[name];const details=[r.classification,r.visibility,r.default_branch].filter(Boolean).join(' · ');let chips=chip(r.ci,ciClass(r.ci))+chip(r.protected===true?'protected':r.protected===false?'unprotected':'protection unknown',r.protected===true?'ok':r.protected===false?'bad':'unk');if(r.archived)chips+=chip('archived','info');html+=itemRow(name,details,chips,r.url)});
+    html+='</div>';
   }
 
-  // ---- HF Spaces ----
-  const sp = (S.spaces&&S.spaces.ok) ? S.spaces.data : null;
-  html += '<div class="card"><h2>'+dot(sp?'ok':'unk')+'Hugging Face Spaces</h2>';
-  if(sp){
-    const keys=Object.keys(sp);
-    const running=keys.filter(k=>sp[k].stage==='RUNNING').length;
-    html += `<div class="kpi"><span class="val">${running}/${keys.length}</span><span class="unit">RUNNING</span></div>`;
-    keys.sort((a,b)=> (sp[b].monitored?1:0)-(sp[a].monitored?1:0)).forEach(k=>{
-      const v=sp[k];
-      const stageCls = v.stage==='RUNNING'?'ok':(v.stage==='unknown'?'unk':'warn');
-      let hz='';
-      if(v.monitored){ hz = v.healthz===200?chip('/healthz 200','ok'):(v.healthz?chip('/healthz '+v.healthz,'bad'):chip('/healthz —','unk')); }
-      html += `<div class="row"><span class="name">${k}</span><span style="display:flex;gap:6px">${chip(v.stage,stageCls)}${hz}</span></div>`;
-    });
-  } else { html += '<div class="err">source unreachable</div>'; }
-  html += '</div>';
+  if(hf){
+    const A=hf.assets||{};
+    html+=assetSection('Hugging Face Spaces',A.spaces,space=>itemRow(space.id,[space.sdk,space.hardware,space.sha&&space.sha.slice(0,10)].filter(Boolean).join(' · '),chip(space.stage,stageClass(space.stage))+chip(space.http||'unreachable',space.http>=200&&space.http<400?'ok':'bad')+(space.healthz_contract?chip(space.healthz===200?'healthz 200':`healthz ${known(space.healthz)}`,space.healthz===200?'ok':'bad'):''),space.url));
+    html+=assetSection('Models',A.models,model=>itemRow(model.id,[model.pipeline_tag,model.sha&&model.sha.slice(0,10)].filter(Boolean).join(' · '),chip(model.artifact_state,model.artifact_state==='weights-present'?'ok':model.artifact_state==='unknown'?'unk':'warn')+chip(`${known(model.downloads_30d)} / 30d`,'info'),model.url));
+    html+=assetSection('Datasets',A.datasets,dataset=>itemRow(dataset.id,[dataset.sha&&dataset.sha.slice(0,10),dataset.last_modified].filter(Boolean).join(' · '),chip(`${known(dataset.file_count_observed)} files`,dataset.file_count_observed==null?'unk':dataset.file_count_observed>0?'ok':'warn')+chip(`${known(dataset.downloads_30d)} / 30d`,'info'),dataset.url));
+    html+=assetSection('Collections',A.collections,col=>itemRow(col.title||col.slug,[col.slug,col.last_updated].filter(Boolean).join(' · '),chip(col.complete?'full':'partial',col.complete?'ok':'warn')+chip(`${Object.values(col.item_counts||{}).reduce((a,b)=>a+b,0)} items`,'info'),col.url));
+    html+=assetSection('Buckets',A.buckets,b=>itemRow(b.id,[b.created_at,b.discovered_via].filter(Boolean).join(' · '),chip(b.total_files==null?'files unknown':`${b.total_files} files`,b.total_files==null?'unk':'ok')+chip(b.size_bytes==null?'size unknown':`${b.size_bytes} B`,'info')));
+  }else if(legacySpaces){
+    html+='<div class="card wide"><h2>'+dot('warn')+'Legacy Space snapshot</h2>';
+    Object.keys(legacySpaces).sort().forEach(name=>{const s=legacySpaces[name];html+=itemRow(name,'legacy schema',chip(s.stage,stageClass(s.stage))+(s.monitored?chip(s.healthz===200?'healthz 200':`healthz ${known(s.healthz)}`,s.healthz===200?'ok':'bad'):''))});html+='</div>';
+  }
 
-  // ---- Sites ----
-  const st = (S.sites&&S.sites.ok) ? S.sites.data : null;
-  html += '<div class="card"><h2>'+dot(st?'ok':'unk')+'Sites — reachability &amp; headers</h2>';
-  if(st){
-    Object.keys(st).forEach(s=>{
-      const v=st[s];
-      const up = v.http>=200&&v.http<400;
-      const hdrs=['hsts','csp','xfo','nosniff'].filter(h=>v[h]);
-      html += `<div class="row"><span class="name">${s}</span><span style="display:flex;gap:6px">${chip(v.http||'down',up?'ok':'bad')}${chip(hdrs.length+'/4 hdrs',hdrs.length>=2?'ok':'warn')}</span></div>`;
-    });
-    html += '<div class="note">Headers checked: HSTS, CSP, X-Frame-Options, X-Content-Type-Options.</div>';
-  } else { html += '<div class="err">source unreachable</div>'; }
-  html += '</div>';
-
-  // ---- DNS / email auth ----
-  const dns = (S.dns&&S.dns.ok) ? S.dns.data : null;
-  html += '<div class="card"><h2>'+dot(dns?'ok':'unk')+'DNS — email auth (SPF/DMARC)</h2>';
-  if(dns){
-    Object.keys(dns).forEach(dm=>{
-      const v=dns[dm];
-      const spf = v.spf===null ? chip('SPF unknown','unk') :
-        (v.spf ? chip('SPF','ok') : chip('no SPF','bad'));
-      let dmarc;
-      if(v.dmarc===null || v.dmarc_reject===null) dmarc=chip('DMARC unknown','unk');
-      else if(v.dmarc_reject) dmarc=chip('DMARC reject','ok');
-      else if(v.dmarc) dmarc=chip('DMARC weak','warn');
-      else dmarc=chip('no DMARC','bad');
-      html += `<div class="row"><span class="name">${dm}</span><span style="display:flex;gap:6px">${spf}${dmarc}</span></div>`;
-    });
-    html += '<div class="note">DNS negatives are shown only after a successful lookup; resolver/tool failures remain UNKNOWN.</div>';
-  } else { html += '<div class="err">source unreachable</div>'; }
-  html += '</div>';
-
-  html += '</div>';
-  el.innerHTML = html;
+  const sites=sourceData(S,'sites');html+=`<div class="card"><h2>${dot(sites?'ok':'unk')}Sites</h2>`;
+  if(sites)Object.keys(sites).forEach(name=>{const s=sites[name],up=s.http>=200&&s.http<400,h=['hsts','csp','xfo','nosniff'].filter(k=>s[k]).length;html+=itemRow(name,'reachability and response headers',chip(s.http||'down',up?'ok':'bad')+chip(`${h}/4 headers`,h>=3?'ok':'warn'))});else html+='<div class="err">source unavailable</div>';html+='</div>';
+  const dns=sourceData(S,'dns');html+=`<div class="card"><h2>${dot(dns?'ok':'unk')}DNS and email auth</h2>`;
+  if(dns)Object.keys(dns).forEach(name=>{const d=dns[name];const spf=d.spf==null?chip('SPF unknown','unk'):chip(d.spf?'SPF':'no SPF',d.spf?'ok':'bad');const dm=d.dmarc_reject==null?chip('DMARC unknown','unk'):d.dmarc_reject?chip('DMARC reject','ok'):d.dmarc?chip('DMARC weak','warn'):chip('no DMARC','bad');html+=itemRow(name,'authoritative DNS reading',spf+dm)});else html+='<div class="err">source unavailable</div>';html+='</div>';
+  html+='</div>';content.innerHTML=html;applyFilter();
 }
-
-async function load(){
-  el.innerHTML = '<div class="loading">Loading estate health…</div>';
-  // Prefer the live backend (dev sandbox, real-time). Fall back to the static
-  // snapshot (data.json) when no backend is present (deployed static build).
-  try{
-    const r = await fetch('/api/health?t='+Date.now());
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    render(await r.json());
-    document.getElementById('modebadge').textContent = '● live';
-    document.getElementById('modebadge').style.color = 'var(--teal)';
-    return;
-  }catch(e){ /* fall through to static snapshot */ }
-  try{
-    const r = await fetch('./data.json?t='+Date.now());
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    const d = await r.json();
-    render(d);
-    tsEl.textContent = 'snapshot ' + (d.generated_at||'—');
-    const mb=document.getElementById('modebadge');
-    mb.textContent = '● snapshot'; mb.style.color = 'var(--muted)';
-  }catch(e){ el.innerHTML = '<div class="err">Failed to load: '+e.message+'</div>'; }
-}
-document.getElementById('refresh').onclick = load;
-load();
+function applyFilter(){const q=filterEl.value.trim().toLowerCase();document.querySelectorAll('.asset-row').forEach(row=>row.classList.toggle('hidden',!!q&&!row.dataset.search.includes(q)))}
+async function load(){content.innerHTML='<div class="loading">Loading estate census…</div>';try{const r=await fetch('/api/health?t='+Date.now());if(!r.ok)throw new Error('HTTP '+r.status);render(await r.json());const b=document.getElementById('modebadge');b.textContent='● live';b.style.color='var(--teal)';return}catch(_e){}try{const r=await fetch('./data.json?t='+Date.now());if(!r.ok)throw new Error('HTTP '+r.status);render(await r.json());const b=document.getElementById('modebadge');b.textContent='● snapshot';b.style.color='var(--muted)'}catch(e){content.innerHTML='<div class="err">Failed to load census: '+esc(e.message)+'</div>'}}
+filterEl.addEventListener('input',applyFilter);document.getElementById('refresh').onclick=load;load();
 </script>
 </body>
 </html>
