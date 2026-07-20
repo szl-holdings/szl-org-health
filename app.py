@@ -6,7 +6,27 @@ import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import dns
+
 from census import SCHEMA_VERSION, build_report
+from census.common import resolve_txt as _resolve_txt
+from census.sites import DOMAINS
+
+
+def collect_dns():
+    """Compatibility wrapper preserving the original patchable DNS contract."""
+    out = {}
+    for domain in DOMAINS:
+        spf = _resolve_txt(domain)
+        dmarc = _resolve_txt(f"_dmarc.{domain}")
+        out[domain] = {
+            "spf": None if spf is None else "v=spf1" in spf.lower(),
+            "dmarc": None if dmarc is None else "v=dmarc1" in dmarc.lower(),
+            "dmarc_reject": None
+            if dmarc is None
+            else "p=reject" in dmarc.lower(),
+        }
+    return out
 
 
 class Handler(BaseHTTPRequestHandler):
