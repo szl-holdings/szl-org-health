@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import json
-import subprocess
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import dns.exception
+import dns.resolver
 
 ORG = "szl-holdings"
 HF_ORG = "SZLHOLDINGS"
@@ -86,23 +88,52 @@ def _http_probe(url: str, timeout: float = 12.0):
         return {"http": 0, "error": str(e)[:80]}
 
 
-def _dig_txt(name: str) -> str:
+def _resolve_txt(name: str, timeout: float = 8.0) -> str | None:
+    """Resolve TXT data without collapsing resolver failure into absence.
+
+    ``""`` means a measured NXDOMAIN/NODATA response. ``None`` means the
+    resolver could not produce an authoritative result in the allowed time.
+    """
     try:
-        out = subprocess.run(["dig", "+short", "TXT", name], capture_output=True,
-                             text=True, timeout=8).stdout.strip()
-        return out
-    except Exception:  # noqa: BLE001
+        answer = dns.resolver.resolve(
+            name,
+            "TXT",
+            search=False,
+            lifetime=timeout,
+        )
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
         return ""
+    except (dns.exception.Timeout, dns.resolver.NoNameservers, OSError):
+        return None
+
+    records = []
+    for record in answer:
+        chunks = getattr(record, "strings", ())
+        records.append("".join(bytes(chunk).decode("utf-8", "replace") for chunk in chunks))
+    return "\n".join(records)
 
 
 # ---- collectors ------------------------------------------------------------
 
-def collect_github() -> dict:
+def collect_github(
+    *,
+    request_timeout: float = 20.0,
+    retries: int = 2,
+    include_branch_protection: bool = True,
+) -> dict:
+    """Collect GitHub health with explicit, per-run network bounds.
+
+    Scheduled snapshots may skip the expensive protection probe, but the
+    resulting value remains honest UNKNOWN rather than an inferred False.
+    """
     repos = {}
+
+    def github_get(path: str):
+        return _gh(path, timeout=request_timeout, retries=retries)
 
     def one_repo(repo: str):
         # latest run on default branch
-        runs, err = _gh(f"/repos/{ORG}/{repo}/actions/runs?per_page=8")
+        runs, err = github_get(f"/repos/{ORG}/{repo}/actions/runs?per_page=8")
         ci = "unknown"
         if runs and runs.get("workflow_runs"):
             # most recent completed conclusion
@@ -112,12 +143,15 @@ def collect_github() -> dict:
                     break
         elif err:
             ci = "unknown"
+        if not include_branch_protection:
+            return repo, {"ci": ci, "protected": None}
+
         # branch protection on default branch.
         # protected = True (has protection), False (404 = explicitly none),
         # None = UNKNOWN (read failed/timed out) — never fabricate a False.
-        meta, _ = _gh(f"/repos/{ORG}/{repo}")
+        meta, _ = github_get(f"/repos/{ORG}/{repo}")
         default = (meta or {}).get("default_branch") or "main"
-        prot, perr = _gh(f"/repos/{ORG}/{repo}/branches/{default}/protection")
+        prot, perr = github_get(f"/repos/{ORG}/{repo}/branches/{default}/protection")
         if prot and ("enforce_admins" in prot or "required_pull_request_reviews" in prot):
             protected = True
         elif perr in ("http403", "http404"):
@@ -135,12 +169,14 @@ def collect_github() -> dict:
 
     # org-wide alert counts
     def count(path):
-        d, err = _gh(path)
+        d, err = github_get(path)
         if err or not isinstance(d, list):
             return None  # UNKNOWN — this token/endpoint not readable; never fabricate 0
         return len(d)
 
-    code_alerts_raw, _ = _gh(f"/orgs/{ORG}/code-scanning/alerts?state=open&per_page=100")
+    code_alerts_raw, _ = github_get(
+        f"/orgs/{ORG}/code-scanning/alerts?state=open&per_page=100"
+    )
     code_high = None
     code_total = None
     if isinstance(code_alerts_raw, list):
@@ -149,8 +185,8 @@ def collect_github() -> dict:
                         if (a.get("rule", {}) or {}).get("security_severity_level") == "high")
 
     # open PRs / issues via search
-    prs, _ = _gh(f"/search/issues?q=org:{ORG}+is:pr+is:open&per_page=1")
-    iss, _ = _gh(f"/search/issues?q=org:{ORG}+is:issue+is:open&per_page=1")
+    prs, _ = github_get(f"/search/issues?q=org:{ORG}+is:pr+is:open&per_page=1")
+    iss, _ = github_get(f"/search/issues?q=org:{ORG}+is:issue+is:open&per_page=1")
 
     return {
         "repos": repos,
@@ -209,25 +245,35 @@ def collect_sites() -> dict:
 def collect_dns() -> dict:
     out = {}
     for d in DOMAINS:
-        spf = _dig_txt(d)
-        spf_ok = "v=spf1" in spf.lower()
-        dmarc = _dig_txt(f"_dmarc.{d}")
-        dmarc_present = "v=dmarc1" in dmarc.lower()
-        dmarc_reject = "p=reject" in dmarc.lower()
+        spf = _resolve_txt(d)
+        spf_ok = None if spf is None else "v=spf1" in spf.lower()
+        dmarc = _resolve_txt(f"_dmarc.{d}")
+        dmarc_present = None if dmarc is None else "v=dmarc1" in dmarc.lower()
+        dmarc_reject = None if dmarc is None else "p=reject" in dmarc.lower()
         out[d] = {"spf": spf_ok, "dmarc": dmarc_present, "dmarc_reject": dmarc_reject}
     return out
 
 
-def build_report() -> dict:
+def build_report(
+    *,
+    use_cache: bool = True,
+    github_timeout: float = 20.0,
+    github_retries: int = 2,
+    include_branch_protection: bool = True,
+) -> dict:
     now = time.time()
-    if _CACHE["data"] and (now - _CACHE["ts"] < _CACHE_TTL):
+    if use_cache and _CACHE["data"] and (now - _CACHE["ts"] < _CACHE_TTL):
         return _CACHE["data"]
 
     report = {"generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
               "sources": {}}
     # run collectors; each is isolated so one failure => UNKNOWN, not a crash
     collectors = {
-        "github": collect_github,
+        "github": lambda: collect_github(
+            request_timeout=github_timeout,
+            retries=github_retries,
+            include_branch_protection=include_branch_protection,
+        ),
         "spaces": collect_spaces,
         "sites": collect_sites,
         "dns": collect_dns,

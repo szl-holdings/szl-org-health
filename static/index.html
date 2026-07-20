@@ -162,14 +162,16 @@ function render(d){
   if(dns){
     Object.keys(dns).forEach(dm=>{
       const v=dns[dm];
-      const spf = v.spf?chip('SPF','ok'):chip('SPF','bad');
+      const spf = v.spf===null ? chip('SPF unknown','unk') :
+        (v.spf ? chip('SPF','ok') : chip('no SPF','bad'));
       let dmarc;
-      if(v.dmarc_reject) dmarc=chip('DMARC reject','ok');
+      if(v.dmarc===null || v.dmarc_reject===null) dmarc=chip('DMARC unknown','unk');
+      else if(v.dmarc_reject) dmarc=chip('DMARC reject','ok');
       else if(v.dmarc) dmarc=chip('DMARC weak','warn');
       else dmarc=chip('no DMARC','bad');
       html += `<div class="row"><span class="name">${dm}</span><span style="display:flex;gap:6px">${spf}${dmarc}</span></div>`;
     });
-    html += '<div class="note">DNS resolved live. Zones behind pending nameserver cutover may read as missing until activation.</div>';
+    html += '<div class="note">DNS negatives are shown only after a successful lookup; resolver/tool failures remain UNKNOWN.</div>';
   } else { html += '<div class="err">source unreachable</div>'; }
   html += '</div>';
 
