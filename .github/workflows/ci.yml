@@ -13,28 +13,53 @@ jobs:
   truth-contract:
     name: DNS and health truth contract
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: Check out source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Check out staging source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Python
-        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v6.0.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: Install pinned dependencies
         run: python -m pip install --require-hashes -r requirements.txt
-      - name: Compile source
-        run: python -m py_compile app.py refresh_snapshot.py
-      - name: Run truth-contract tests
+      - name: Compile readable collectors
+        run: python -m py_compile app.py refresh_snapshot.py census/*.py
+      - name: Run fail-closed census contracts
         run: python -m unittest discover -s tests -v
-      - name: Build pinned runtime image
-        run: docker build --tag szl-org-health-ci .
-      - name: Smoke-test DNS dependency inside runtime image
-        run: >-
-          docker run --rm --entrypoint python szl-org-health-ci
-          -c "import app, dns; assert dns.__version__ == '2.7.0'; print('runtime DNS dependency ready')"
+      - name: Validate dashboard JavaScript syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          html = Path('static/index.html').read_text()
+          script = html.split('<script>', 1)[1].split('</script>', 1)[0]
+          Path('/tmp/org-health-dashboard.js').write_text(script)
+          PY
+          node --check /tmp/org-health-dashboard.js
+      - name: Build staging runtime image
+        run: docker build --tag szl-org-health-staging .
+      - name: Prove schema-v2 liveness inside the image
+        run: |
+          set -euo pipefail
+          cid=$(docker run -d -p 17860:7860 szl-org-health-staging)
+          trap 'docker logs "$cid" || true; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:17860/healthz > /tmp/healthz.json; then
+              break
+            fi
+            sleep 1
+          done
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('/tmp/healthz.json').read_text())
+          expected = {'status': 'ok', 'service': 'szl-org-health', 'schema_version': 2}
+          assert payload == expected, payload
+          PY
 
   stage-wave1-census:
     name: Stage independently authored Wave 1 census
+    needs: truth-contract
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
@@ -44,66 +69,115 @@ jobs:
     timeout-minutes: 20
     env:
       BOT_BRANCH: automation/wave1-dynamic-estate-census
-      PAYLOAD_SHA256: 7861f1f0b8c0f7e6411e1b675530966a9edf72415604701e61f6d60cc55c7dd4
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
-      - name: Checkout staging source without credentials
+      - name: Checkout exact staging head without persistent credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           path: candidate
+          fetch-depth: 0
           persist-credentials: false
-      - name: Checkout protected main for bot commit
+      - name: Checkout exact protected base for bot commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ env.BASE_SHA }}
           path: work
           fetch-depth: 1
-      - name: Extract and validate exact compressed payload
+      - name: Verify source hashes and exact staging scope
         run: |
           set -euo pipefail
-          awk '/^H4s/{print; exit}' candidate/.github/workflows/wave1-census-stage.yml > /tmp/census-payload.b64
-          test -s /tmp/census-payload.b64
-          base64 --decode /tmp/census-payload.b64 > /tmp/census-payload.tar.gz
-          echo "${PAYLOAD_SHA256}  /tmp/census-payload.tar.gz" | sha256sum --check --strict
-          mapfile -t actual < <(tar -tzf /tmp/census-payload.tar.gz | sort)
-          mapfile -t expected < <(printf '%s\n' \
-            .github/workflows/estate-census-ci.yml \
+          (cd candidate && sha256sum --check --strict .wave1/manifest.sha256)
+          changed=$(git -C candidate diff --name-only "$BASE_SHA" HEAD | sort)
+          expected=$(printf '%s\n' \
+            .github/workflows/ci.yml \
+            .wave1/ci.production.yml \
+            .wave1/manifest.sha256 \
             README.md \
             app.py \
+            census/__init__.py \
+            census/common.py \
+            census/github.py \
+            census/huggingface.py \
+            census/report.py \
+            census/sites.py \
             static/index.html \
             tests/test_census.py | sort)
-          test "${actual[*]}" = "${expected[*]}"
-          tar -xzf /tmp/census-payload.tar.gz -C work
-          mv work/.github/workflows/estate-census-ci.yml work/.github/workflows/ci.yml
-      - name: Run fail-closed collector and interface contracts
+          test "$changed" = "$expected"
+          test -z "$(find candidate/census candidate/.wave1 -type l -print -quit)"
+      - name: Copy only manifest-approved production files
+        run: |
+          set -euo pipefail
+          mkdir -p work/census work/static work/tests work/.github/workflows
+          cp candidate/app.py work/app.py
+          cp candidate/README.md work/README.md
+          cp candidate/census/*.py work/census/
+          cp candidate/static/index.html work/static/index.html
+          cp candidate/tests/test_census.py work/tests/test_census.py
+          cp candidate/.wave1/ci.production.yml work/.github/workflows/ci.yml
+      - name: Re-run contracts in clean protected-base worktree
         working-directory: work
         run: |
           set -euo pipefail
           python -m pip install --require-hashes -r requirements.txt
-          python -m py_compile app.py refresh_snapshot.py
+          python -m py_compile app.py refresh_snapshot.py census/*.py
           python -m unittest discover -s tests -v
           python - <<'PY'
           from pathlib import Path
           html = Path('static/index.html').read_text()
           script = html.split('<script>', 1)[1].split('</script>', 1)[0]
-          Path('/tmp/dashboard.js').write_text(script)
+          Path('/tmp/org-health-bot-dashboard.js').write_text(script)
           PY
-          node --check /tmp/dashboard.js
-      - name: Commit only the validated production files as GitHub Actions bot
+          node --check /tmp/org-health-bot-dashboard.js
+          docker build --tag szl-org-health-bot .
+          cid=$(docker run -d -p 17861:7860 szl-org-health-bot)
+          trap 'docker logs "$cid" || true; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:17861/healthz > /tmp/bot-healthz.json; then
+              break
+            fi
+            sleep 1
+          done
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('/tmp/bot-healthz.json').read_text())
+          expected = {'status': 'ok', 'service': 'szl-org-health', 'schema_version': 2}
+          assert payload == expected, payload
+          PY
+      - name: Create one DCO-valid GitHub Actions bot commit
         working-directory: work
         run: |
           set -euo pipefail
-          base_sha=$(git rev-parse HEAD)
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
           git switch -C "$BOT_BRANCH"
-          git add app.py README.md static/index.html tests/test_census.py .github/workflows/ci.yml
+          git add \
+            .github/workflows/ci.yml \
+            README.md \
+            app.py \
+            census/__init__.py \
+            census/common.py \
+            census/github.py \
+            census/huggingface.py \
+            census/report.py \
+            census/sites.py \
+            static/index.html \
+            tests/test_census.py
           changed=$(git diff --cached --name-only | sort)
           expected=$(printf '%s\n' \
             .github/workflows/ci.yml \
             README.md \
             app.py \
+            census/__init__.py \
+            census/common.py \
+            census/github.py \
+            census/huggingface.py \
+            census/report.py \
+            census/sites.py \
             static/index.html \
             tests/test_census.py | sort)
           test "$changed" = "$expected"
+          git diff --cached --check
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit \
@@ -111,7 +185,7 @@ jobs:
             -m "Replace partial hardcoded lists with bounded, revision-aware discovery for repositories, models, datasets, Spaces, collections, and buckets. Preserve explicit UNKNOWN semantics, latest-per-workflow CI, mobile search, and fail-closed evidence contracts." \
             -m "Refs szl-org-health#3" \
             -m "Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
-          test "$(git rev-parse HEAD^)" = "$base_sha"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
           if git ls-remote --exit-code --heads origin "$BOT_BRANCH" >/dev/null 2>&1; then
             git fetch --no-tags origin "$BOT_BRANCH:refs/remotes/origin/$BOT_BRANCH"
             old_remote=$(git rev-parse "refs/remotes/origin/$BOT_BRANCH")
