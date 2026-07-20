@@ -166,7 +166,7 @@ function render(data){
   const sites=sourceData(S,'sites');html+=`<div class="card"><h2>${dot(sites?'ok':'unk')}Sites</h2>`;
   if(sites)Object.keys(sites).forEach(name=>{const s=sites[name],up=s.http>=200&&s.http<400,h=['hsts','csp','xfo','nosniff'].filter(k=>s[k]).length;html+=itemRow(name,'reachability and response headers',chip(s.http||'down',up?'ok':'bad')+chip(`${h}/4 headers`,h>=3?'ok':'warn'))});else html+='<div class="err">source unavailable</div>';html+='</div>';
   const dns=sourceData(S,'dns');html+=`<div class="card"><h2>${dot(dns?'ok':'unk')}DNS and email auth</h2>`;
-  if(dns)Object.keys(dns).forEach(name=>{const d=dns[name];const spf=d.spf==null?chip('SPF unknown','unk'):chip(d.spf?'SPF':'no SPF',d.spf?'ok':'bad');const dm=d.dmarc_reject==null?chip('DMARC unknown','unk'):d.dmarc_reject?chip('DMARC reject','ok'):d.dmarc?chip('DMARC weak','warn'):chip('no DMARC','bad');html+=itemRow(name,'authoritative DNS reading',spf+dm)});else html+='<div class="err">source unavailable</div>';html+='</div>';
+  if(dns)Object.keys(dns).forEach(name=>{const v=dns[name];const spf=v.spf===null?chip('SPF unknown','unk'):chip(v.spf?'SPF':'no SPF',v.spf?'ok':'bad');const dm=(v.dmarc===null || v.dmarc_reject===null)?chip('DMARC unknown','unk'):v.dmarc_reject?chip('DMARC reject','ok'):v.dmarc?chip('DMARC weak','warn'):chip('no DMARC','bad');html+=itemRow(name,'authoritative DNS reading',spf+dm)});else html+='<div class="err">source unavailable</div>';html+='</div>';
   html+='</div>';content.innerHTML=html;applyFilter();
 }
 function applyFilter(){const q=filterEl.value.trim().toLowerCase();document.querySelectorAll('.asset-row').forEach(row=>row.classList.toggle('hidden',!!q&&!row.dataset.search.includes(q)))}
