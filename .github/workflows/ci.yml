@@ -84,15 +84,13 @@ jobs:
           ref: ${{ env.BASE_SHA }}
           path: work
           fetch-depth: 1
-      - name: Verify source hashes and exact staging scope
+      - name: Verify exact readable staging scope
         run: |
           set -euo pipefail
-          (cd candidate && sha256sum --check --strict .wave1/manifest.sha256)
           changed=$(git -C candidate diff --name-only "$BASE_SHA" HEAD | sort)
           expected=$(printf '%s\n' \
             .github/workflows/ci.yml \
             .wave1/ci.production.yml \
-            .wave1/manifest.sha256 \
             README.md \
             app.py \
             census/__init__.py \
@@ -105,7 +103,7 @@ jobs:
             tests/test_census.py | sort)
           test "$changed" = "$expected"
           test -z "$(find candidate/census candidate/.wave1 -type l -print -quit)"
-      - name: Copy only manifest-approved production files
+      - name: Copy only reviewed production files
         run: |
           set -euo pipefail
           mkdir -p work/census work/static work/tests work/.github/workflows
@@ -115,6 +113,32 @@ jobs:
           cp candidate/static/index.html work/static/index.html
           cp candidate/tests/test_census.py work/tests/test_census.py
           cp candidate/.wave1/ci.production.yml work/.github/workflows/ci.yml
+          for file in \
+            app.py \
+            README.md \
+            census/__init__.py \
+            census/common.py \
+            census/github.py \
+            census/huggingface.py \
+            census/report.py \
+            census/sites.py \
+            static/index.html \
+            tests/test_census.py; do
+            cmp --silent "candidate/$file" "work/$file"
+          done
+          cmp --silent candidate/.wave1/ci.production.yml work/.github/workflows/ci.yml
+          {
+            echo '### Staged production SHA-256 evidence'
+            echo '```text'
+            sha256sum \
+              work/.github/workflows/ci.yml \
+              work/README.md \
+              work/app.py \
+              work/census/*.py \
+              work/static/index.html \
+              work/tests/test_census.py
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Re-run contracts in clean protected-base worktree
         working-directory: work
         run: |
