@@ -1,34 +1,63 @@
-name: CI
+name: Estate census CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
+  push:
     branches: [main]
 
 permissions:
   contents: read
 
+concurrency:
+  group: estate-census-ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 jobs:
-  truth-contract:
-    name: DNS and health truth contract
+  contracts:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Check out source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Set up Python
-        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v6.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - name: Install pinned dependencies
+      - name: Install locked dependencies
         run: python -m pip install --require-hashes -r requirements.txt
-      - name: Compile source
-        run: python -m py_compile app.py refresh_snapshot.py
-      - name: Run truth-contract tests
+      - name: Compile collectors
+        run: python -m py_compile app.py refresh_snapshot.py census/*.py
+      - name: Run fail-closed census contracts
         run: python -m unittest discover -s tests -v
-      - name: Build pinned runtime image
-        run: docker build --tag szl-org-health-ci .
-      - name: Smoke-test DNS dependency inside runtime image
-        run: >-
-          docker run --rm --entrypoint python szl-org-health-ci
-          -c "import app, dns; assert dns.__version__ == '2.7.0'; print('runtime DNS dependency ready')"
+      - name: Validate dashboard JavaScript syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          html = Path('static/index.html').read_text()
+          script = html.split('<script>', 1)[1].split('</script>', 1)[0]
+          Path('/tmp/org-health-dashboard.js').write_text(script)
+          PY
+          node --check /tmp/org-health-dashboard.js
+
+  container-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build pinned container
+        run: docker build -t szl-org-health:test .
+      - name: Prove service liveness contract
+        run: |
+          set -euo pipefail
+          cid=$(docker run -d -p 17860:7860 szl-org-health:test)
+          trap 'docker logs "$cid" || true; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:17860/healthz > /tmp/healthz.json; then
+              break
+            fi
+            sleep 1
+          done
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path('/tmp/healthz.json').read_text())
+          assert payload == {'status': 'ok', 'service': 'szl-org-health', 'schema_version': 2}, payload
+          PY
