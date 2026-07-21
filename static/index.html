@@ -97,6 +97,13 @@ const known=n=>n==null?'—':n;
 function ciClass(value){if(value==='success'||value==='archived')return'ok';if(value==='failure')return'bad';if(value==='pending')return'warn';return'unk'}
 function stageClass(value){if(value==='RUNNING')return'ok';if(value==='unknown'||value==null)return'unk';return'warn'}
 function sourceData(S,key){return S[key]&&S[key].ok?S[key].data:null}
+function hardwareLabel(hardware){
+  if(hardware==null)return'';
+  if(typeof hardware==='string')return hardware;
+  const current=hardware.current||'';const requested=hardware.requested||'';
+  if(current&&requested&&current!==requested)return`${current} (requested ${requested})`;
+  return current||requested||'hardware unknown';
+}
 function metric(label,value,cls=''){return `<div class="metric ${cls}"><div class="label">${esc(label)}</div><div class="value">${esc(known(value))}</div></div>`}
 function itemRow(name,secondary,chips,href=''){
   const label=href?`<a href="${esc(href)}" target="_blank" rel="noopener">${esc(name)}</a>`:esc(name);
@@ -153,7 +160,7 @@ function render(data){
 
   if(hf){
     const A=hf.assets||{};
-    html+=assetSection('Hugging Face Spaces',A.spaces,space=>itemRow(space.id,[space.sdk,space.hardware,space.sha&&space.sha.slice(0,10)].filter(Boolean).join(' · '),chip(space.stage,stageClass(space.stage))+chip(space.http||'unreachable',space.http>=200&&space.http<400?'ok':'bad')+(space.healthz_contract?chip(space.healthz===200?'healthz 200':`healthz ${known(space.healthz)}`,space.healthz===200?'ok':'bad'):''),space.url));
+    html+=assetSection('Hugging Face Spaces',A.spaces,space=>itemRow(space.id,[space.sdk,hardwareLabel(space.hardware),space.sha&&space.sha.slice(0,10)].filter(Boolean).join(' · '),chip(space.stage,stageClass(space.stage))+chip(space.http||'unreachable',space.http>=200&&space.http<400?'ok':'bad')+(space.healthz_contract?chip(space.healthz===200?'healthz 200':`healthz ${known(space.healthz)}`,space.healthz===200?'ok':'bad'):''),space.url));
     html+=assetSection('Models',A.models,model=>itemRow(model.id,[model.pipeline_tag,model.sha&&model.sha.slice(0,10)].filter(Boolean).join(' · '),chip(model.artifact_state,model.artifact_state==='weights-present'?'ok':model.artifact_state==='unknown'?'unk':'warn')+chip(`${known(model.downloads_30d)} / 30d`,'info'),model.url));
     html+=assetSection('Datasets',A.datasets,dataset=>itemRow(dataset.id,[dataset.sha&&dataset.sha.slice(0,10),dataset.last_modified].filter(Boolean).join(' · '),chip(`${known(dataset.file_count_observed)} files`,dataset.file_count_observed==null?'unk':dataset.file_count_observed>0?'ok':'warn')+chip(`${known(dataset.downloads_30d)} / 30d`,'info'),dataset.url));
     html+=assetSection('Collections',A.collections,col=>itemRow(col.title||col.slug,[col.slug,col.last_updated].filter(Boolean).join(' · '),chip(col.complete?'full':'partial',col.complete?'ok':'warn')+chip(`${Object.values(col.item_counts||{}).reduce((a,b)=>a+b,0)} items`,'info'),col.url));
