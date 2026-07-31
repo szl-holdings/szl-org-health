@@ -201,7 +201,7 @@ def _paths() -> dict[str, str]:
     )
     collections = query(
         "/api/collections",
-        [("owner", HF_ORG), ("sort", "lastModified"), ("limit", "500")],
+        [("owner", HF_ORG), ("sort", "lastModified"), ("limit", "100")],
     )
     return {
         "models": models,
