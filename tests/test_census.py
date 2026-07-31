@@ -1,9 +1,11 @@
 import unittest
+import urllib.parse
 from unittest import mock
 
 from census.common import next_link
 from census.github import aggregate_workflow_runs, classify_repo
 from census.huggingface import (
+    _paths,
     collect_huggingface,
     normalize_hf_repo,
     space_runtime_url,
@@ -63,6 +65,13 @@ class ClassificationTests(unittest.TestCase):
 
 
 class HuggingFaceNormalizationTests(unittest.TestCase):
+    def test_collections_page_respects_live_api_limit(self):
+        query = urllib.parse.urlparse(_paths()["collections"])
+        params = urllib.parse.parse_qs(query.query)
+        self.assertEqual(params["owner"], ["SZLHOLDINGS"])
+        self.assertEqual(params["sort"], ["lastModified"])
+        self.assertEqual(params["limit"], ["100"])
+
     def test_static_space_uses_static_runtime_domain(self):
         item = {
             "id": "SZLHOLDINGS/anatomy",
