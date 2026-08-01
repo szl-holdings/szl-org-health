@@ -154,6 +154,27 @@ class HuggingFaceNormalizationTests(unittest.TestCase):
             with self.subTest(expected=expected):
                 self.assertEqual(classify_model_contract(paths), expected)
 
+    def test_transformers_contract_recognizes_shards_and_legacy_weights(self):
+        cases = [
+            [
+                "config.json",
+                "model.safetensors.index.json",
+                "model-00001-of-00002.safetensors",
+            ],
+            ["config.json", "pytorch_model.bin"],
+            [
+                "config.json",
+                "pytorch_model.bin.index.json",
+                "pytorch_model-00001-of-00002.bin",
+            ],
+        ]
+        for paths in cases:
+            with self.subTest(paths=paths):
+                self.assertEqual(
+                    classify_model_contract(paths),
+                    "transformers-checkpoint",
+                )
+
     @mock.patch("census.huggingface.http_probe", return_value={"http": 200, "headers": {}})
     @mock.patch("census.huggingface.request_json")
     @mock.patch("census.huggingface.hf_paginate")

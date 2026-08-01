@@ -68,7 +68,19 @@ def classify_model_contract(paths: list[str]) -> str:
     has_embedding = bool(basenames & EMBEDDING_ARTIFACTS)
     has_gguf = any(name.endswith(".gguf") for name in names)
     has_safetensors = any(name.endswith(".safetensors") for name in names)
-    has_top_level_model = "model.safetensors" in names
+    top_level_names = {name for name in names if "/" not in name}
+    has_top_level_model = any(
+        name
+        in {
+            "model.safetensors",
+            "model.safetensors.index.json",
+            "pytorch_model.bin",
+            "pytorch_model.bin.index.json",
+        }
+        or (name.startswith("model-") and name.endswith(".safetensors"))
+        or (name.startswith("pytorch_model-") and name.endswith(".bin"))
+        for name in top_level_names
+    )
     has_adapter = (
         "adapter_config.json" in names
         or "adapter_model.safetensors" in names
