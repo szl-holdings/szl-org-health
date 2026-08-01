@@ -27,23 +27,22 @@ def token_header(env_names: Iterable[str]) -> dict[str, str]:
     return {}
 
 
-def request_json(
+def request_bytes(
     url: str,
     *,
     headers: dict[str, str] | None = None,
     timeout: float = 20.0,
     retries: int = 2,
-) -> tuple[Any | None, dict[str, str], str | None]:
-    """Return ``(json, response_headers, error)`` with bounded retries."""
+) -> tuple[bytes | None, dict[str, str], str | None]:
+    """Return ``(body, response_headers, error)`` with bounded retries."""
     request_headers = {"User-Agent": "szl-org-health/2.0", **(headers or {})}
     last = "unknown"
     for attempt in range(retries + 1):
         request = urllib.request.Request(url, headers=request_headers)
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                raw = response.read().decode("utf-8")
                 return (
-                    json.loads(raw),
+                    response.read(),
                     {key.lower(): value for key, value in response.headers.items()},
                     None,
                 )
@@ -57,6 +56,28 @@ def request_json(
             if attempt < retries:
                 time.sleep(1.25 * (attempt + 1))
     return None, {}, last
+
+
+def request_json(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    timeout: float = 20.0,
+    retries: int = 2,
+) -> tuple[Any | None, dict[str, str], str | None]:
+    """Return ``(json, response_headers, error)`` with bounded retries."""
+    raw, response_headers, error = request_bytes(
+        url,
+        headers=headers,
+        timeout=timeout,
+        retries=retries,
+    )
+    if error or raw is None:
+        return None, response_headers, error
+    try:
+        return json.loads(raw.decode("utf-8")), response_headers, None
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return None, response_headers, f"invalid-json:{str(exc)[:120]}"
 
 
 def next_link(value: str | None) -> str | None:
