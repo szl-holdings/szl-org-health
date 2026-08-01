@@ -9,7 +9,7 @@ Every displayed value is either a reading collected during the current request o
 | Source | Dynamically discovered evidence |
 |---|---|
 | GitHub (`szl-holdings`) | All repositories visible to the runtime credential, archive/visibility/default-branch metadata, preliminary role classification, latest **run per workflow** on the default branch, branch-protection readability, open PRs/issues, and organization security-alert counts |
-| Hugging Face (`SZLHOLDINGS`) | Models, datasets, Spaces, collections, and buckets; exact repository SHAs and modification dates; observed model weight filenames; Space SDK, hardware/runtime stage, live root probe, and governed `/healthz` probes for the flagships |
+| Hugging Face (`SZLHOLDINGS`) | Models, datasets, Spaces, collections, and buckets; exact repository SHAs and modification dates; declared model contract shape plus observed tensor, GGUF, estimator, and embedding artifacts; Space SDK, hardware/runtime stage, live root probe, and governed `/healthz` probes for the flagships |
 | Sites and DNS | Reachability, security response headers, SPF, and DMARC posture |
 
 The GitHub collector follows pagination instead of maintaining a hand-written repository subset. The Hugging Face collector uses the public Hub APIs with bounded pagination and isolates every asset class: for example, an unreadable bucket API is shown as `UNKNOWN` while independently verified Spaces and datasets remain available.
@@ -17,7 +17,7 @@ The GitHub collector follows pagination instead of maintaining a hand-written re
 ## Honesty contract
 
 - Repository CI is calculated from the latest default-branch push run **for each workflow**. A newer unrelated green workflow cannot conceal a failing guard.
-- A model is reported as `weights-present` only when a recognized weight file is observed in the returned repository siblings. `no-weight-file-observed` is not treated as a trained model.
+- Tensor/GGUF weights, serialized estimators, and embedding indexes are reported separately. A kernel or operational payload may satisfy its declared contract without a weight file; that classification is not a claim that inference or deployment was executed.
 - Space `RUNNING` state and HTTP reachability are separate readings. Neither substitutes for the other.
 - Direct bucket discovery may require an authenticated Hugging Face token. Without it, bucket count remains `UNKNOWN`; collection-visible bucket references are labeled as partial discovery.
 - A 403/404 from GitHub branch-protection endpoints remains `UNKNOWN` because an unprotected branch and an under-scoped credential can be indistinguishable.
@@ -61,7 +61,7 @@ python -m unittest discover -s tests -v
 python -m py_compile app.py refresh_snapshot.py census/*.py
 ```
 
-The regression suite verifies latest-per-workflow aggregation, fail-closed asset-class errors, static Space URL construction, model-weight evidence, classification precedence, and pagination parsing.
+The regression suite verifies latest-per-workflow aggregation, fail-closed asset-class errors, static Space URL construction, model artifact and contract evidence, classification precedence, and pagination parsing.
 
 ## Layout
 
