@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import concurrent.futures as cf
+import hashlib
+import posixpath
 import urllib.parse
 from typing import Any
 
-from .common import http_probe, paginate_json, request_json, token_header
+from .common import http_probe, paginate_json, request_bytes, request_json, token_header
 
 HF_ORG = "SZLHOLDINGS"
 HF = "https://huggingface.co"
@@ -21,7 +23,7 @@ WEIGHT_SUFFIXES = (
 )
 ESTIMATOR_SUFFIXES = (".joblib", ".pkl", ".pickle")
 EMBEDDING_ARTIFACTS = {"vectors.npz"}
-NO_MODEL_ARTIFACT_CONTRACTS = {"huggingface-kernel", "operational-payload"}
+NO_MODEL_ARTIFACT_CONTRACTS = {"huggingface-kernel"}
 
 
 def hf_headers() -> dict[str, str]:
@@ -116,6 +118,157 @@ def classify_model_contract(paths: list[str]) -> str:
     return "unclassified"
 
 
+def _payload_file_path(path: str) -> str | None:
+    """Return a safe repository path rooted at ``payloads/deploy``."""
+    normalized = posixpath.normpath(str(path).replace("\\", "/")).lstrip("/")
+    if not normalized or normalized == "." or normalized.startswith("../"):
+        return None
+    if normalized.startswith("payloads/deploy/"):
+        return normalized
+    return f"payloads/deploy/{normalized}"
+
+
+def verify_operational_payload(
+    repo_id: str,
+    revision: str | None,
+    repo_paths: list[str],
+) -> dict[str, Any]:
+    """Verify every file declared by an operational payload manifest.
+
+    The check is bound to the model revision and fails closed on missing files,
+    byte-size drift, digest drift, malformed entries, or unavailable evidence.
+    """
+    base = {
+        "payload_manifest_state": "unknown",
+        "payload_manifest_declared_files": 0,
+        "payload_manifest_verified_files": 0,
+        "payload_manifest_missing_files": [],
+        "payload_manifest_mismatched_files": [],
+        "payload_manifest_aggregate_verified": False,
+        "payload_manifest_error": None,
+    }
+    if not revision:
+        return {**base, "payload_manifest_error": "repository revision unavailable"}
+
+    manifest_path = "payloads/deploy/MANIFEST.json"
+    manifest_url = (
+        f"{HF}/{urllib.parse.quote(repo_id, safe='/')}/resolve/"
+        f"{urllib.parse.quote(revision, safe='')}/{manifest_path}"
+    )
+    raw, _, error = request_bytes(
+        manifest_url,
+        headers=hf_headers(),
+        timeout=20,
+        retries=1,
+    )
+    if error or raw is None:
+        return {
+            **base,
+            "payload_manifest_error": f"manifest unavailable: {error or 'empty body'}",
+        }
+    try:
+        import json
+
+        manifest = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as exc:
+        return {**base, "payload_manifest_error": f"invalid manifest JSON: {exc}"}
+
+    entries = manifest.get("files") if isinstance(manifest, dict) else None
+    if not isinstance(entries, list):
+        return {**base, "payload_manifest_error": "manifest files must be a list"}
+
+    aggregate_input = "\n".join(
+        f"{entry.get('path')}\0{entry.get('size')}\0{entry.get('sha256')}"
+        for entry in entries
+        if isinstance(entry, dict)
+    ).encode("utf-8")
+    recorded_aggregate = str(manifest.get("aggregateSha256") or "").lower()
+    aggregate_verified = (
+        len(recorded_aggregate) == 64
+        and hashlib.sha256(aggregate_input).hexdigest() == recorded_aggregate
+    )
+
+    observed = set(repo_paths)
+    missing: list[str] = []
+    mismatched: list[str] = []
+    verified = 0
+    invalid_entries = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            invalid_entries += 1
+            continue
+        declared_path = entry.get("path")
+        full_path = _payload_file_path(str(declared_path or ""))
+        expected_sha = str(entry.get("sha256") or "").lower()
+        expected_size = entry.get("size")
+        if (
+            full_path is None
+            or len(expected_sha) != 64
+            or not all(char in "0123456789abcdef" for char in expected_sha)
+            or not isinstance(expected_size, int)
+            or expected_size < 0
+        ):
+            invalid_entries += 1
+            continue
+        if full_path not in observed:
+            missing.append(full_path)
+            continue
+        file_url = (
+            f"{HF}/{urllib.parse.quote(repo_id, safe='/')}/resolve/"
+            f"{urllib.parse.quote(revision, safe='')}/"
+            f"{urllib.parse.quote(full_path, safe='/')}"
+        )
+        body, _, file_error = request_bytes(
+            file_url,
+            headers=hf_headers(),
+            timeout=20,
+            retries=1,
+        )
+        if file_error or body is None:
+            mismatched.append(f"{full_path}:unavailable")
+            continue
+        actual_sha = hashlib.sha256(body).hexdigest()
+        if len(body) != expected_size or actual_sha != expected_sha:
+            mismatched.append(full_path)
+            continue
+        verified += 1
+
+    declared_count = len(entries)
+    recorded_count = manifest.get("fileCount") if isinstance(manifest, dict) else None
+    count_mismatch = recorded_count != declared_count
+    version_mismatch = manifest.get("manifestVersion") != 1
+    incomplete = bool(
+        missing
+        or mismatched
+        or invalid_entries
+        or count_mismatch
+        or version_mismatch
+        or not aggregate_verified
+    )
+    return {
+        **base,
+        "payload_manifest_state": "incomplete" if incomplete else "verified",
+        "payload_manifest_declared_files": declared_count,
+        "payload_manifest_verified_files": verified,
+        "payload_manifest_missing_files": sorted(missing),
+        "payload_manifest_mismatched_files": sorted(mismatched),
+        "payload_manifest_aggregate_verified": aggregate_verified,
+        "payload_manifest_error": (
+            "; ".join(
+                value
+                for value in (
+                    f"{invalid_entries} invalid entries" if invalid_entries else None,
+                    "fileCount does not match files" if count_mismatch else None,
+                    "manifestVersion is not 1" if version_mismatch else None,
+                    "aggregateSha256 does not match files" if not aggregate_verified else None,
+                )
+                if value
+            )
+            or None
+        ),
+    }
+
+
 def normalize_hf_repo(item: dict[str, Any], kind: str) -> dict[str, Any]:
     repo_id = str(
         item.get("id")
@@ -176,6 +329,27 @@ def normalize_hf_repo(item: dict[str, Any], kind: str) -> dict[str, Any]:
                 ),
             }
         )
+    return normalized
+
+
+def normalize_model_with_integrity(item: dict[str, Any]) -> dict[str, Any]:
+    normalized = normalize_hf_repo(item, "model")
+    if normalized.get("contract") != "operational-payload":
+        return normalized
+    integrity = verify_operational_payload(
+        normalized["id"],
+        normalized.get("sha"),
+        siblings(item),
+    )
+    normalized.update(integrity)
+    state = integrity["payload_manifest_state"]
+    normalized["artifact_state"] = (
+        "payload-manifest-verified"
+        if state == "verified"
+        else "payload-manifest-incomplete"
+        if state == "incomplete"
+        else "unknown"
+    )
     return normalized
 
 
@@ -353,7 +527,7 @@ def collect_huggingface() -> dict[str, Any]:
 
     models = (
         sorted(
-            (normalize_hf_repo(item, "model") for item in models_raw),
+            (normalize_model_with_integrity(item) for item in models_raw),
             key=lambda value: value["id"],
         )
         if models_raw is not None
@@ -474,7 +648,29 @@ def collect_huggingface() -> dict[str, Any]:
                     1
                     for model in models or []
                     if model.get("artifact_state")
-                    in {"artifact-present", "not-required-by-contract"}
+                    in {
+                        "artifact-present",
+                        "not-required-by-contract",
+                        "payload-manifest-verified",
+                    }
+                )
+                if models is not None
+                else None
+            ),
+            "models_with_verified_payload_manifests": (
+                sum(
+                    1
+                    for model in models or []
+                    if model.get("payload_manifest_state") == "verified"
+                )
+                if models is not None
+                else None
+            ),
+            "models_with_incomplete_payload_manifests": (
+                sum(
+                    1
+                    for model in models or []
+                    if model.get("payload_manifest_state") == "incomplete"
                 )
                 if models is not None
                 else None

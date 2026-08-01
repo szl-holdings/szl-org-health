@@ -1,3 +1,5 @@
+import hashlib
+import json
 import unittest
 import urllib.parse
 from unittest import mock
@@ -6,10 +8,12 @@ from census.common import next_link
 from census.github import aggregate_workflow_runs, classify_repo
 from census.huggingface import (
     _paths,
+    _payload_file_path,
     classify_model_contract,
     collect_huggingface,
     normalize_hf_repo,
     space_runtime_url,
+    verify_operational_payload,
 )
 
 
@@ -174,6 +178,89 @@ class HuggingFaceNormalizationTests(unittest.TestCase):
                     classify_model_contract(paths),
                     "transformers-checkpoint",
                 )
+
+    def test_payload_paths_are_confined_to_deploy_root(self):
+        self.assertEqual(
+            _payload_file_path("manifests/service.yaml"),
+            "payloads/deploy/manifests/service.yaml",
+        )
+        self.assertEqual(
+            _payload_file_path("payloads/deploy/zarf.yaml"),
+            "payloads/deploy/zarf.yaml",
+        )
+        self.assertIsNone(_payload_file_path("../secret"))
+
+    @mock.patch("census.huggingface.request_bytes")
+    def test_operational_payload_fails_closed_on_missing_file(self, request_bytes):
+        present = b"present payload\n"
+        manifest = {
+            "manifestVersion": 1,
+            "fileCount": 2,
+            "files": [
+                {
+                    "path": "present.yaml",
+                    "size": len(present),
+                    "sha256": hashlib.sha256(present).hexdigest(),
+                },
+                {
+                    "path": "missing.yaml",
+                    "size": 3,
+                    "sha256": hashlib.sha256(b"no\n").hexdigest(),
+                },
+            ],
+        }
+        aggregate_input = "\n".join(
+            f"{entry['path']}\0{entry['size']}\0{entry['sha256']}"
+            for entry in manifest["files"]
+        ).encode()
+        manifest["aggregateSha256"] = hashlib.sha256(aggregate_input).hexdigest()
+        request_bytes.side_effect = [
+            (json.dumps(manifest).encode(), {}, None),
+            (present, {}, None),
+        ]
+        result = verify_operational_payload(
+            "SZLHOLDINGS/example",
+            "a" * 40,
+            ["payloads/deploy/MANIFEST.json", "payloads/deploy/present.yaml"],
+        )
+        self.assertEqual(result["payload_manifest_state"], "incomplete")
+        self.assertEqual(result["payload_manifest_declared_files"], 2)
+        self.assertEqual(result["payload_manifest_verified_files"], 1)
+        self.assertTrue(result["payload_manifest_aggregate_verified"])
+        self.assertEqual(
+            result["payload_manifest_missing_files"],
+            ["payloads/deploy/missing.yaml"],
+        )
+
+    @mock.patch("census.huggingface.request_bytes")
+    def test_operational_payload_verifies_bytes_and_aggregate(self, request_bytes):
+        payload = b"apiVersion: v1\n"
+        entry = {
+            "path": "manifest.yaml",
+            "size": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        aggregate_input = (
+            f"{entry['path']}\0{entry['size']}\0{entry['sha256']}".encode()
+        )
+        manifest = {
+            "manifestVersion": 1,
+            "fileCount": 1,
+            "aggregateSha256": hashlib.sha256(aggregate_input).hexdigest(),
+            "files": [entry],
+        }
+        request_bytes.side_effect = [
+            (json.dumps(manifest).encode(), {}, None),
+            (payload, {}, None),
+        ]
+        result = verify_operational_payload(
+            "SZLHOLDINGS/example",
+            "b" * 40,
+            ["payloads/deploy/MANIFEST.json", "payloads/deploy/manifest.yaml"],
+        )
+        self.assertEqual(result["payload_manifest_state"], "verified")
+        self.assertEqual(result["payload_manifest_verified_files"], 1)
+        self.assertTrue(result["payload_manifest_aggregate_verified"])
 
     @mock.patch("census.huggingface.http_probe", return_value={"http": 200, "headers": {}})
     @mock.patch("census.huggingface.request_json")
