@@ -1,9 +1,10 @@
-"""Dynamic Hugging Face models, datasets, Spaces, collections, and buckets."""
+"""Dynamic Hugging Face models, datasets, Spaces, Kernels, collections, and buckets."""
 from __future__ import annotations
 
 import concurrent.futures as cf
 import hashlib
 import posixpath
+import re
 import urllib.parse
 from typing import Any
 
@@ -11,7 +12,7 @@ from .common import http_probe, paginate_json, request_bytes, request_json, toke
 
 HF_ORG = "SZLHOLDINGS"
 HF = "https://huggingface.co"
-HEALTHZ_SPACES = {"a11oy", "killinchu", "yarqa", "anatomy"}
+SHA40 = re.compile(r"^[0-9a-f]{40}$")
 WEIGHT_SUFFIXES = (
     ".safetensors",
     ".gguf",
@@ -277,6 +278,13 @@ def normalize_hf_repo(item: dict[str, Any], kind: str) -> dict[str, Any]:
         or "unknown"
     )
     repo_siblings = siblings(item)
+    card_data = item.get("cardData") or item.get("card_data") or {}
+    if not isinstance(card_data, dict):
+        card_data = {}
+    tags = item.get("tags") if isinstance(item.get("tags"), list) else []
+    license_declared = bool(card_data.get("license")) or any(
+        str(tag).startswith("license:") for tag in tags
+    )
     normalized = {
         "id": repo_id,
         "sha": item.get("sha"),
@@ -286,6 +294,29 @@ def normalize_hf_repo(item: dict[str, Any], kind: str) -> dict[str, Any]:
         "downloads_30d": item.get("downloads"),
         "file_count_observed": (
             len(repo_siblings) if item.get("siblings") is not None else None
+        ),
+        "card_present": (
+            "README.md" in repo_siblings
+            if item.get("siblings") is not None
+            else None
+        ),
+        "license_declared": license_declared,
+        "managed_marker_present": (
+            "SZL_ESTATE_MANAGED.json" in repo_siblings
+            if item.get("siblings") is not None
+            else None
+        ),
+        "provenance_marker_present": (
+            "MODEL_PROVENANCE.json" in repo_siblings
+            if item.get("siblings") is not None
+            else None
+        ),
+        "card_state": (
+            "COMPLETE"
+            if "README.md" in repo_siblings and license_declared
+            else "INCOMPLETE"
+            if item.get("siblings") is not None
+            else "UNKNOWN"
         ),
         "url": f"{HF}/{repo_id}" if kind == "model" else f"{HF}/{kind}s/{repo_id}",
     }
@@ -366,9 +397,44 @@ def space_runtime_url(item: dict[str, Any]) -> str | None:
     return f"https://{subdomain}{suffix}/"
 
 
+def _http_status(error: str | None) -> int:
+    if error is None:
+        return 200
+    if error.startswith("http") and error[4:].isdigit():
+        return int(error[4:])
+    return 0
+
+
+def _source_revision(payload: Any) -> str | None:
+    """Extract only an explicit immutable source revision from build metadata."""
+    if not isinstance(payload, dict):
+        return None
+    candidates = [
+        payload.get("source_revision"),
+        payload.get("source_sha"),
+        payload.get("git_sha"),
+        payload.get("revision"),
+    ]
+    for nested_key in ("build", "source", "runtime"):
+        nested = payload.get(nested_key)
+        if isinstance(nested, dict):
+            candidates.extend(
+                (
+                    nested.get("source_revision"),
+                    nested.get("source_sha"),
+                    nested.get("git_sha"),
+                    nested.get("revision"),
+                )
+            )
+    for value in candidates:
+        normalized = str(value or "").lower()
+        if SHA40.fullmatch(normalized):
+            return normalized
+    return None
+
+
 def normalize_space(item: dict[str, Any]) -> dict[str, Any]:
     repo_id = str(item.get("id") or "unknown")
-    name = repo_id.split("/", 1)[-1]
     runtime = item.get("runtime") if isinstance(item.get("runtime"), dict) else {}
     root_url = space_runtime_url(item)
     root_probe = (
@@ -376,25 +442,195 @@ def normalize_space(item: dict[str, Any]) -> dict[str, Any]:
         if root_url
         else {"http": 0, "error": "runtime URL unavailable"}
     )
-    healthz = None
-    if name in HEALTHZ_SPACES and root_url:
-        healthz = http_probe(urllib.parse.urljoin(root_url, "healthz")).get("http")
+    sdk = item.get("sdk")
+    dynamic = sdk not in {None, "static"}
+    healthz_probe = (
+        http_probe(urllib.parse.urljoin(root_url, "healthz"))
+        if dynamic and root_url
+        else {}
+    )
+    healthz = healthz_probe.get("http")
+    build_info = None
+    build_info_error = None
+    if dynamic and root_url:
+        build_info, _, build_info_error = request_json(
+            urllib.parse.urljoin(root_url, "api/build-info"),
+            headers={"Accept": "application/json"},
+            timeout=12,
+            retries=0,
+        )
+    source_revision = _source_revision(build_info)
+    stage = runtime.get("stage") or "unknown"
+    reachable = 200 <= int(root_probe.get("http") or 0) < 400
+    if stage != "RUNNING" or not reachable:
+        operational_state = "DEGRADED"
+    elif not dynamic:
+        operational_state = "STATIC_REACHABLE"
+    elif healthz == 200 and source_revision:
+        operational_state = "OPERATIONAL_SOURCE_BOUND"
+    elif healthz == 200:
+        operational_state = "RUNTIME_HEALTHY_UNBOUND"
+    else:
+        operational_state = "REACHABLE_UNVERIFIED"
+
+    repo_siblings = siblings(item)
+    card_data = item.get("cardData") or item.get("card_data") or {}
+    if not isinstance(card_data, dict):
+        card_data = {}
+    tags = item.get("tags") if isinstance(item.get("tags"), list) else []
+    license_declared = bool(card_data.get("license")) or any(
+        str(tag).startswith("license:") for tag in tags
+    )
     return {
         "id": repo_id,
         "sha": item.get("sha"),
         "last_modified": item.get("lastModified"),
         "private": item.get("private"),
         "likes": item.get("likes"),
-        "sdk": item.get("sdk"),
-        "stage": runtime.get("stage") or "unknown",
+        "sdk": sdk,
+        "stage": stage,
         "hardware": runtime.get("hardware") or runtime.get("requestedHardware"),
         "subdomain": item.get("subdomain"),
         "runtime_url": root_url,
         "http": root_probe.get("http"),
         "probe_error": root_probe.get("error"),
         "healthz": healthz,
-        "healthz_contract": name in HEALTHZ_SPACES,
+        "healthz_error": healthz_probe.get("error"),
+        "healthz_contract": healthz == 200,
+        "build_info_http": (
+            _http_status(build_info_error) if dynamic and root_url else None
+        ),
+        "build_info_error": build_info_error,
+        "source_revision": source_revision,
+        "source_binding_state": (
+            "OBSERVED"
+            if source_revision
+            else "UNAVAILABLE"
+            if dynamic
+            else "NOT_APPLICABLE"
+        ),
+        "operational_state": operational_state,
+        "card_present": (
+            "README.md" in repo_siblings
+            if item.get("siblings") is not None
+            else None
+        ),
+        "license_declared": license_declared,
+        "managed_marker_present": (
+            "SZL_ESTATE_MANAGED.json" in repo_siblings
+            if item.get("siblings") is not None
+            else None
+        ),
+        "card_state": (
+            "COMPLETE"
+            if "README.md" in repo_siblings and license_declared
+            else "INCOMPLETE"
+            if item.get("siblings") is not None
+            else "UNKNOWN"
+        ),
         "url": f"{HF}/spaces/{repo_id}",
+    }
+
+
+def _full_kernel(item: dict[str, Any]) -> dict[str, Any]:
+    repo_id = str(item.get("id") or "unknown")
+    detail, _, detail_error = request_json(
+        f"{HF}/api/kernels/{urllib.parse.quote(repo_id, safe='/')}",
+        headers=hf_headers(),
+        timeout=30,
+        retries=1,
+    )
+    source = detail if isinstance(detail, dict) else item
+    revision = str(source.get("sha") or "").lower()
+    paths: set[str] | None = None
+    tree_error: str | None = None
+    if SHA40.fullmatch(revision):
+        tree, _, tree_error = request_json(
+            f"{HF}/api/kernels/{urllib.parse.quote(repo_id, safe='/')}/tree/"
+            f"{revision}?recursive=true",
+            headers=hf_headers(),
+            timeout=45,
+            retries=1,
+        )
+        if isinstance(tree, list):
+            paths = {
+                str(entry.get("path") or "")
+                for entry in tree
+                if isinstance(entry, dict)
+                and entry.get("type") in {"file", "blob"}
+                and entry.get("path")
+            }
+        elif tree_error is None:
+            tree_error = "unexpected non-list tree payload"
+    else:
+        tree_error = "immutable kernel revision unavailable"
+
+    required = {"README.md", "contract.json"}
+    missing = sorted(required - (paths or set()))
+    build_present = any(path.startswith("build/") for path in paths or set())
+    if not build_present:
+        missing.append("build/**")
+    if paths is None:
+        contract_state = "UNKNOWN"
+    elif missing:
+        contract_state = "INCOMPLETE"
+    else:
+        contract_state = "COMPLETE"
+    return {
+        "id": repo_id,
+        "sha": revision if SHA40.fullmatch(revision) else None,
+        "last_modified": source.get("lastModified"),
+        "private": source.get("private"),
+        "likes": source.get("likes"),
+        "downloads_30d": source.get("downloads"),
+        "metadata_state": "OBSERVED" if detail_error is None else "UNKNOWN",
+        "metadata_error": detail_error,
+        "tree_state": "OBSERVED" if paths is not None else "UNKNOWN",
+        "tree_error": tree_error,
+        "file_count_observed": len(paths) if paths is not None else None,
+        "build_variants_present": build_present if paths is not None else None,
+        "contract_state": contract_state,
+        "contract_missing": missing,
+        "selfcheck_state": "NOT_EXECUTED_BY_CENSUS",
+        "url": f"{HF}/kernels/{repo_id}",
+    }
+
+
+def _full_bucket(item: dict[str, Any]) -> dict[str, Any]:
+    bucket_id = str(item.get("id") or "unknown")
+    tree, _, tree_error = request_json(
+        f"{HF}/api/buckets/{urllib.parse.quote(bucket_id, safe='/')}/tree?recursive=true",
+        headers=hf_headers(),
+        timeout=30,
+        retries=1,
+    )
+    paths = (
+        {
+            str(entry.get("path") or "")
+            for entry in tree
+            if isinstance(entry, dict) and entry.get("path")
+        }
+        if isinstance(tree, list)
+        else None
+    )
+    return {
+        "id": bucket_id,
+        "private": item.get("private"),
+        "created_at": item.get("createdAt"),
+        "updated_at": item.get("updatedAt"),
+        "size_bytes": item.get("size"),
+        "total_files": item.get("totalFiles"),
+        "tree_state": "OBSERVED" if paths is not None else "UNKNOWN",
+        "tree_error": tree_error,
+        "readme_present": "README.md" in (paths or set()),
+        "documentation_state": (
+            "COMPLETE"
+            if paths is not None and "README.md" in paths
+            else "INCOMPLETE"
+            if paths is not None
+            else "UNKNOWN"
+        ),
+        "url": f"{HF}/buckets/{bucket_id}",
     }
 
 
@@ -422,6 +658,8 @@ def _paths() -> dict[str, str]:
                 "downloads",
                 "likes",
                 "siblings",
+                "cardData",
+                "tags",
             )
         ],
     )
@@ -438,6 +676,8 @@ def _paths() -> dict[str, str]:
                 "downloads",
                 "likes",
                 "siblings",
+                "cardData",
+                "tags",
             )
         ],
     )
@@ -455,8 +695,15 @@ def _paths() -> dict[str, str]:
                 "runtime",
                 "subdomain",
                 "likes",
+                "siblings",
+                "cardData",
+                "tags",
             )
         ],
+    )
+    kernels = query(
+        "/api/kernels",
+        [("author", HF_ORG), ("limit", "500")],
     )
     collections = query(
         "/api/collections",
@@ -466,6 +713,7 @@ def _paths() -> dict[str, str]:
         "models": models,
         "datasets": datasets,
         "spaces": spaces,
+        "kernels": kernels,
         "collections": collections,
         "buckets": f"/api/buckets/{HF_ORG}",
     }
@@ -513,7 +761,7 @@ def _full_collection(item: dict[str, Any]) -> tuple[dict[str, Any], set[str]]:
 
 def collect_huggingface() -> dict[str, Any]:
     paths = _paths()
-    with cf.ThreadPoolExecutor(max_workers=5) as executor:
+    with cf.ThreadPoolExecutor(max_workers=6) as executor:
         futures = {
             name: executor.submit(hf_paginate, path) for name, path in paths.items()
         }
@@ -522,6 +770,7 @@ def collect_huggingface() -> dict[str, Any]:
     models_raw, models_error = raw["models"]
     datasets_raw, datasets_error = raw["datasets"]
     spaces_raw, spaces_error = raw["spaces"]
+    kernels_raw, kernels_error = raw["kernels"]
     collections_raw, collections_error = raw["collections"]
     buckets_raw, buckets_error = raw["buckets"]
 
@@ -549,6 +798,13 @@ def collect_huggingface() -> dict[str, Any]:
                 executor.map(normalize_space, spaces_raw), key=lambda value: value["id"]
             )
 
+    kernels: list[dict[str, Any]] | None = None
+    if kernels_raw is not None:
+        with cf.ThreadPoolExecutor(max_workers=6) as executor:
+            kernels = sorted(
+                executor.map(_full_kernel, kernels_raw), key=lambda value: value["id"]
+            )
+
     collections: list[dict[str, Any]] | None = None
     collection_bucket_ids: set[str] = set()
     if collections_raw is not None:
@@ -563,19 +819,11 @@ def collect_huggingface() -> dict[str, Any]:
 
     buckets: list[dict[str, Any]] | None = None
     if buckets_raw is not None:
-        buckets = sorted(
-            (
-                {
-                    "id": item.get("id"),
-                    "private": item.get("private"),
-                    "created_at": item.get("createdAt"),
-                    "size_bytes": item.get("size"),
-                    "total_files": item.get("totalFiles"),
-                }
-                for item in buckets_raw
-            ),
-            key=lambda value: str(value["id"]),
-        )
+        with cf.ThreadPoolExecutor(max_workers=4) as executor:
+            buckets = sorted(
+                executor.map(_full_bucket, buckets_raw),
+                key=lambda value: str(value["id"]),
+            )
     elif collection_bucket_ids:
         buckets = [
             {"id": value, "discovered_via": "collection"}
@@ -589,12 +837,50 @@ def collect_huggingface() -> dict[str, Any]:
         "models": asset_result(models, models_error),
         "datasets": asset_result(datasets, datasets_error),
         "spaces": asset_result(spaces, spaces_error),
+        "kernels": asset_result(kernels, kernels_error),
         "collections": asset_result(collections, collections_error),
         "buckets": asset_result(buckets, buckets_error),
     }
+
+    collection_members: dict[str, set[str]] = {
+        "model": set(),
+        "dataset": set(),
+        "space": set(),
+    }
+    if collections is not None:
+        for collection in collections:
+            for member in collection.get("items") or []:
+                member_type = str(member.get("type") or "")
+                if member_type in collection_members:
+                    collection_members[member_type].add(str(member.get("id") or ""))
+
+    collection_coverage: dict[str, Any] = {}
+    for plural, singular, values in (
+        ("models", "model", models),
+        ("datasets", "dataset", datasets),
+        ("spaces", "space", spaces),
+    ):
+        if values is None or collections is None:
+            collection_coverage[plural] = {
+                "public_total": None,
+                "covered": None,
+                "missing": None,
+            }
+            continue
+        public_ids = {
+            str(value.get("id")) for value in values if not value.get("private")
+        }
+        covered = public_ids & collection_members[singular]
+        collection_coverage[plural] = {
+            "public_total": len(public_ids),
+            "covered": len(covered),
+            "missing": sorted(public_ids - covered),
+        }
+
     return {
         "organization": HF_ORG,
         "assets": assets,
+        "collection_coverage": collection_coverage,
         "summary": {
             **{name: source["count"] for name, source in assets.items()},
             "running_spaces": (
@@ -609,6 +895,75 @@ def collect_huggingface() -> dict[str, Any]:
                     if 200 <= int(space.get("http") or 0) < 400
                 )
                 if spaces is not None
+                else None
+            ),
+            "dynamic_spaces": (
+                sum(1 for space in spaces or [] if space.get("sdk") != "static")
+                if spaces is not None
+                else None
+            ),
+            "healthz_spaces": (
+                sum(1 for space in spaces or [] if space.get("healthz") == 200)
+                if spaces is not None
+                else None
+            ),
+            "source_bound_spaces": (
+                sum(
+                    1
+                    for space in spaces or []
+                    if space.get("source_binding_state") == "OBSERVED"
+                )
+                if spaces is not None
+                else None
+            ),
+            "operational_source_bound_spaces": (
+                sum(
+                    1
+                    for space in spaces or []
+                    if space.get("operational_state") == "OPERATIONAL_SOURCE_BOUND"
+                )
+                if spaces is not None
+                else None
+            ),
+            "reachable_unverified_spaces": (
+                sum(
+                    1
+                    for space in spaces or []
+                    if space.get("operational_state") == "REACHABLE_UNVERIFIED"
+                )
+                if spaces is not None
+                else None
+            ),
+            "complete_space_cards": (
+                sum(1 for space in spaces or [] if space.get("card_state") == "COMPLETE")
+                if spaces is not None
+                else None
+            ),
+            "kernels_with_observed_metadata": (
+                sum(
+                    1
+                    for kernel in kernels or []
+                    if kernel.get("metadata_state") == "OBSERVED"
+                )
+                if kernels is not None
+                else None
+            ),
+            "kernels_with_complete_contracts": (
+                sum(
+                    1
+                    for kernel in kernels or []
+                    if kernel.get("contract_state") == "COMPLETE"
+                )
+                if kernels is not None
+                else None
+            ),
+            "documented_buckets": (
+                sum(
+                    1
+                    for bucket in buckets or []
+                    if bucket.get("documentation_state") == "COMPLETE"
+                )
+                if buckets is not None
                 else None
             ),
             "models_with_observed_weights": (

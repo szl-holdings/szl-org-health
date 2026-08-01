@@ -3,17 +3,17 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>SZL Estate Census · live</title>
+<title>SZL Estate Operations</title>
 <style>
   :root{
-    --bg:#151412;--surface:#1c1b18;--surface2:#23211e;--border:#3b3935;
-    --text:#efede8;--muted:#aaa69f;--faint:#706c65;--green:#7ab85b;
-    --amber:#e3b34e;--red:#df6d78;--gray:#716e68;--teal:#62a4ad;
+    --bg:#0b1015;--surface:#111820;--surface2:#17212b;--border:#293642;
+    --text:#f3f6f8;--muted:#a6b0ba;--faint:#6f7b86;--green:#75d69a;
+    --amber:#f0bd63;--red:#f17682;--gray:#75808a;--teal:#66d1d8;
     --blue:#7f9ec9;--mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.5;
+  body{background:radial-gradient(circle at 75% -20%,rgba(102,209,216,.12),transparent 34%),var(--bg);color:var(--text);font-family:var(--sans);line-height:1.5;
     -webkit-font-smoothing:antialiased;padding:32px 20px 64px}
   .wrap{max-width:1280px;margin:0 auto}
   header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;
@@ -29,11 +29,11 @@
   button{cursor:pointer}button:hover,button:focus-visible,.filter:focus{border-color:var(--teal);outline:none}
   .filter{min-width:220px}
   .summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:18px 0}
-  .metric{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:15px}
+  .metric{background:linear-gradient(145deg,rgba(255,255,255,.018),transparent),var(--surface);border:1px solid var(--border);border-radius:12px;padding:15px;box-shadow:0 12px 32px rgba(0,0,0,.13)}
   .metric .label{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
   .metric .value{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:3px}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:16px}
-  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px;min-width:0}
+  .card{background:linear-gradient(145deg,rgba(255,255,255,.014),transparent),var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px;min-width:0;box-shadow:0 16px 40px rgba(0,0,0,.1)}
   .card.wide{grid-column:1/-1}
   .card h2{font-size:12px;font-weight:650;text-transform:uppercase;letter-spacing:.075em;
     color:var(--muted);margin-bottom:13px;display:flex;align-items:center;gap:8px}
@@ -54,10 +54,12 @@
   .dot.ok{background:var(--green)}.dot.warn{background:var(--amber)}
   .dot.bad{background:var(--red)}.dot.unk{background:var(--gray)}
   .note{color:var(--faint);font-size:11.5px;margin-top:10px;line-height:1.45}
+  .truthbar{display:flex;align-items:flex-start;gap:10px;background:rgba(102,209,216,.07);border:1px solid rgba(102,209,216,.24);border-radius:10px;padding:11px 13px;color:var(--muted);font-size:12px;margin:14px 0 18px}
+  .truthbar strong{color:var(--text)}
   .err{color:var(--red);font-size:13px}.loading{color:var(--muted);padding:40px 0}
-  details{border-top:1px solid var(--surface2)}details:first-of-type{border-top:none}
-  summary{cursor:pointer;list-style:none;padding:9px 0;display:flex;justify-content:space-between;gap:12px}
-  summary::-webkit-details-marker{display:none}summary::after{content:'+';color:var(--muted)}details[open] summary::after{content:'−'}
+  details.asset-group{border:0}details.asset-group>summary{cursor:pointer;list-style:none;padding:0;display:flex;align-items:center;justify-content:space-between;gap:12px}
+  details.asset-group>summary::-webkit-details-marker{display:none}details.asset-group>summary::after{content:'+';color:var(--teal);font-size:19px;line-height:1}details.asset-group[open]>summary::after{content:'\2212'}
+  details.asset-group>summary h2{margin:0}details.asset-group[open]>summary{margin-bottom:13px}
   a{color:inherit;text-decoration:none}a:hover{text-decoration:underline;text-decoration-color:var(--teal)}
   .foot{margin-top:28px;color:var(--faint);font-size:11.5px;font-family:var(--mono)}
   .hidden{display:none!important}
@@ -73,17 +75,18 @@
 <div class="wrap">
   <header>
     <div>
-      <h1>SZL Estate Census<span class="live" id="modebadge">● loading</span></h1>
-      <div class="meta" id="ts">—</div>
+      <h1>SZL Estate Operations<span class="live" id="modebadge">loading</span></h1>
+      <div class="meta" id="ts">not yet measured</div>
     </div>
     <div class="toolbar">
       <input class="filter" id="filter" type="search" aria-label="Filter estate assets" placeholder="Filter repos, models, datasets…" />
       <button id="refresh" type="button">Refresh</button>
     </div>
   </header>
-  <p class="subtitle">Live, revision-aware inventory across GitHub, Hugging Face, sites, and DNS. A failed or unauthorized source remains <strong>UNKNOWN</strong>; it is never converted into zero, healthy, or operational.</p>
+  <p class="subtitle">A revision-aware operating view of GitHub, Hugging Face, production sites, and DNS. Every green state is tied to an observed contract; visibility or a running process alone is not proof of operation.</p>
+  <div class="truthbar"><span class="dot ok"></span><div><strong>Evidence-first status.</strong> UNKNOWN means the source could not be verified. REACHABLE UNVERIFIED means a surface answered but did not expose both a health contract and an immutable source revision.</div></div>
   <div id="content"><div class="loading">Collecting bounded live evidence from the estate…</div></div>
-  <div class="foot">szl-org-health schema v2 · source APIs queried directly · 60-second cache · <a href="/api/health">raw JSON</a></div>
+  <div class="foot">szl-org-health schema v2 | source APIs queried directly | 60-second cache | <a href="/api/health">raw JSON evidence</a></div>
 </div>
 <script>
 const content=document.getElementById('content');
@@ -93,9 +96,10 @@ let lastData=null;
 const esc=v=>String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const chip=(label,cls='unk')=>`<span class="chip ${cls}">${esc(label)}</span>`;
 const dot=cls=>`<span class="dot ${cls}"></span>`;
-const known=n=>n==null?'—':n;
+const known=n=>n==null?'UNKNOWN':n;
 function ciClass(value){if(value==='success'||value==='archived')return'ok';if(value==='failure')return'bad';if(value==='pending')return'warn';return'unk'}
 function stageClass(value){if(value==='RUNNING')return'ok';if(value==='unknown'||value==null)return'unk';return'warn'}
+function operationalClass(value){if(value==='OPERATIONAL_SOURCE_BOUND'||value==='STATIC_REACHABLE')return'ok';if(value==='RUNTIME_HEALTHY_UNBOUND'||value==='REACHABLE_UNVERIFIED')return'warn';if(value==='DEGRADED')return'bad';return'unk'}
 function sourceData(S,key){return S[key]&&S[key].ok?S[key].data:null}
 function hardwareLabel(hardware){
   if(hardware==null)return'';
@@ -104,21 +108,30 @@ function hardwareLabel(hardware){
   if(current&&requested&&current!==requested)return`${current} (requested ${requested})`;
   return current||requested||'hardware unknown';
 }
+function spaceChips(space){
+  let result=chip(space.operational_state||'UNKNOWN',operationalClass(space.operational_state));
+  if(space.sdk==='static')result+=chip('static surface','info');
+  else{
+    result+=chip(space.healthz===200?'healthz 200':`healthz ${known(space.healthz)}`,space.healthz===200?'ok':'warn');
+    result+=chip(space.source_binding_state==='OBSERVED'?`source ${String(space.source_revision||'').slice(0,10)}`:'source unbound',space.source_binding_state==='OBSERVED'?'ok':'warn');
+  }
+  return result+chip(space.card_state||'card unknown',space.card_state==='COMPLETE'?'ok':'warn');
+}
 function metric(label,value,cls=''){return `<div class="metric ${cls}"><div class="label">${esc(label)}</div><div class="value">${esc(known(value))}</div></div>`}
 function itemRow(name,secondary,chips,href=''){
   const label=href?`<a href="${esc(href)}" target="_blank" rel="noopener">${esc(name)}</a>`:esc(name);
   return `<div class="row asset-row" data-search="${esc((name+' '+(secondary||'')).toLowerCase())}"><div><div class="name">${label}</div>${secondary?`<div class="secondary">${esc(secondary)}</div>`:''}</div><div class="chips">${chips}</div></div>`;
 }
 function assetSection(title,asset,renderer){
-  const ok=asset&&asset.ok;let html=`<div class="card wide"><h2>${dot(ok?'ok':'unk')}${esc(title)} · ${esc(known(asset&&asset.count))}</h2>`;
-  if(!asset){return html+'<div class="err">not present in this snapshot</div></div>'}
-  if(!ok){return html+`<div class="err">UNKNOWN — ${esc(asset.error||'source unavailable')}</div></div>`}
+  const ok=asset&&asset.ok;let html=`<div class="card wide"><details class="asset-group"><summary><h2>${dot(ok?'ok':'unk')}${esc(title)} · ${esc(known(asset&&asset.count))}</h2></summary>`;
+  if(!asset){return html+'<div class="err">not present in this snapshot</div></details></div>'}
+  if(!ok){return html+`<div class="err">UNKNOWN — ${esc(asset.error||'source unavailable')}</div></details></div>`}
   const items=asset.items||[];
-  if(!items.length){return html+'<div class="note">Measured zero assets in this class.</div></div>'}
-  html+=items.map(renderer).join('')+'</div>';return html;
+  if(!items.length){return html+'<div class="note">Measured zero assets in this class.</div></details></div>'}
+  html+=items.map(renderer).join('')+'</details></div>';return html;
 }
 function render(data){
-  lastData=data;tsEl.textContent=`as of ${data.generated_at||'—'} · schema ${data.schema_version||1}`;
+  lastData=data;tsEl.textContent=`measured ${data.generated_at||'UNKNOWN'} | schema ${data.schema_version||1}`;
   const S=data.sources||{};const gh=sourceData(S,'github');const hf=sourceData(S,'huggingface');
   const legacySpaces=sourceData(S,'spaces');
   let html='<div class="summary">';
@@ -127,7 +140,9 @@ function render(data){
   html+=metric('HF models',hf&&hf.summary?hf.summary.models:null);
   html+=metric('HF datasets',hf&&hf.summary?hf.summary.datasets:null);
   html+=metric('HF Spaces',hf&&hf.summary?hf.summary.spaces:(legacySpaces?Object.keys(legacySpaces).length:null));
+  html+=metric('HF Kernels',hf&&hf.summary?hf.summary.kernels:null);
   html+=metric('HF collections',hf&&hf.summary?hf.summary.collections:null);
+  html+=metric('HF buckets',hf&&hf.summary?hf.summary.buckets:null);
   html+='</div><div class="grid">';
 
   html+=`<div class="card"><h2>${dot(gh?'ok':'unk')}GitHub control plane</h2>`;
@@ -143,10 +158,15 @@ function render(data){
   html+=`<div class="card"><h2>${dot(hf?'ok':'unk')}Hugging Face estate</h2>`;
   if(hf){
     const s=hf.summary||{};
-    html+=itemRow('Spaces runtime',`${known(s.running_spaces)} RUNNING · ${known(s.reachable_spaces)} reachable`,chip(`${known(s.running_spaces)}/${known(s.spaces)}`,s.running_spaces===s.spaces?'ok':'warn'));
+    html+=itemRow('Operational Spaces',`${known(s.operational_source_bound_spaces)} source-bound | ${known(s.healthz_spaces)} health endpoints | ${known(s.reachable_unverified_spaces)} reachable unverified`,chip(`${known(s.operational_source_bound_spaces)}/${known(s.dynamic_spaces)} dynamic`,s.operational_source_bound_spaces===s.dynamic_spaces?'ok':'warn'));
+    html+=itemRow('Kernel contracts',`${known(s.kernels_with_complete_contracts)} complete | ${known(s.kernels_with_observed_metadata)} metadata records observed`,chip(`${known(s.kernels_with_complete_contracts)}/${known(s.kernels)}`,s.kernels_with_complete_contracts===s.kernels?'ok':'warn'));
+    html+=itemRow('Bucket governance',`${known(s.documented_buckets)} documented buckets`,chip(`${known(s.documented_buckets)}/${known(s.buckets)}`,s.documented_buckets===s.buckets?'ok':'warn'));
     html+=itemRow('Model contracts',`${known(s.models_with_classified_contracts)} classified · ${known(s.models_with_satisfied_artifact_expectations)} artifact expectations satisfied`,chip(`${known(s.models_with_satisfied_artifact_expectations)}/${known(s.models)}`,s.models_with_satisfied_artifact_expectations===s.models?'ok':'warn'));
     html+=itemRow('Model artifacts',`${known(s.models_with_observed_weights)} weight-bearing · ${known(s.models_with_observed_estimators)} serialized estimators`,chip(`${known(s.models_with_observed_artifacts)} artifact-bearing`,'info'));
     html+=itemRow('Payload manifests',`${known(s.models_with_verified_payload_manifests)} verified · ${known(s.models_with_incomplete_payload_manifests)} incomplete`,chip(s.models_with_incomplete_payload_manifests?`${s.models_with_incomplete_payload_manifests} incomplete`:'verified',s.models_with_incomplete_payload_manifests?'bad':'ok'));
+    const coverage=hf.collection_coverage||{};
+    const coverageGap=Object.values(coverage).some(v=>(v.missing||[]).length);
+    html+=itemRow('Collection coverage',['models','datasets','spaces'].map(k=>`${known(coverage[k]&&coverage[k].covered)}/${known(coverage[k]&&coverage[k].public_total)} ${k}`).join(' | '),chip(coverageGap?'gaps':'complete',coverageGap?'warn':'ok'));
     const unknown=Object.entries((hf.assets||{})).filter(([,v])=>!v.ok).map(([k])=>k);
     html+=itemRow('Asset-class coverage',unknown.length?`UNKNOWN: ${unknown.join(', ')}`:'all listed classes readable',chip(unknown.length?'partial':'complete',unknown.length?'warn':'ok'));
   }else if(legacySpaces){html+=itemRow('Legacy snapshot','Space-only schema',chip('partial','warn'))}
@@ -155,18 +175,19 @@ function render(data){
 
   if(gh){
     const repos=gh.repos||{};
-    html+='<div class="card wide"><h2>'+dot('ok')+`GitHub repositories · ${Object.keys(repos).length}</h2>`;
+    html+='<div class="card wide"><details class="asset-group"><summary><h2>'+dot('ok')+`GitHub repositories · ${Object.keys(repos).length}</h2></summary>`;
     Object.keys(repos).sort().forEach(name=>{const r=repos[name];const details=[r.classification,r.visibility,r.default_branch].filter(Boolean).join(' · ');let chips=chip(r.ci,ciClass(r.ci))+chip(r.protected===true?'protected':r.protected===false?'unprotected':'protection unknown',r.protected===true?'ok':r.protected===false?'bad':'unk');if(r.archived)chips+=chip('archived','info');html+=itemRow(name,details,chips,r.url)});
-    html+='</div>';
+    html+='</details></div>';
   }
 
   if(hf){
     const A=hf.assets||{};
-    html+=assetSection('Hugging Face Spaces',A.spaces,space=>itemRow(space.id,[space.sdk,hardwareLabel(space.hardware),space.sha&&space.sha.slice(0,10)].filter(Boolean).join(' · '),chip(space.stage,stageClass(space.stage))+chip(space.http||'unreachable',space.http>=200&&space.http<400?'ok':'bad')+(space.healthz_contract?chip(space.healthz===200?'healthz 200':`healthz ${known(space.healthz)}`,space.healthz===200?'ok':'bad'):''),space.url));
-    html+=assetSection('Models',A.models,model=>itemRow(model.id,[model.contract,model.pipeline_tag,model.sha&&model.sha.slice(0,10)].filter(Boolean).join(' · '),chip(model.artifact_state,['artifact-present','not-required-by-contract','payload-manifest-verified'].includes(model.artifact_state)?'ok':model.artifact_state==='unknown'?'unk':'bad')+(model.payload_manifest_state?chip(`${known(model.payload_manifest_verified_files)}/${known(model.payload_manifest_declared_files)} manifest files`,model.payload_manifest_state==='verified'?'ok':model.payload_manifest_state==='unknown'?'unk':'bad'):'')+chip(`${known(model.downloads_30d)} / 30d`,'info'),model.url));
-    html+=assetSection('Datasets',A.datasets,dataset=>itemRow(dataset.id,[dataset.sha&&dataset.sha.slice(0,10),dataset.last_modified].filter(Boolean).join(' · '),chip(`${known(dataset.file_count_observed)} files`,dataset.file_count_observed==null?'unk':dataset.file_count_observed>0?'ok':'warn')+chip(`${known(dataset.downloads_30d)} / 30d`,'info'),dataset.url));
+    html+=assetSection('Hugging Face Spaces',A.spaces,space=>itemRow(space.id,[space.sdk,hardwareLabel(space.hardware),space.sha&&space.sha.slice(0,10)].filter(Boolean).join(' | '),spaceChips(space),space.url));
+    html+=assetSection('Models',A.models,model=>itemRow(model.id,[model.contract,model.pipeline_tag,model.sha&&model.sha.slice(0,10)].filter(Boolean).join(' | '),chip(model.artifact_state,['artifact-present','not-required-by-contract','payload-manifest-verified'].includes(model.artifact_state)?'ok':model.artifact_state==='unknown'?'unk':'bad')+(model.payload_manifest_state?chip(`${known(model.payload_manifest_verified_files)}/${known(model.payload_manifest_declared_files)} manifest files`,model.payload_manifest_state==='verified'?'ok':model.payload_manifest_state==='unknown'?'unk':'bad'):'')+chip(model.card_state||'card unknown',model.card_state==='COMPLETE'?'ok':'warn')+chip(`${known(model.downloads_30d)} / 30d`,'info'),model.url));
+    html+=assetSection('Datasets',A.datasets,dataset=>itemRow(dataset.id,[dataset.sha&&dataset.sha.slice(0,10),dataset.last_modified].filter(Boolean).join(' | '),chip(`${known(dataset.file_count_observed)} files`,dataset.file_count_observed==null?'unk':dataset.file_count_observed>0?'ok':'warn')+chip(dataset.card_state||'card unknown',dataset.card_state==='COMPLETE'?'ok':'warn')+chip(`${known(dataset.downloads_30d)} / 30d`,'info'),dataset.url));
+    html+=assetSection('Hugging Face Kernels',A.kernels,kernel=>itemRow(kernel.id,[kernel.sha&&kernel.sha.slice(0,10),kernel.last_modified].filter(Boolean).join(' | '),chip(kernel.contract_state||'UNKNOWN',kernel.contract_state==='COMPLETE'?'ok':kernel.contract_state==='INCOMPLETE'?'warn':'unk')+chip(kernel.build_variants_present?'build observed':'build unknown',kernel.build_variants_present?'ok':'warn')+chip('selfcheck not executed','unk'),kernel.url));
     html+=assetSection('Collections',A.collections,col=>itemRow(col.title||col.slug,[col.slug,col.last_updated].filter(Boolean).join(' · '),chip(col.complete?'full':'partial',col.complete?'ok':'warn')+chip(`${Object.values(col.item_counts||{}).reduce((a,b)=>a+b,0)} items`,'info'),col.url));
-    html+=assetSection('Buckets',A.buckets,b=>itemRow(b.id,[b.created_at,b.discovered_via].filter(Boolean).join(' · '),chip(b.total_files==null?'files unknown':`${b.total_files} files`,b.total_files==null?'unk':'ok')+chip(b.size_bytes==null?'size unknown':`${b.size_bytes} B`,'info')));
+    html+=assetSection('Buckets',A.buckets,b=>itemRow(b.id,[b.created_at,b.private?'private':'public'].filter(Boolean).join(' | '),chip(b.documentation_state||'UNKNOWN',b.documentation_state==='COMPLETE'?'ok':'warn')+chip(b.total_files==null?'files unknown':`${b.total_files} files`,b.total_files==null?'unk':'ok')+chip(b.size_bytes==null?'size unknown':`${b.size_bytes} B`,'info'),b.url));
   }else if(legacySpaces){
     html+='<div class="card wide"><h2>'+dot('warn')+'Legacy Space snapshot</h2>';
     Object.keys(legacySpaces).sort().forEach(name=>{const s=legacySpaces[name];html+=itemRow(name,'legacy schema',chip(s.stage,stageClass(s.stage))+(s.monitored?chip(s.healthz===200?'healthz 200':`healthz ${known(s.healthz)}`,s.healthz===200?'ok':'bad'):''))});html+='</div>';
@@ -178,8 +199,8 @@ function render(data){
   if(dns)Object.keys(dns).forEach(name=>{const v=dns[name];const spf=v.spf===null?chip('SPF unknown','unk'):chip(v.spf?'SPF':'no SPF',v.spf?'ok':'bad');const dm=(v.dmarc===null || v.dmarc_reject===null)?chip('DMARC unknown','unk'):v.dmarc_reject?chip('DMARC reject','ok'):v.dmarc?chip('DMARC weak','warn'):chip('no DMARC','bad');html+=itemRow(name,'authoritative DNS reading',spf+dm)});else html+='<div class="err">source unavailable</div>';html+='</div>';
   html+='</div>';content.innerHTML=html;applyFilter();
 }
-function applyFilter(){const q=filterEl.value.trim().toLowerCase();document.querySelectorAll('.asset-row').forEach(row=>row.classList.toggle('hidden',!!q&&!row.dataset.search.includes(q)))}
-async function load(){content.innerHTML='<div class="loading">Loading estate census…</div>';try{const r=await fetch('/api/health?t='+Date.now());if(!r.ok)throw new Error('HTTP '+r.status);render(await r.json());const b=document.getElementById('modebadge');b.textContent='● live';b.style.color='var(--teal)';return}catch(_e){}try{const r=await fetch('./data.json?t='+Date.now());if(!r.ok)throw new Error('HTTP '+r.status);render(await r.json());const b=document.getElementById('modebadge');b.textContent='● snapshot';b.style.color='var(--muted)'}catch(e){content.innerHTML='<div class="err">Failed to load census: '+esc(e.message)+'</div>'}}
+function applyFilter(){const q=filterEl.value.trim().toLowerCase();document.querySelectorAll('.asset-row').forEach(row=>row.classList.toggle('hidden',!!q&&!row.dataset.search.includes(q)));document.querySelectorAll('details.asset-group').forEach(group=>{if(q&&group.querySelector('.asset-row:not(.hidden)'))group.open=true;else if(!q)group.open=false})}
+async function load(){content.innerHTML='<div class="loading">Loading estate evidence...</div>';try{const r=await fetch('/api/health?t='+Date.now());if(!r.ok)throw new Error('HTTP '+r.status);render(await r.json());const b=document.getElementById('modebadge');b.textContent='LIVE';b.style.color='var(--teal)';return}catch(_e){}try{const r=await fetch('./data.json?t='+Date.now());if(!r.ok)throw new Error('HTTP '+r.status);render(await r.json());const b=document.getElementById('modebadge');b.textContent='SNAPSHOT';b.style.color='var(--muted)'}catch(e){content.innerHTML='<div class="err">Failed to load census: '+esc(e.message)+'</div>'}}
 filterEl.addEventListener('input',applyFilter);document.getElementById('refresh').onclick=load;load();
 </script>
 </body>

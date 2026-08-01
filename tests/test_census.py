@@ -7,11 +7,14 @@ from unittest import mock
 from census.common import next_link
 from census.github import aggregate_workflow_runs, classify_repo
 from census.huggingface import (
+    _full_bucket,
+    _full_kernel,
     _paths,
     _payload_file_path,
     classify_model_contract,
     collect_huggingface,
     normalize_hf_repo,
+    normalize_space,
     space_runtime_url,
     verify_operational_payload,
 )
@@ -77,6 +80,13 @@ class HuggingFaceNormalizationTests(unittest.TestCase):
         self.assertEqual(params["sort"], ["lastModified"])
         self.assertEqual(params["limit"], ["100"])
 
+    def test_kernel_inventory_uses_first_class_hub_endpoint(self):
+        query = urllib.parse.urlparse(_paths()["kernels"])
+        params = urllib.parse.parse_qs(query.query)
+        self.assertEqual(query.path, "/api/kernels")
+        self.assertEqual(params["author"], ["SZLHOLDINGS"])
+        self.assertEqual(params["limit"], ["500"])
+
     def test_static_space_uses_static_runtime_domain(self):
         item = {
             "id": "SZLHOLDINGS/anatomy",
@@ -87,6 +97,102 @@ class HuggingFaceNormalizationTests(unittest.TestCase):
             space_runtime_url(item),
             "https://szlholdings-anatomy.static.hf.space/",
         )
+
+    @mock.patch("census.huggingface.request_json")
+    @mock.patch("census.huggingface.http_probe")
+    def test_space_is_operational_only_with_health_and_source_binding(
+        self, probe, request_json
+    ):
+        probe.side_effect = [
+            {"http": 200, "headers": {}},
+            {"http": 200, "headers": {}},
+        ]
+        request_json.return_value = (
+            {"build": {"revision": "a" * 40}},
+            {},
+            None,
+        )
+        result = normalize_space(
+            {
+                "id": "SZLHOLDINGS/example",
+                "sdk": "docker",
+                "subdomain": "szlholdings-example",
+                "runtime": {"stage": "RUNNING"},
+                "siblings": [{"rfilename": "README.md"}],
+                "cardData": {"license": "apache-2.0"},
+            }
+        )
+        self.assertEqual(result["healthz"], 200)
+        self.assertEqual(result["source_revision"], "a" * 40)
+        self.assertEqual(result["source_binding_state"], "OBSERVED")
+        self.assertEqual(result["operational_state"], "OPERATIONAL_SOURCE_BOUND")
+
+    @mock.patch("census.huggingface.request_json")
+    @mock.patch("census.huggingface.http_probe")
+    def test_reachable_space_without_contract_stays_unverified(
+        self, probe, request_json
+    ):
+        probe.side_effect = [
+            {"http": 200, "headers": {}},
+            {"http": 404, "headers": {}},
+        ]
+        request_json.return_value = (None, {}, "http404")
+        result = normalize_space(
+            {
+                "id": "SZLHOLDINGS/example",
+                "sdk": "docker",
+                "subdomain": "szlholdings-example",
+                "runtime": {"stage": "RUNNING"},
+            }
+        )
+        self.assertEqual(result["operational_state"], "REACHABLE_UNVERIFIED")
+        self.assertEqual(result["source_binding_state"], "UNAVAILABLE")
+
+    @mock.patch("census.huggingface.request_json")
+    def test_first_class_kernel_contract_requires_card_contract_and_build(self, request_json):
+        request_json.side_effect = [
+            (
+                {
+                    "id": "SZLHOLDINGS/example",
+                    "sha": "b" * 40,
+                    "lastModified": "2026-08-01T00:00:00Z",
+                },
+                {},
+                None,
+            ),
+            (
+                [
+                    {"type": "file", "path": "README.md"},
+                    {"type": "file", "path": "contract.json"},
+                    {"type": "file", "path": "build/torch-cpu/module.py"},
+                ],
+                {},
+                None,
+            ),
+        ]
+        result = _full_kernel({"id": "SZLHOLDINGS/example"})
+        self.assertEqual(result["metadata_state"], "OBSERVED")
+        self.assertEqual(result["tree_state"], "OBSERVED")
+        self.assertEqual(result["contract_state"], "COMPLETE")
+        self.assertEqual(result["selfcheck_state"], "NOT_EXECUTED_BY_CENSUS")
+
+    @mock.patch("census.huggingface.request_json")
+    def test_bucket_documentation_is_observed_from_live_tree(self, request_json):
+        request_json.return_value = (
+            [{"type": "file", "path": "README.md"}],
+            {},
+            None,
+        )
+        result = _full_bucket(
+            {
+                "id": "SZLHOLDINGS/example",
+                "private": True,
+                "totalFiles": 1,
+            }
+        )
+        self.assertEqual(result["tree_state"], "OBSERVED")
+        self.assertTrue(result["readme_present"])
+        self.assertEqual(result["documentation_state"], "COMPLETE")
 
     def test_model_artifact_and_weight_states_are_distinct(self):
         item = {
@@ -273,6 +379,8 @@ class HuggingFaceNormalizationTests(unittest.TestCase):
                 return [], None
             if path.startswith("/api/spaces"):
                 return [], None
+            if path.startswith("/api/kernels"):
+                return None, "http502"
             if path.startswith("/api/collections"):
                 return [], None
             if path.startswith("/api/buckets"):
@@ -288,6 +396,8 @@ class HuggingFaceNormalizationTests(unittest.TestCase):
         self.assertFalse(census["assets"]["buckets"]["ok"])
         self.assertIsNone(census["assets"]["buckets"]["count"])
         self.assertEqual(census["assets"]["datasets"]["count"], 0)
+        self.assertFalse(census["assets"]["kernels"]["ok"])
+        self.assertIsNone(census["assets"]["kernels"]["count"])
 
 
 class PaginationTests(unittest.TestCase):

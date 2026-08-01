@@ -6,8 +6,6 @@ import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import dns
-
 from census import SCHEMA_VERSION, build_report
 from census.common import resolve_txt as _resolve_txt
 from census.sites import DOMAINS
