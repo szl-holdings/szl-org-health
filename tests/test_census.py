@@ -6,6 +6,7 @@ from census.common import next_link
 from census.github import aggregate_workflow_runs, classify_repo
 from census.huggingface import (
     _paths,
+    classify_model_contract,
     collect_huggingface,
     normalize_hf_repo,
     space_runtime_url,
@@ -83,7 +84,7 @@ class HuggingFaceNormalizationTests(unittest.TestCase):
             "https://szlholdings-anatomy.static.hf.space/",
         )
 
-    def test_model_weight_state_requires_observed_weight_file(self):
+    def test_model_artifact_and_weight_states_are_distinct(self):
         item = {
             "id": "SZLHOLDINGS/example",
             "siblings": [
@@ -92,8 +93,66 @@ class HuggingFaceNormalizationTests(unittest.TestCase):
             ],
         }
         result = normalize_hf_repo(item, "model")
-        self.assertEqual(result["artifact_state"], "weights-present")
+        self.assertEqual(result["artifact_state"], "artifact-present")
+        self.assertEqual(result["weight_state"], "weights-present")
         self.assertEqual(result["weight_files_observed"], ["model.safetensors"])
+        self.assertEqual(result["contract"], "model-artifact")
+
+    def test_serialized_estimator_is_counted_as_model_artifact(self):
+        result = normalize_hf_repo(
+            {
+                "id": "SZLHOLDINGS/example",
+                "siblings": [
+                    {"rfilename": "build.toml"},
+                    {"rfilename": "build/torch-universal/example/__init__.py"},
+                    {"rfilename": "model.joblib"},
+                ],
+            },
+            "model",
+        )
+        self.assertEqual(result["contract"], "kernel-with-estimator")
+        self.assertEqual(result["artifact_state"], "artifact-present")
+        self.assertEqual(result["weight_state"], "no-weight-file-observed")
+        self.assertEqual(result["estimator_files_observed"], ["model.joblib"])
+
+    def test_kernel_without_weights_satisfies_declared_contract(self):
+        result = normalize_hf_repo(
+            {
+                "id": "SZLHOLDINGS/example",
+                "siblings": [
+                    {"rfilename": "build.toml"},
+                    {"rfilename": "build/torch-universal/example/__init__.py"},
+                ],
+            },
+            "model",
+        )
+        self.assertEqual(result["contract"], "huggingface-kernel")
+        self.assertEqual(result["artifact_state"], "not-required-by-contract")
+
+    def test_model_contract_precedence(self):
+        cases = {
+            "operational-payload": [
+                "a11oy-metadata.json",
+                "payloads/deploy/MANIFEST.json",
+            ],
+            "gguf": ["model-q4_k_m.gguf"],
+            "recipe-with-estimator": ["BASE_MODEL_MANIFEST.json", "model.joblib"],
+            "kernel-with-torch-surrogate": [
+                "build.toml",
+                "build/torch-universal/example/__init__.py",
+                "model.safetensors",
+            ],
+            "kernel-with-embedding-index": [
+                "build.toml",
+                "build/torch-universal/example/__init__.py",
+                "vectors.npz",
+            ],
+            "transformers-checkpoint": ["config.json", "model.safetensors"],
+            "peft-adapter": ["adapter_config.json", "adapter_model.safetensors"],
+        }
+        for expected, paths in cases.items():
+            with self.subTest(expected=expected):
+                self.assertEqual(classify_model_contract(paths), expected)
 
     @mock.patch("census.huggingface.http_probe", return_value={"http": 200, "headers": {}})
     @mock.patch("census.huggingface.request_json")

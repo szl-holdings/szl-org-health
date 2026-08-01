@@ -19,6 +19,9 @@ WEIGHT_SUFFIXES = (
     ".onnx",
     ".ckpt",
 )
+ESTIMATOR_SUFFIXES = (".joblib", ".pkl", ".pickle")
+EMBEDDING_ARTIFACTS = {"vectors.npz"}
+NO_MODEL_ARTIFACT_CONTRACTS = {"huggingface-kernel", "operational-payload"}
 
 
 def hf_headers() -> dict[str, str]:
@@ -54,6 +57,53 @@ def siblings(item: dict[str, Any]) -> list[str]:
     return out
 
 
+def classify_model_contract(paths: list[str]) -> str:
+    """Classify the repository's declared artifact shape from observed paths."""
+    names = {path.lower() for path in paths}
+    basenames = {path.rsplit("/", 1)[-1] for path in names}
+    has_kernel = "build.toml" in names and any(
+        path.startswith("build/torch-universal/") for path in names
+    )
+    has_estimator = any(name.endswith(ESTIMATOR_SUFFIXES) for name in names)
+    has_embedding = bool(basenames & EMBEDDING_ARTIFACTS)
+    has_gguf = any(name.endswith(".gguf") for name in names)
+    has_safetensors = any(name.endswith(".safetensors") for name in names)
+    has_top_level_model = "model.safetensors" in names
+    has_adapter = (
+        "adapter_config.json" in names
+        or "adapter_model.safetensors" in names
+        or any(name.endswith("/adapter_model.safetensors") for name in names)
+    )
+    has_operational_payload = (
+        "a11oy-metadata.json" in names
+        or "payloads/deploy/manifest.json" in names
+    )
+
+    if has_operational_payload:
+        return "operational-payload"
+    if has_gguf:
+        return "gguf"
+    if "base_model_manifest.json" in names and has_estimator:
+        return "recipe-with-estimator"
+    if has_kernel and has_safetensors:
+        return "kernel-with-torch-surrogate"
+    if has_kernel and has_estimator:
+        return "kernel-with-estimator"
+    if has_kernel and has_embedding:
+        return "kernel-with-embedding-index"
+    if has_kernel:
+        return "huggingface-kernel"
+    if has_top_level_model and "config.json" in names:
+        return "transformers-checkpoint"
+    if has_adapter:
+        return "peft-adapter"
+    if has_estimator:
+        return "serialized-estimator"
+    if any(name.endswith(WEIGHT_SUFFIXES) for name in names):
+        return "model-artifact"
+    return "unclassified"
+
+
 def normalize_hf_repo(item: dict[str, Any], kind: str) -> dict[str, Any]:
     repo_id = str(
         item.get("id")
@@ -78,14 +128,37 @@ def normalize_hf_repo(item: dict[str, Any], kind: str) -> dict[str, Any]:
         weight_files = sorted(
             name for name in repo_siblings if name.lower().endswith(WEIGHT_SUFFIXES)
         )
+        estimator_files = sorted(
+            name for name in repo_siblings if name.lower().endswith(ESTIMATOR_SUFFIXES)
+        )
+        embedding_files = sorted(
+            name
+            for name in repo_siblings
+            if name.lower().rsplit("/", 1)[-1] in EMBEDDING_ARTIFACTS
+        )
+        artifact_files = sorted(weight_files + estimator_files + embedding_files)
+        contract = classify_model_contract(repo_siblings)
         normalized.update(
             {
                 "pipeline_tag": item.get("pipeline_tag"),
+                "contract": contract,
                 "weight_files_observed": weight_files,
-                "artifact_state": (
+                "estimator_files_observed": estimator_files,
+                "embedding_files_observed": embedding_files,
+                "model_artifact_files_observed": artifact_files,
+                "weight_state": (
                     "weights-present"
                     if weight_files
                     else "no-weight-file-observed"
+                    if item.get("siblings") is not None
+                    else "unknown"
+                ),
+                "artifact_state": (
+                    "artifact-present"
+                    if artifact_files
+                    else "not-required-by-contract"
+                    if contract in NO_MODEL_ARTIFACT_CONTRACTS
+                    else "no-model-artifact-observed"
                     if item.get("siblings") is not None
                     else "unknown"
                 ),
@@ -356,7 +429,40 @@ def collect_huggingface() -> dict[str, Any]:
                 sum(
                     1
                     for model in models or []
-                    if model.get("artifact_state") == "weights-present"
+                    if model.get("weight_state") == "weights-present"
+                )
+                if models is not None
+                else None
+            ),
+            "models_with_observed_estimators": (
+                sum(1 for model in models or [] if model.get("estimator_files_observed"))
+                if models is not None
+                else None
+            ),
+            "models_with_observed_artifacts": (
+                sum(
+                    1
+                    for model in models or []
+                    if model.get("artifact_state") == "artifact-present"
+                )
+                if models is not None
+                else None
+            ),
+            "models_with_classified_contracts": (
+                sum(
+                    1
+                    for model in models or []
+                    if model.get("contract") != "unclassified"
+                )
+                if models is not None
+                else None
+            ),
+            "models_with_satisfied_artifact_expectations": (
+                sum(
+                    1
+                    for model in models or []
+                    if model.get("artifact_state")
+                    in {"artifact-present", "not-required-by-contract"}
                 )
                 if models is not None
                 else None
