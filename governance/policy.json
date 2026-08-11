@@ -1,0 +1,103 @@
+{
+  "schema": "szl.estate-governance-policy/v1",
+  "version": "2026-08-11",
+  "status": "TARGET",
+  "organization": {
+    "github": "szl-holdings",
+    "huggingface": "SZLHOLDINGS"
+  },
+  "operating_model": {
+    "type": "solo-maintainer",
+    "dco_required": false,
+    "independent_human_review_required": false,
+    "independent_review_claim_allowed_without_external_actor": false,
+    "required_change_controls": [
+      "verified-signed-commits",
+      "protected-exact-head-ci",
+      "least-privilege-workflows",
+      "immutable-provenance",
+      "auditable-merge-receipts"
+    ]
+  },
+  "truth_states": [
+    "PASS",
+    "FAIL",
+    "UNKNOWN",
+    "NOT_APPLICABLE"
+  ],
+  "frameworks": [
+    {"id": "NIST-CSF", "version": "2.0"},
+    {"id": "NIST-SSDF", "version": "1.1"},
+    {"id": "NIST-AI-RMF", "version": "1.0"},
+    {"id": "NIST-AI-600-1", "version": "2024"},
+    {"id": "SLSA", "version": "1.2"},
+    {"id": "SPDX", "version": "3.0.1"},
+    {"id": "CycloneDX", "version": "1.7"}
+  ],
+  "authoritative_domains": [
+    "szlholdings.com",
+    "a-11-oy.com",
+    "a11oy.net",
+    "alloyszlholdings.com",
+    "killinchu.net"
+  ],
+  "unsafe_model_suffixes": [
+    ".bin",
+    ".ckpt",
+    ".joblib",
+    ".pickle",
+    ".pkl",
+    ".pt",
+    ".pth"
+  ],
+  "unsafe_serialization_exceptions": [],
+  "controls": [
+    {"id": "GH-INVENTORY", "severity": "HIGH", "frameworks": ["NIST-CSF.ID.AM", "NIST-SSDF.PO.1"]},
+    {"id": "GH-ACTIVE-CI", "severity": "HIGH", "frameworks": ["NIST-SSDF.PW.8"]},
+    {"id": "GH-BRANCH-PROTECTION", "severity": "CRITICAL", "frameworks": ["NIST-SSDF.PO.3", "SLSA.Source"]},
+    {"id": "GH-HIGH-CODE-ALERTS", "severity": "CRITICAL", "frameworks": ["NIST-SSDF.PW.7", "NIST-CSF.ID.RA"]},
+    {"id": "GH-SECRET-ALERTS", "severity": "CRITICAL", "frameworks": ["NIST-SSDF.PW.6", "NIST-CSF.PR.DS"]},
+    {"id": "GH-DEPENDABOT-ALERTS", "severity": "HIGH", "frameworks": ["NIST-SSDF.PW.4", "NIST-SSDF.RV.1"]},
+    {"id": "GH-REPOSITORY-CLASSIFICATION", "severity": "HIGH", "frameworks": ["NIST-CSF.ID.AM", "NIST-CSF.GV.RM"]},
+    {"id": "HF-INVENTORY", "severity": "HIGH", "frameworks": ["NIST-AI-RMF.GOVERN", "NIST-CSF.ID.AM"]},
+    {"id": "HF-CARDS", "severity": "HIGH", "frameworks": ["NIST-AI-RMF.MAP", "NIST-AI-600-1"]},
+    {"id": "HF-LICENSES", "severity": "HIGH", "frameworks": ["NIST-SSDF.PO.1", "SPDX"]},
+    {"id": "HF-SAFE-MODEL-FORMATS", "severity": "CRITICAL", "frameworks": ["NIST-AI-RMF.MANAGE", "NIST-SSDF.PW.6"]},
+    {"id": "HF-IMMUTABLE-REVISIONS", "severity": "CRITICAL", "frameworks": ["SLSA.Provenance", "NIST-SSDF.PS.2"]},
+    {"id": "HF-DYNAMIC-SPACE-SOURCE-BINDING", "severity": "CRITICAL", "frameworks": ["SLSA.Build", "NIST-AI-RMF.MEASURE"]},
+    {"id": "DNS-SPF", "severity": "HIGH", "frameworks": ["NIST-CSF.PR.DS"]},
+    {"id": "DNS-DMARC-REJECT", "severity": "HIGH", "frameworks": ["NIST-CSF.PR.DS"]}
+  ],
+  "release_evidence": {
+    "required": [
+      "canonical-source-sha",
+      "artifact-sha256",
+      "spdx-or-cyclonedx-sbom",
+      "signed-build-provenance",
+      "verification-receipt",
+      "license-and-data-classification",
+      "retention-and-deletion-policy",
+      "runtime-readback-when-deployed"
+    ],
+    "claim_boundary": "Evidence applies only to the exact repository, revision, artifact, and runtime observed."
+  },
+  "huggingface": {
+    "visibility_classes": ["public", "gated-manual", "private"],
+    "preferred_model_formats": ["safetensors", "gguf", "onnx"],
+    "direct_mutable_uploads_allowed": false,
+    "publisher": "protected-one-way-source-bound",
+    "serving_evidence_mount": "read-only",
+    "required_card_fields": [
+      "license",
+      "provenance",
+      "intended-use",
+      "prohibited-use",
+      "limitations",
+      "security-contact",
+      "data-classification",
+      "retention",
+      "exact-revision"
+    ]
+  }
+}
+

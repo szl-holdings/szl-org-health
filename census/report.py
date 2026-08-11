@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .github import collect_github
+from .governance import evaluate_report
 from .huggingface import collect_huggingface
 from .sites import collect_dns, collect_sites
 
@@ -54,6 +55,10 @@ def build_report(
                     "error": str(exc)[:160],
                 }
 
+    # Additive schema-v2 field. Policy evaluation is bounded to this exact
+    # census and fails closed without changing source evidence.
+    report["governance"] = evaluate_report(report)
     _CACHE["data"] = report
     _CACHE["ts"] = now
     return report
+
