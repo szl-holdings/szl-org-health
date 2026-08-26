@@ -30,6 +30,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install locked runtime dependencies
+        run: python -m pip install --no-cache-dir --require-hashes -r requirements.txt
+
       - name: Collect live estate census
         id: collect
         continue-on-error: true
