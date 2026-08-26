@@ -99,12 +99,12 @@ def collect_dns() -> dict[str, dict[str, Any]]:
         dmarc_present, dmarc_status = _record_evidence(dmarc, "v=dmarc1")
         dmarc_reject, dmarc_reject_status = _record_evidence(dmarc, "p=reject")
         record_values = (spf_present, dmarc_present, dmarc_reject)
-        if any(value is None for value in record_values):
-            overall_status = "UNKNOWN"
-        elif all(value is True for value in record_values):
-            overall_status = "PASS"
-        else:
+        if any(value is False for value in record_values):
             overall_status = "FAIL"
+        elif any(value is None for value in record_values):
+            overall_status = "UNKNOWN"
+        else:
+            overall_status = "PASS"
         out[domain] = {
             "domain_state": domain_state,
             "domain_availability": "DNS_NAME_OBSERVED",

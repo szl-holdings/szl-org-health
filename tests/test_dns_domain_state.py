@@ -64,6 +64,24 @@ class DnsDomainStateTests(unittest.TestCase):
             [call("existing.test"), call("_dmarc.existing.test")],
         )
 
+    @patch.object(sites, "DOMAINS", ["mixed.test"])
+    @patch("census.sites.resolve_txt", side_effect=[None, ""])
+    @patch("census.sites._resolve_domain_state", return_value="NOERROR")
+    def test_observed_failure_dominates_unknown_record_evidence(
+        self, _state, resolve_txt
+    ):
+        entry = sites.collect_dns()["mixed.test"]
+
+        self.assertIsNone(entry["spf"])
+        self.assertEqual(entry["spf_status"], "UNKNOWN")
+        self.assertIs(entry["dmarc"], False)
+        self.assertEqual(entry["dmarc_status"], "MISSING")
+        self.assertEqual(entry["overall_status"], "FAIL")
+        self.assertEqual(
+            resolve_txt.call_args_list,
+            [call("mixed.test"), call("_dmarc.mixed.test")],
+        )
+
     @patch.object(sites, "DOMAINS", ["unknown.test"])
     @patch("census.sites.resolve_txt")
     @patch("census.sites._resolve_domain_state", return_value="UNKNOWN")
