@@ -3,6 +3,17 @@ FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN python -m pip install --no-cache-dir --require-hashes -r requirements.txt
-COPY . /app
+COPY app.py /app/app.py
+COPY census/__init__.py /app/census/__init__.py
+COPY census/common.py /app/census/common.py
+COPY census/github.py /app/census/github.py
+COPY census/governance.py /app/census/governance.py
+COPY census/huggingface.py /app/census/huggingface.py
+COPY census/report.py /app/census/report.py
+COPY census/sites.py /app/census/sites.py
+COPY governance/policy.json /app/governance/policy.json
+COPY static/index.html /app/static/index.html
+COPY static/data.json /app/static/data.json
 EXPOSE 7860
+USER 65532:65532
 CMD ["python", "app.py"]
