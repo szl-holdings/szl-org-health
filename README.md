@@ -24,6 +24,24 @@ The GitHub collector follows pagination instead of maintaining a hand-written re
 - Preliminary repository classifications are deterministic and visible. Anything not proven by the current policy is `unclassified`, not guessed.
 - No credential values are returned by the API or rendered by the interface.
 
+## Public and internal evidence boundary
+
+The collectors may use read-only credentials to evaluate evidence that is not public. That evidence is never returned directly by `/api/health`, written to `static/data.json`, printed by `refresh_snapshot.py --stdout`, or uploaded as a workflow artifact.
+
+The public report is constructed from a closed, versioned allowlist. Unknown fields are dropped. GitHub repositories must be explicitly public, Hugging Face assets must have `private` set to the literal boolean `false`, collection membership is removed, credential posture is reduced to a public scope marker, and governance is recomputed from the projected evidence. Raw errors, paths, principals, grants, private identifiers, revisions, filenames, runtime URLs, and private-derived counts stay internal.
+
+A scheduled refresh creates `census-internal.json` only as an ephemeral, gitignored input to the fail-closed receipt gate. The workflow artifact contains only the public projection and the sanitized receipt; it never contains the internal census.
+
+## Solo-maintainer change control
+
+The governed operating model is intentionally `solo-maintainer`. It does not claim or require a second human, and it does not use DCO as the primary security control. Releases instead require:
+
+- a cryptographically verified signed commit;
+- protected exact-head CI and resolved review threads;
+- least-privilege workflow permissions and credentials;
+- immutable provenance and artifact digests;
+- an auditable, fail-closed merge receipt.
+
 ## Run
 
 ```bash
@@ -32,27 +50,29 @@ PORT=7860 python3 app.py
 # open http://localhost:7860/
 ```
 
-Optional credentials expand visibility without changing honesty semantics:
+Optional credentials expand the internal evidence scope without expanding the public response surface:
 
 - `GITHUB_TOKEN`, `GH_TOKEN`, or `SZL_GITHUB_TOKEN` for private GitHub metadata, protection, and alert APIs.
-- `HF_TOKEN` or `HUGGING_FACE_HUB_TOKEN` for private Hugging Face repositories and buckets.
+- `HF_TOKEN` or `HUGGING_FACE_HUB_TOKEN` for private Hugging Face repositories and buckets. Use a fine-grained, organization-scoped read credential with no global or write grants.
+
+Supplying a credential does not establish organization-complete visibility. Bounded endpoint enumeration remains `UNKNOWN` until an authoritative organization reconciliation is observed.
 
 Endpoints:
 
 - `GET /` — responsive estate dashboard.
-- `GET /api/health` — schema-v2 machine-readable census, cached for 60 seconds.
+- `GET /api/health` — cached, versioned public projection; never the credential-derived internal census.
 - `GET /healthz` — service liveness and schema version.
 
 ## Static snapshot mode
 
-When no live backend is available, the frontend falls back to `static/data.json` and labels the page `SNAPSHOT`. Regenerate it with the same collectors used by the live service:
+When no live backend is available, the frontend falls back to the allowlisted public projection in `static/data.json` and labels the page `SNAPSHOT`. Regenerate it with the same collectors used by the live service:
 
 ```bash
 python3 refresh_snapshot.py
 python3 refresh_snapshot.py --stdout
 ```
 
-The snapshot refresh has a hard deadline. If collection cannot finish, it keeps the prior snapshot rather than publishing a partial file as a fresh complete census.
+The snapshot refresh has a hard deadline, derives public output from the exact in-memory internal report, and replaces files atomically. If collection or projection cannot finish, it does not publish a partial file as a fresh complete census.
 
 ## Tests
 
@@ -61,7 +81,7 @@ python -m unittest discover -s tests -v
 python -m py_compile app.py refresh_snapshot.py census/*.py
 ```
 
-The regression suite verifies latest-per-workflow aggregation, fail-closed asset-class errors, static Space URL construction, model artifact and contract evidence, revision-bound operational-payload integrity, classification precedence, and pagination parsing.
+The regression suite verifies latest-per-workflow aggregation, fail-closed asset-class errors, strict Hugging Face identity and Space-host validation, model artifact and contract evidence, revision-bound operational-payload integrity, `FAIL > UNKNOWN > PASS` precedence, receipt non-disclosure, and public-projection canaries.
 
 ## Layout
 
@@ -71,10 +91,12 @@ census/common.py        bounded HTTP, pagination, probes, and DNS primitives
 census/github.py        dynamic GitHub organization census
 census/huggingface.py   models, datasets, Spaces, collections, and buckets
 census/sites.py         site headers plus SPF/DMARC evidence
-census/report.py        isolated source aggregation and cache
-refresh_snapshot.py    bounded static snapshot writer
+census/report.py        isolated aggregation, cache, and public allowlist
+census/receipt.py       internal-source-bound sanitized receipt gate
+refresh_snapshot.py    atomic internal/public snapshot writer
 static/index.html       responsive, searchable dashboard
-static/data.json        timestamped fallback snapshot
-tests/test_census.py    dependency-free collector contract tests
+static/data.json        timestamped public fallback projection
+governance/policy.json  solo-maintainer fail-closed control policy
+tests/                  collector, governance, receipt, and leak contracts
 Dockerfile              pinned container runtime
 ```

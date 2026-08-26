@@ -49,6 +49,8 @@ jobs:
           set -euo pipefail
           cid=$(docker run -d -p 17860:7860 szl-org-health:test)
           trap 'docker logs "$cid" || true; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          test "$(docker image inspect --format '{{.Config.User}}' szl-org-health:test)" = "65532:65532"
+          test "$(docker exec "$cid" id -u)" != "0"
           for attempt in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:17860/healthz > /tmp/healthz.json; then
               break

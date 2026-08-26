@@ -3,3 +3,11 @@
 __pycache__
 *.py[cod]
 tests
+census-internal.json
+census-receipt.json
+*.tmp
+*.patch
+*.rej
+.env
+.env.*
+!.env.example

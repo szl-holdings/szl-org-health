@@ -3,7 +3,6 @@ name: Scheduled estate census
 on:
   schedule:
     - cron: "17 9 * * *"
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,6 +14,7 @@ concurrency:
 jobs:
   census:
     name: census / fail-closed evidence
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -22,8 +22,18 @@ jobs:
       - name: Check out exact workflow source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Verify default-branch checkout subject
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -55,192 +65,13 @@ jobs:
           RECEIPT_RUN_ID: ${{ github.run_id }}
           RECEIPT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RECEIPT_WORKFLOW_SHA: ${{ github.sha }}
-        shell: bash
-        run: |
-          python -I -B - <<'PY'
-          from __future__ import annotations
+        run: python -I -B census/receipt.py --snapshot census-internal.json
 
-          import hashlib
-          import json
-          import os
-          from datetime import datetime, timezone
-          from pathlib import Path
-          from typing import Any
+      - name: Remove internal census evidence
+        if: always()
+        run: rm -f -- census-internal.json
 
-
-          SNAPSHOT = Path("static/data.json")
-          RECEIPT = Path("census-receipt.json")
-          REQUIRED_SOURCES = ("github", "huggingface", "sites", "dns")
-          MAX_SNAPSHOT_AGE_SECONDS = 30 * 60
-
-
-          def env_true(name: str) -> bool:
-              return os.environ.get(name, "").strip().lower() == "true"
-
-
-          def parse_timestamp(value: Any) -> datetime | None:
-              if not isinstance(value, str) or not value:
-                  return None
-              try:
-                  parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-              except ValueError:
-                  return None
-              if parsed.tzinfo is None:
-                  return None
-              return parsed.astimezone(timezone.utc)
-
-
-          now = datetime.now(timezone.utc)
-          errors: list[str] = []
-          snapshot: dict[str, Any] = {}
-          snapshot_bytes = b""
-
-          if os.environ.get("COLLECT_OUTCOME") != "success":
-              errors.append("collector step did not complete successfully")
-
-          try:
-              snapshot_bytes = SNAPSHOT.read_bytes()
-              loaded = json.loads(snapshot_bytes)
-              if not isinstance(loaded, dict):
-                  raise TypeError("snapshot root is not an object")
-              snapshot = loaded
-          except (OSError, UnicodeError, json.JSONDecodeError, TypeError) as exc:
-              errors.append(f"snapshot unavailable or invalid: {exc}")
-
-          if snapshot.get("schema_version") != 2:
-              errors.append("snapshot schema_version is not 2")
-
-          generated_at = parse_timestamp(snapshot.get("generated_at"))
-          age_seconds: int | None = None
-          if generated_at is None:
-              errors.append("snapshot generated_at is missing or invalid")
-          else:
-              age_seconds = int((now - generated_at).total_seconds())
-              if age_seconds < -300 or age_seconds > MAX_SNAPSHOT_AGE_SECONDS:
-                  errors.append(
-                      "snapshot freshness is outside the accepted -300..1800 second window"
-                  )
-
-          source_states: dict[str, bool] = {}
-          sources = snapshot.get("sources")
-          if not isinstance(sources, dict):
-              sources = {}
-              errors.append("snapshot sources object is missing")
-          for name in REQUIRED_SOURCES:
-              source = sources.get(name)
-              source_ok = isinstance(source, dict) and source.get("ok") is True
-              source_states[name] = source_ok
-              if not source_ok:
-                  errors.append(f"required source is not complete: {name}")
-
-          governance = snapshot.get("governance")
-          governance_status = (
-              governance.get("overall_status") if isinstance(governance, dict) else None
-          )
-          governance_summary = (
-              governance.get("summary") if isinstance(governance, dict) else None
-          )
-          if governance_status != "PASS":
-              errors.append(
-                  f"governance overall_status is not PASS: {governance_status or 'MISSING'}"
-              )
-
-          github_source = sources.get("github")
-          github_data = (
-              github_source.get("data")
-              if isinstance(github_source, dict)
-              and isinstance(github_source.get("data"), dict)
-              else {}
-          )
-          discovery = (
-              github_data.get("discovery")
-              if isinstance(github_data.get("discovery"), dict)
-              else {}
-          )
-          github_summary = (
-              github_data.get("summary")
-              if isinstance(github_data.get("summary"), dict)
-              else {}
-          )
-          github_total = github_summary.get("total")
-          expected_minimum = int(os.environ["EXPECTED_GITHUB_REPOSITORIES_MINIMUM"])
-
-          if discovery.get("complete") is not True:
-              errors.append("GitHub organization discovery is not complete")
-          if discovery.get("scope") != "organization-api":
-              errors.append("GitHub discovery scope is not organization-api")
-          if not isinstance(github_total, int) or github_total < expected_minimum:
-              errors.append(
-                  "observed GitHub repository count is below the governed minimum "
-                  f"of {expected_minimum}: {github_total!r}"
-              )
-
-          credential_presence = {
-              "cross_repository_github_read": env_true(
-                  "HAS_CROSS_REPO_GITHUB_TOKEN"
-              ),
-              "huggingface_authenticated": env_true("HAS_HF_TOKEN"),
-          }
-          if not credential_presence["cross_repository_github_read"]:
-              errors.append("cross-repository GitHub read credential is not configured")
-          if not credential_presence["huggingface_authenticated"]:
-              errors.append("authenticated Hugging Face read credential is not configured")
-
-          receipt = {
-              "schema": "szl.estate-census-receipt/v1",
-              "generated_at": now.isoformat().replace("+00:00", "Z"),
-              "status": "PASS" if not errors else "FAIL_CLOSED",
-              "subject": {
-                  "repository": os.environ.get("RECEIPT_REPOSITORY"),
-                  "workflow_sha": os.environ.get("RECEIPT_WORKFLOW_SHA"),
-                  "run_id": os.environ.get("RECEIPT_RUN_ID"),
-                  "run_attempt": os.environ.get("RECEIPT_RUN_ATTEMPT"),
-                  "run_url": os.environ.get("RECEIPT_RUN_URL"),
-              },
-              "collector_outcome": os.environ.get("COLLECT_OUTCOME"),
-              "snapshot": {
-                  "path": SNAPSHOT.as_posix(),
-                  "sha256": hashlib.sha256(snapshot_bytes).hexdigest()
-                  if snapshot_bytes
-                  else None,
-                  "generated_at": snapshot.get("generated_at"),
-                  "age_seconds": age_seconds,
-                  "schema_version": snapshot.get("schema_version"),
-              },
-              "credential_presence": credential_presence,
-              "observations": {
-                  "required_sources": source_states,
-                  "governance_status": governance_status,
-                  "governance_summary": governance_summary,
-                  "github_discovery": discovery,
-                  "github_repository_total": github_total,
-                  "github_repository_minimum": expected_minimum,
-              },
-              "errors": errors,
-          }
-          RECEIPT.write_text(
-              json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-          )
-
-          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
-          if summary_path:
-              lines = [
-                  "## Scheduled estate census",
-                  "",
-                  f"- Status: `{receipt['status']}`",
-                  f"- Snapshot SHA-256: `{receipt['snapshot']['sha256']}`",
-                  f"- GitHub repositories observed: `{github_total}`",
-                  f"- Governance: `{governance_status or 'MISSING'}`",
-                  f"- Required source failures: `{sum(not ok for ok in source_states.values())}`",
-                  f"- Gate errors: `{len(errors)}`",
-              ]
-              Path(summary_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-          print(json.dumps(receipt, indent=2, sort_keys=True))
-          raise SystemExit(1 if errors else 0)
-          PY
-
-      - name: Retain snapshot and receipt
+      - name: Retain public snapshot and sanitized receipt
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
