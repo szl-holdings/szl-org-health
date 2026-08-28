@@ -62,6 +62,18 @@ FAILURE_CONCLUSIONS = {
     "startup_failure",
     "timed_out",
 }
+RULESET_PAGE_SIZE = 100
+ENFORCING_BRANCH_RULE_TYPES = frozenset(
+    {
+        "pull_request",
+        "code_scanning",
+        "required_deployments",
+        "required_signatures",
+        "required_status_checks",
+        "workflows",
+        "update",
+    }
+)
 
 
 def github_headers() -> dict[str, str]:
@@ -162,6 +174,307 @@ def aggregate_workflow_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _branch_governance_result(
+    *,
+    protected: bool | None,
+    state: str,
+    source: str,
+    error: str | None,
+    rule_types: set[str] | None = None,
+    ruleset_ids: set[int] | None = None,
+    inherited: bool | None = None,
+) -> dict[str, Any]:
+    return {
+        "protected": protected,
+        "protection_state": state,
+        "protection_source": source,
+        "protection_error": error,
+        "protection_rule_types": sorted(rule_types or set()),
+        "protection_ruleset_ids": sorted(ruleset_ids or set()),
+        "protection_inherited": inherited,
+    }
+
+
+def _classic_protection_observed(protection: Any) -> bool:
+    """Retain the collector's existing classic-protection acceptance contract."""
+    return isinstance(protection, dict) and (
+        "enforce_admins" in protection
+        or "required_pull_request_reviews" in protection
+    )
+
+
+def _positive_ruleset_id(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
+
+def _ruleset_source_identity(
+    source_type: Any,
+    source: Any,
+    repo_name: str,
+) -> tuple[str, str] | None:
+    if not isinstance(source_type, str) or not isinstance(source, str):
+        return None
+    normalized_type = source_type.strip().casefold()
+    normalized_source = source.strip().casefold()
+    if normalized_type == "organization" and normalized_source == ORG.casefold():
+        return normalized_type, normalized_source
+    expected_repo = f"{ORG}/{repo_name}".casefold()
+    if normalized_type == "repository" and normalized_source == expected_repo:
+        return normalized_type, normalized_source
+    return None
+
+
+def _failed_branch_governance(
+    reason: str,
+    *,
+    rule_types: set[str] | None = None,
+    ruleset_ids: set[int] | None = None,
+    inherited: bool | None = None,
+) -> dict[str, Any]:
+    return _branch_governance_result(
+        protected=None,
+        state="FAILED_CLOSED",
+        source="none",
+        error=reason,
+        rule_types=rule_types,
+        ruleset_ids=ruleset_ids,
+        inherited=inherited,
+    )
+
+
+def _branch_governance(
+    repo_name: str,
+    default_branch: str,
+    *,
+    request_timeout: float,
+    retries: int,
+) -> dict[str, Any]:
+    """Resolve classic or effective ruleset protection without optimistic gaps."""
+    encoded_repo = urllib.parse.quote(repo_name, safe="")
+    encoded_branch = urllib.parse.quote(default_branch, safe="")
+    repo_path = f"/repos/{ORG}/{encoded_repo}"
+
+    classic, classic_error = gh(
+        f"{repo_path}/branches/{encoded_branch}/protection",
+        timeout=request_timeout,
+        retries=retries,
+    )
+    if _classic_protection_observed(classic):
+        return _branch_governance_result(
+            protected=True,
+            state="PROTECTED",
+            source="classic",
+            error=None,
+            inherited=False,
+        )
+
+    effective, effective_error = gh(
+        f"{repo_path}/rules/branches/{encoded_branch}",
+        timeout=request_timeout,
+        retries=retries,
+    )
+    if effective_error is not None or not isinstance(effective, list):
+        reason = effective_error or "effective branch rules response is malformed"
+        return _failed_branch_governance(
+            f"effective branch rules unavailable: {reason}; "
+            f"classic protection: {classic_error or 'not observed'}"
+        )
+
+    rulesets, rulesets_error = gh(
+        f"{repo_path}/rulesets?includes_parents=true&targets=branch"
+        f"&per_page={RULESET_PAGE_SIZE}",
+        timeout=request_timeout,
+        retries=retries,
+    )
+    if rulesets_error is not None or not isinstance(rulesets, list):
+        reason = rulesets_error or "ruleset inventory response is malformed"
+        return _failed_branch_governance(
+            f"inherited ruleset inventory unavailable: {reason}; "
+            f"classic protection: {classic_error or 'not observed'}"
+        )
+    if len(rulesets) >= RULESET_PAGE_SIZE:
+        return _failed_branch_governance(
+            "inherited ruleset inventory may be truncated at the page limit"
+        )
+
+    summaries: dict[int, dict[str, Any]] = {}
+    summary_sources: dict[int, tuple[str, str]] = {}
+    for summary in rulesets:
+        if not isinstance(summary, dict):
+            return _failed_branch_governance(
+                "ruleset inventory contains a malformed entry"
+            )
+        ruleset_id = _positive_ruleset_id(summary.get("id"))
+        source_identity = _ruleset_source_identity(
+            summary.get("source_type"), summary.get("source"), repo_name
+        )
+        target = summary.get("target")
+        enforcement = summary.get("enforcement")
+        if (
+            ruleset_id is None
+            or source_identity is None
+            or target not in {"branch", "tag", "push"}
+            or enforcement not in {"active", "disabled", "evaluate"}
+            or ruleset_id in summaries
+        ):
+            return _failed_branch_governance(
+                "ruleset inventory contains a malformed entry"
+            )
+        if target == "branch":
+            summaries[ruleset_id] = summary
+            summary_sources[ruleset_id] = source_identity
+
+    effective_types: set[str] = set()
+    candidate_types: dict[int, set[str]] = {}
+    candidate_sources: dict[int, tuple[str, str]] = {}
+    for rule in effective:
+        if not isinstance(rule, dict) or not isinstance(rule.get("type"), str):
+            return _failed_branch_governance(
+                "effective branch rules contain a malformed entry"
+            )
+        rule_type = rule["type"].strip()
+        ruleset_id = _positive_ruleset_id(rule.get("ruleset_id"))
+        source_identity = _ruleset_source_identity(
+            rule.get("ruleset_source_type"),
+            rule.get("ruleset_source"),
+            repo_name,
+        )
+        if not rule_type or ruleset_id is None or source_identity is None:
+            return _failed_branch_governance(
+                "effective branch rules contain a malformed entry"
+            )
+        effective_types.add(rule_type)
+        if rule_type not in ENFORCING_BRANCH_RULE_TYPES:
+            continue
+        prior_source = candidate_sources.get(ruleset_id)
+        if prior_source is not None and prior_source != source_identity:
+            return _failed_branch_governance(
+                "effective branch rules disagree on ruleset source identity",
+                rule_types=effective_types,
+                ruleset_ids=set(candidate_types),
+            )
+        candidate_sources[ruleset_id] = source_identity
+        candidate_types.setdefault(ruleset_id, set()).add(rule_type)
+
+    if not candidate_types:
+        inactive = sorted(
+            ruleset_id
+            for ruleset_id, summary in summaries.items()
+            if summary["enforcement"] != "active"
+        )
+        suffix = f"; inactive branch rulesets: {inactive}" if inactive else ""
+        return _failed_branch_governance(
+            f"no enforceable effective branch governance rule observed{suffix}",
+            rule_types=effective_types,
+        )
+
+    candidate_ids = set(candidate_types)
+    inherited = any(
+        source_identity[0] == "organization"
+        for source_identity in candidate_sources.values()
+    )
+    for ruleset_id in sorted(candidate_ids):
+        summary = summaries.get(ruleset_id)
+        if summary is None:
+            return _failed_branch_governance(
+                f"effective rule references absent ruleset {ruleset_id}",
+                rule_types=effective_types,
+                ruleset_ids=candidate_ids,
+                inherited=inherited,
+            )
+        if summary["enforcement"] != "active":
+            return _failed_branch_governance(
+                f"ruleset {ruleset_id} is not actively enforced",
+                rule_types=effective_types,
+                ruleset_ids=candidate_ids,
+                inherited=inherited,
+            )
+        if summary_sources[ruleset_id] != candidate_sources[ruleset_id]:
+            return _failed_branch_governance(
+                f"ruleset {ruleset_id} source does not match effective rules",
+                rule_types=effective_types,
+                ruleset_ids=candidate_ids,
+                inherited=inherited,
+            )
+
+        detail, detail_error = gh(
+            f"{repo_path}/rulesets/{ruleset_id}?includes_parents=true",
+            timeout=request_timeout,
+            retries=retries,
+        )
+        if detail_error is not None or not isinstance(detail, dict):
+            reason = detail_error or "malformed detail response"
+            return _failed_branch_governance(
+                f"ruleset {ruleset_id} detail unavailable: {reason}",
+                rule_types=effective_types,
+                ruleset_ids=candidate_ids,
+                inherited=inherited,
+            )
+
+        detail_id = _positive_ruleset_id(detail.get("id"))
+        detail_source = _ruleset_source_identity(
+            detail.get("source_type"), detail.get("source"), repo_name
+        )
+        detail_rules = detail.get("rules")
+        bypass_actors = detail.get("bypass_actors")
+        if (
+            detail_id != ruleset_id
+            or detail_source != summary_sources[ruleset_id]
+            or detail.get("target") != "branch"
+            or detail.get("enforcement") != "active"
+            or not isinstance(detail_rules, list)
+            or not isinstance(bypass_actors, list)
+        ):
+            return _failed_branch_governance(
+                f"ruleset {ruleset_id} detail is malformed or inconsistent",
+                rule_types=effective_types,
+                ruleset_ids=candidate_ids,
+                inherited=inherited,
+            )
+        if bypass_actors:
+            return _failed_branch_governance(
+                f"ruleset {ruleset_id} permits bypass actors",
+                rule_types=effective_types,
+                ruleset_ids=candidate_ids,
+                inherited=inherited,
+            )
+
+        detailed_types: set[str] = set()
+        for detailed_rule in detail_rules:
+            if (
+                not isinstance(detailed_rule, dict)
+                or not isinstance(detailed_rule.get("type"), str)
+                or not detailed_rule["type"].strip()
+            ):
+                return _failed_branch_governance(
+                    f"ruleset {ruleset_id} contains a malformed rule",
+                    rule_types=effective_types,
+                    ruleset_ids=candidate_ids,
+                    inherited=inherited,
+                )
+            detailed_types.add(detailed_rule["type"].strip())
+        if not candidate_types[ruleset_id].issubset(detailed_types):
+            return _failed_branch_governance(
+                f"ruleset {ruleset_id} detail omits effective governance rules",
+                rule_types=effective_types,
+                ruleset_ids=candidate_ids,
+                inherited=inherited,
+            )
+
+    governing_types = set().union(*candidate_types.values())
+    return _branch_governance_result(
+        protected=True,
+        state="PROTECTED",
+        source="effective-ruleset",
+        error=None,
+        rule_types=governing_types,
+        ruleset_ids=candidate_ids,
+        inherited=inherited,
+    )
+
+
 def _repo_census(
     repo: dict[str, Any],
     *,
@@ -213,22 +526,19 @@ def _repo_census(
                 "default_branch_push_runs_total": None,
             }
 
-    protected: bool | None = None
-    protection_error: str | None = None
+    branch_governance = _branch_governance_result(
+        protected=None,
+        state="NOT_APPLICABLE" if archived else "NOT_EVALUATED",
+        source="none",
+        error=None,
+    )
     if include_branch_protection and not archived:
-        protection, protection_error = gh(
-            f"/repos/{ORG}/{urllib.parse.quote(name)}/branches/"
-            f"{urllib.parse.quote(default)}/protection",
-            timeout=request_timeout,
+        branch_governance = _branch_governance(
+            name,
+            default,
+            request_timeout=request_timeout,
             retries=retries,
         )
-        if isinstance(protection, dict) and (
-            "enforce_admins" in protection
-            or "required_pull_request_reviews" in protection
-        ):
-            protected = True
-        else:
-            protected = None
 
     return name, {
         **aggregate,
@@ -241,8 +551,7 @@ def _repo_census(
         "pushed_at": repo.get("pushed_at"),
         "updated_at": repo.get("updated_at"),
         "size_kb": repo.get("size"),
-        "protected": protected,
-        "protection_error": protection_error if protected is None else None,
+        **branch_governance,
         "url": repo.get("html_url") or f"https://github.com/{ORG}/{name}",
     }
 
