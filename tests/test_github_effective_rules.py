@@ -87,7 +87,7 @@ class EffectiveBranchRulesTests(unittest.TestCase):
             any("includes_parents=true" in path for path in requested_paths)
         )
         self.assertIn(
-            f"/repos/szl-holdings/szl-org-health/rulesets/{ORG_RULESET_ID}",
+            f"/repos/szl-holdings/szl-org-health/rulesets/{ORG_RULESET_ID}?includes_parents=true",
             requested_paths,
         )
 

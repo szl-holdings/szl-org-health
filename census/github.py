@@ -400,7 +400,7 @@ def _branch_governance(
             )
 
         detail, detail_error = gh(
-            f"{repo_path}/rulesets/{ruleset_id}",
+            f"{repo_path}/rulesets/{ruleset_id}?includes_parents=true",
             timeout=request_timeout,
             retries=retries,
         )
