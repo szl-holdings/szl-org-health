@@ -35,11 +35,25 @@ GITHUB_REPOSITORY = re.compile(
     r"[A-Za-z0-9_.-]+$"
 )
 SOURCE_SCHEMA = "szl.deployment-source/v1"
+BUILD_INFO_SCHEMAS = {
+    SOURCE_SCHEMA,
+    "szl.build-info/v1",
+}
 DEPLOYMENT_MANIFEST_SCHEMAS = {
     SOURCE_SCHEMA,
     "szl.hf-deploy-manifest/v1",
 }
 DEPLOYMENT_MANIFEST_PATHS = ("hf-deploy-manifest.json",)
+DEPLOYMENT_WORKFLOW_MARKERS = (
+    "huggingface",
+    "hf-deploy",
+    "hf_deploy",
+    "/hf.",
+    " space",
+    "spaces",
+    "deploy",
+    "publish",
+)
 WEIGHT_SUFFIXES = (
     ".safetensors",
     ".gguf",
@@ -781,6 +795,8 @@ def _source_claim(
     schema = _first_value(payload, ("schema",), ("schema_version",), ("$schema",))
     if schema_mode == "source" and schema != SOURCE_SCHEMA:
         return None, f"{evidence}: schema must be {SOURCE_SCHEMA}"
+    if schema_mode == "build" and schema not in BUILD_INFO_SCHEMAS:
+        return None, f"{evidence}: unsupported or missing build-info schema"
     if schema_mode == "manifest" and schema not in DEPLOYMENT_MANIFEST_SCHEMAS:
         return None, f"{evidence}: unsupported or missing deployment manifest schema"
 
@@ -883,8 +899,10 @@ def _source_claim(
     hf_repository = (
         str(hf_repository_value).strip()
         if isinstance(hf_repository_value, str)
-        else None
+        else ""
     )
+    if not hf_repository:
+        return None, f"{evidence}: Hugging Face destination repository is required"
     return (
         {
             "evidence": evidence,
@@ -904,10 +922,11 @@ def _read_source_document(
     *,
     evidence: str,
     schema_mode: str,
+    headers: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any] | None, str, str | None]:
     payload, _, error = request_json(
         url,
-        headers={"Accept": "application/json"},
+        headers=headers or {"Accept": "application/json"},
         timeout=12,
         retries=0,
     )
@@ -1009,6 +1028,35 @@ def _authenticate_github_claim(
         return "UNKNOWN", "GitHub workflow run is not terminal"
     if run.get("conclusion") != "success":
         return "INVALID", "GitHub workflow run did not conclude successfully"
+    workflow_identity = " ".join(
+        str(run.get(key) or "")
+        for key in ("name", "path", "display_title", "head_branch")
+    ).casefold()
+    if not any(marker in workflow_identity for marker in DEPLOYMENT_WORKFLOW_MARKERS):
+        jobs_payload, _, jobs_error = request_json(
+            f"{GITHUB_API}/repos/{encoded_repository}/actions/runs/{run_id}/jobs",
+            headers=headers,
+            timeout=20,
+            retries=1,
+        )
+        if jobs_error or not isinstance(jobs_payload, dict):
+            return (
+                "UNKNOWN",
+                "GitHub workflow run could not be bound to a Hugging Face deployment",
+            )
+        job_identity = " ".join(
+            str(job.get("name") or "")
+            for job in (jobs_payload.get("jobs") or [])
+            if isinstance(job, dict)
+        ).casefold()
+        if not any(
+            marker in f"{workflow_identity} {job_identity}"
+            for marker in DEPLOYMENT_WORKFLOW_MARKERS
+        ):
+            return (
+                "INVALID",
+                "GitHub workflow run is not a Hugging Face deployment workflow",
+            )
     return "OBSERVED", None
 
 
@@ -1065,6 +1113,7 @@ def _resolve_space_source_binding(
                     manifest_url,
                     evidence=path,
                     schema_mode="manifest",
+                    headers=hf_headers(),
                 )
             )
 
@@ -1120,10 +1169,28 @@ def _resolve_space_source_binding(
                 build_info_error=build_info_error,
             )
 
-    if not SHA40.fullmatch(repo_revision) or not SHA40.fullmatch(runtime_revision):
+    if not SHA40.fullmatch(repo_revision):
+        return _binding_result(
+            "UNKNOWN",
+            error="immutable Hugging Face repository revision is unavailable",
+            claim=claim,
+            evidence=evidence,
+            build_info_http=build_info_http,
+            build_info_error=build_info_error,
+        )
+    if not runtime_revision:
+        return _binding_result(
+            "UNKNOWN",
+            error="runtime Hugging Face revision is unavailable",
+            claim=claim,
+            evidence=evidence,
+            build_info_http=build_info_http,
+            build_info_error=build_info_error,
+        )
+    if not SHA40.fullmatch(runtime_revision):
         return _binding_result(
             "INVALID",
-            error="immutable Hugging Face repository and runtime revisions are required",
+            error="runtime Hugging Face revision is malformed",
             claim=claim,
             evidence=evidence,
             build_info_http=build_info_http,
@@ -1139,8 +1206,8 @@ def _resolve_space_source_binding(
             build_info_error=build_info_error,
         )
     for other in claims:
-        claimed_repo = other.get("hf_repository")
-        if claimed_repo and str(claimed_repo).casefold() != repo_id.casefold():
+        claimed_repo = str(other.get("hf_repository") or "").strip()
+        if not claimed_repo or claimed_repo.casefold() != repo_id.casefold():
             return _binding_result(
                 "INVALID",
                 error="claimed Hugging Face repository does not match the observed Space",
