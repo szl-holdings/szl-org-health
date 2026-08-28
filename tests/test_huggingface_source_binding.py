@@ -98,6 +98,8 @@ class HuggingFaceSourceBindingTests(unittest.TestCase):
                 return commit_response
             if url.endswith(f"/actions/runs/{ANATOMY_WORKFLOW_RUN}"):
                 return run_response
+            if url.endswith(f"/actions/runs/{ANATOMY_WORKFLOW_RUN}/jobs"):
+                return ({"jobs": [{"name": "Publish Hugging Face Space"}]}, {}, None)
             raise AssertionError(f"unexpected request: {url}")
 
         def auth(env_names):
