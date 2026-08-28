@@ -100,7 +100,7 @@ class HuggingFaceNormalizationTests(unittest.TestCase):
 
     @mock.patch("census.huggingface.request_json")
     @mock.patch("census.huggingface.http_probe")
-    def test_space_is_operational_only_with_health_and_source_binding(
+    def test_bare_build_revision_cannot_create_operational_source_binding(
         self, probe, request_json
     ):
         probe.side_effect = [
@@ -123,9 +123,9 @@ class HuggingFaceNormalizationTests(unittest.TestCase):
             }
         )
         self.assertEqual(result["healthz"], 200)
-        self.assertEqual(result["source_revision"], "a" * 40)
-        self.assertEqual(result["source_binding_state"], "OBSERVED")
-        self.assertEqual(result["operational_state"], "OPERATIONAL_SOURCE_BOUND")
+        self.assertIsNone(result["source_revision"])
+        self.assertEqual(result["source_binding_state"], "INVALID")
+        self.assertEqual(result["operational_state"], "RUNTIME_HEALTHY_UNBOUND")
 
     @mock.patch("census.huggingface.request_json")
     @mock.patch("census.huggingface.http_probe")

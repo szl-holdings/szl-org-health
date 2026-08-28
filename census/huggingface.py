@@ -28,6 +28,18 @@ HF_ASSET_KINDS = (
     "buckets",
 )
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
+GITHUB_API = "https://api.github.com"
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
+GITHUB_REPOSITORY = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?/"
+    r"[A-Za-z0-9_.-]+$"
+)
+SOURCE_SCHEMA = "szl.deployment-source/v1"
+DEPLOYMENT_MANIFEST_SCHEMAS = {
+    SOURCE_SCHEMA,
+    "szl.hf-deploy-manifest/v1",
+}
+DEPLOYMENT_MANIFEST_PATHS = ("hf-deploy-manifest.json",)
 WEIGHT_SUFFIXES = (
     ".safetensors",
     ".gguf",
@@ -664,6 +676,9 @@ def space_runtime_url(item: dict[str, Any]) -> str | None:
 def _http_status(error: str | None) -> int:
     if error is None:
         return 200
+    if error.startswith("invalid-json:"):
+        # request_json only reports this after a successful HTTP response body.
+        return 200
     if error.startswith("http") and error[4:].isdigit():
         return int(error[4:])
     return 0
@@ -697,6 +712,463 @@ def _source_revision(payload: Any) -> str | None:
     return None
 
 
+def _first_value(payload: dict[str, Any], *paths: tuple[str, ...]) -> Any:
+    for path in paths:
+        value: Any = payload
+        for key in path:
+            if not isinstance(value, dict) or key not in value:
+                value = None
+                break
+            value = value[key]
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _normalize_github_repository(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.startswith(("https://", "http://")):
+        parsed = urllib.parse.urlparse(text)
+        if parsed.hostname not in {"github.com", "www.github.com"}:
+            return None
+        parts = [part for part in parsed.path.strip("/").split("/") if part]
+        if len(parts) != 2:
+            return None
+        text = "/".join(parts)
+    text = text.removesuffix(".git").strip("/")
+    return text if GITHUB_REPOSITORY.fullmatch(text) else None
+
+
+def _normalize_sha256(value: Any) -> str | None:
+    digest = str(value or "").strip().lower()
+    if digest.startswith("sha256:"):
+        digest = digest[7:]
+    return digest if SHA256.fullmatch(digest) else None
+
+
+def _workflow_run_id(value: Any, repository: str) -> int | None:
+    if isinstance(value, dict):
+        value = _first_value(value, ("id",), ("run_id",), ("url",), ("html_url",))
+    if isinstance(value, int) and value > 0:
+        return value
+    text = str(value or "").strip()
+    if text.isdigit() and int(text) > 0:
+        return int(text)
+    if not text.startswith(("https://", "http://")):
+        return None
+    parsed = urllib.parse.urlparse(text)
+    if parsed.hostname not in {"github.com", "www.github.com"}:
+        return None
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if len(parts) != 5 or parts[2:4] != ["actions", "runs"]:
+        return None
+    if f"{parts[0]}/{parts[1]}".casefold() != repository.casefold():
+        return None
+    return int(parts[4]) if parts[4].isdigit() and int(parts[4]) > 0 else None
+
+
+def _source_claim(
+    payload: Any,
+    *,
+    evidence: str,
+    schema_mode: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    if not isinstance(payload, dict):
+        return None, f"{evidence}: JSON root must be an object"
+
+    schema = _first_value(payload, ("schema",), ("schema_version",), ("$schema",))
+    if schema_mode == "source" and schema != SOURCE_SCHEMA:
+        return None, f"{evidence}: schema must be {SOURCE_SCHEMA}"
+    if schema_mode == "manifest" and schema not in DEPLOYMENT_MANIFEST_SCHEMAS:
+        return None, f"{evidence}: unsupported or missing deployment manifest schema"
+
+    repository = _normalize_github_repository(
+        _first_value(
+            payload,
+            ("source", "repository"),
+            ("source", "repository_url"),
+            ("source", "repo"),
+            ("source_repository",),
+            ("source_repo",),
+            ("github_repository",),
+            ("build", "source_repository"),
+            ("build", "repository"),
+        )
+    )
+    if repository is None:
+        return None, f"{evidence}: valid GitHub source repository is required"
+
+    source_revision = str(
+        _first_value(
+            payload,
+            ("source", "commit"),
+            ("source", "revision"),
+            ("source", "sha"),
+            ("source_revision",),
+            ("source_commit",),
+            ("source_sha",),
+            ("git_sha",),
+            ("build", "source_revision"),
+            ("build", "source_commit"),
+            ("build", "source_sha"),
+            ("build", "git_sha"),
+            ("build", "revision"),
+        )
+        or ""
+    ).lower()
+    if not SHA40.fullmatch(source_revision):
+        return None, f"{evidence}: immutable 40-hex source commit is required"
+
+    hf_revision = str(
+        _first_value(
+            payload,
+            ("deployment", "hf_revision"),
+            ("deployment", "revision"),
+            ("runtime", "hf_revision"),
+            ("runtime", "revision"),
+            ("hf_revision",),
+            ("deployed_revision",),
+            ("space_revision",),
+        )
+        or ""
+    ).lower()
+    if not SHA40.fullmatch(hf_revision):
+        return None, f"{evidence}: immutable 40-hex Hugging Face revision is required"
+
+    artifact_digest = _normalize_sha256(
+        _first_value(
+            payload,
+            ("deployment", "artifact_set_sha256"),
+            ("deployment", "artifact_digest"),
+            ("deployment", "artifact_sha256"),
+            ("artifact_set", "sha256"),
+            ("artifact_set", "digest"),
+            ("artifact_set_sha256",),
+            ("artifact_digest",),
+            ("artifact_sha256",),
+        )
+    )
+    if artifact_digest is None:
+        return None, f"{evidence}: valid SHA-256 artifact-set digest is required"
+
+    workflow_run = _workflow_run_id(
+        _first_value(
+            payload,
+            ("deployment", "workflow_run"),
+            ("deployment", "workflow_run_id"),
+            ("deployment", "run_id"),
+            ("source", "workflow_run"),
+            ("source", "workflow_run_id"),
+            ("workflow_run",),
+            ("workflow_run_id",),
+            ("deployment_run",),
+        ),
+        repository,
+    )
+    if workflow_run is None:
+        return None, f"{evidence}: valid GitHub workflow run is required"
+
+    hf_repository_value = _first_value(
+        payload,
+        ("deployment", "hf_repository"),
+        ("deployment", "space", "repository"),
+        ("deployment", "space", "id"),
+        ("deployment", "space"),
+        ("destination", "repository"),
+        ("hf_repository",),
+        ("space",),
+    )
+    hf_repository = (
+        str(hf_repository_value).strip()
+        if isinstance(hf_repository_value, str)
+        else None
+    )
+    return (
+        {
+            "evidence": evidence,
+            "repository": repository,
+            "source_revision": source_revision,
+            "workflow_run_id": workflow_run,
+            "hf_revision": hf_revision,
+            "hf_repository": hf_repository,
+            "artifact_sha256": artifact_digest,
+        },
+        None,
+    )
+
+
+def _read_source_document(
+    url: str,
+    *,
+    evidence: str,
+    schema_mode: str,
+) -> tuple[dict[str, Any] | None, str, str | None]:
+    payload, _, error = request_json(
+        url,
+        headers={"Accept": "application/json"},
+        timeout=12,
+        retries=0,
+    )
+    if error:
+        if error in {"http404", "http410"}:
+            return None, "ABSENT", error
+        if error.startswith("invalid-json:"):
+            return None, "INVALID", f"{evidence}: HTTP success did not return JSON"
+        return None, "UNKNOWN", f"{evidence}: {error}"
+    claim, validation_error = _source_claim(
+        payload,
+        evidence=evidence,
+        schema_mode=schema_mode,
+    )
+    if validation_error:
+        return None, "INVALID", validation_error
+    return claim, "VALID", None
+
+
+def _binding_result(
+    state: str,
+    *,
+    error: str | None,
+    claim: dict[str, Any] | None = None,
+    evidence: list[str] | None = None,
+    build_info_http: int | None = None,
+    build_info_error: str | None = None,
+) -> dict[str, Any]:
+    claim = claim or {}
+    return {
+        "source_binding_state": state,
+        "source_binding_error": error,
+        "source_evidence": sorted(evidence or []),
+        "source_repository": claim.get("repository"),
+        "source_revision": claim.get("source_revision"),
+        "source_workflow_run_id": claim.get("workflow_run_id"),
+        "source_hf_revision": claim.get("hf_revision"),
+        "source_artifact_sha256": claim.get("artifact_sha256"),
+        "build_info_http": build_info_http,
+        "build_info_error": build_info_error,
+    }
+
+
+def _github_headers() -> dict[str, str]:
+    return {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        **token_header(("GITHUB_TOKEN", "GH_TOKEN", "SZL_GITHUB_TOKEN")),
+    }
+
+
+def _authenticate_github_claim(
+    claim: dict[str, Any],
+) -> tuple[str, str | None]:
+    headers = _github_headers()
+    if "Authorization" not in headers:
+        return "UNKNOWN", "GitHub authentication is unavailable"
+
+    repository = claim["repository"]
+    revision = claim["source_revision"]
+    encoded_repository = urllib.parse.quote(repository, safe="/")
+    commit, _, commit_error = request_json(
+        f"{GITHUB_API}/repos/{encoded_repository}/commits/{revision}",
+        headers=headers,
+        timeout=20,
+        retries=1,
+    )
+    if commit_error or not isinstance(commit, dict):
+        detail = commit_error or "invalid response"
+        return "UNKNOWN", f"GitHub source commit could not be authenticated: {detail}"
+    if str(commit.get("sha") or "").lower() != revision:
+        return "INVALID", "GitHub source commit response does not match the claim"
+
+    run_id = claim["workflow_run_id"]
+    run, _, run_error = request_json(
+        f"{GITHUB_API}/repos/{encoded_repository}/actions/runs/{run_id}",
+        headers=headers,
+        timeout=20,
+        retries=1,
+    )
+    if run_error or not isinstance(run, dict):
+        detail = run_error or "invalid response"
+        return "UNKNOWN", f"GitHub workflow run could not be authenticated: {detail}"
+    if run.get("id") != run_id:
+        return "INVALID", "GitHub workflow run ID does not match the claim"
+    if str(run.get("head_sha") or "").lower() != revision:
+        return "INVALID", "GitHub workflow run head does not match the source commit"
+    run_repository = _first_value(
+        run,
+        ("repository", "full_name"),
+        ("head_repository", "full_name"),
+    )
+    if (
+        run_repository
+        and str(run_repository).casefold() != str(repository).casefold()
+    ):
+        return "INVALID", "GitHub workflow run repository does not match the claim"
+    if run.get("status") != "completed":
+        return "UNKNOWN", "GitHub workflow run is not terminal"
+    if run.get("conclusion") != "success":
+        return "INVALID", "GitHub workflow run did not conclude successfully"
+    return "OBSERVED", None
+
+
+def _resolve_space_source_binding(
+    item: dict[str, Any],
+    root_url: str,
+) -> dict[str, Any]:
+    repo_id = str(item.get("id") or "unknown")
+    runtime = item.get("runtime") if isinstance(item.get("runtime"), dict) else {}
+    repo_revision = str(item.get("sha") or "").lower()
+    runtime_revision = str(
+        runtime.get("sha")
+        or runtime.get("revision")
+        or runtime.get("hf_revision")
+        or ""
+    ).lower()
+
+    documents: list[tuple[dict[str, Any] | None, str, str | None]] = []
+    build_document = _read_source_document(
+        urllib.parse.urljoin(root_url, "api/build-info"),
+        evidence="api/build-info",
+        schema_mode="build",
+    )
+    documents.append(build_document)
+    build_info_error = build_document[2] if build_document[1] != "VALID" else None
+    build_info_http = (
+        200
+        if build_document[1] in {"VALID", "INVALID"}
+        else _http_status(build_info_error)
+    )
+
+    documents.append(
+        _read_source_document(
+            urllib.parse.urljoin(root_url, ".well-known/szl-source.json"),
+            evidence=".well-known/szl-source.json",
+            schema_mode="source",
+        )
+    )
+
+    repo_paths = siblings(item)
+    manifest_paths = [
+        path
+        for path in DEPLOYMENT_MANIFEST_PATHS
+        if item.get("siblings") is None or path in repo_paths
+    ]
+    if SHA40.fullmatch(repo_revision):
+        for path in manifest_paths:
+            manifest_url = (
+                f"{HF}/spaces/{urllib.parse.quote(repo_id, safe='/')}/resolve/"
+                f"{repo_revision}/{urllib.parse.quote(path, safe='/')}"
+            )
+            documents.append(
+                _read_source_document(
+                    manifest_url,
+                    evidence=path,
+                    schema_mode="manifest",
+                )
+            )
+
+    claims = [
+        document
+        for document, state, _ in documents
+        if state == "VALID" and document
+    ]
+    invalid_errors = [
+        error for _, state, error in documents if state == "INVALID" and error
+    ]
+    unknown_errors = [
+        error for _, state, error in documents if state == "UNKNOWN" and error
+    ]
+    evidence = [str(claim["evidence"]) for claim in claims]
+
+    if invalid_errors:
+        return _binding_result(
+            "INVALID",
+            error="; ".join(invalid_errors),
+            evidence=evidence,
+            build_info_http=build_info_http,
+            build_info_error=build_info_error,
+        )
+    if not claims:
+        state = "UNKNOWN" if unknown_errors else "UNAVAILABLE"
+        return _binding_result(
+            state,
+            error=(
+                "; ".join(unknown_errors)
+                if unknown_errors
+                else "no source evidence observed"
+            ),
+            evidence=evidence,
+            build_info_http=build_info_http,
+            build_info_error=build_info_error,
+        )
+
+    claim = claims[0]
+    for key in (
+        "repository",
+        "source_revision",
+        "workflow_run_id",
+        "hf_revision",
+        "artifact_sha256",
+    ):
+        if any(other[key] != claim[key] for other in claims[1:]):
+            return _binding_result(
+                "INVALID",
+                error=f"source evidence disagrees on {key}",
+                evidence=evidence,
+                build_info_http=build_info_http,
+                build_info_error=build_info_error,
+            )
+
+    if not SHA40.fullmatch(repo_revision) or not SHA40.fullmatch(runtime_revision):
+        return _binding_result(
+            "INVALID",
+            error="immutable Hugging Face repository and runtime revisions are required",
+            claim=claim,
+            evidence=evidence,
+            build_info_http=build_info_http,
+            build_info_error=build_info_error,
+        )
+    if repo_revision != runtime_revision or claim["hf_revision"] != repo_revision:
+        return _binding_result(
+            "INVALID",
+            error="claimed, repository, and runtime Hugging Face revisions do not match",
+            claim=claim,
+            evidence=evidence,
+            build_info_http=build_info_http,
+            build_info_error=build_info_error,
+        )
+    for other in claims:
+        claimed_repo = other.get("hf_repository")
+        if claimed_repo and str(claimed_repo).casefold() != repo_id.casefold():
+            return _binding_result(
+                "INVALID",
+                error="claimed Hugging Face repository does not match the observed Space",
+                claim=claim,
+                evidence=evidence,
+                build_info_http=build_info_http,
+                build_info_error=build_info_error,
+            )
+    if unknown_errors:
+        return _binding_result(
+            "UNKNOWN",
+            error="; ".join(unknown_errors),
+            claim=claim,
+            evidence=evidence,
+            build_info_http=build_info_http,
+            build_info_error=build_info_error,
+        )
+
+    github_state, github_error = _authenticate_github_claim(claim)
+    return _binding_result(
+        github_state,
+        error=github_error,
+        claim=claim,
+        evidence=evidence,
+        build_info_http=build_info_http,
+        build_info_error=build_info_error,
+    )
+
 def normalize_space(item: dict[str, Any]) -> dict[str, Any]:
     repo_id = str(item.get("id") or "unknown")
     runtime = item.get("runtime") if isinstance(item.get("runtime"), dict) else {}
@@ -714,23 +1186,23 @@ def normalize_space(item: dict[str, Any]) -> dict[str, Any]:
         else {}
     )
     healthz = healthz_probe.get("http")
-    build_info = None
-    build_info_error = None
-    if dynamic and root_url:
-        build_info, _, build_info_error = request_json(
-            urllib.parse.urljoin(root_url, "api/build-info"),
-            headers={"Accept": "application/json"},
-            timeout=12,
-            retries=0,
+    source_binding = (
+        _resolve_space_source_binding(item, root_url)
+        if dynamic and root_url
+        else _binding_result(
+            "UNAVAILABLE" if dynamic else "NOT_APPLICABLE",
+            error="runtime URL unavailable" if dynamic else None,
         )
-    source_revision = _source_revision(build_info)
+    )
+    source_revision = source_binding.get("source_revision")
+    source_binding_state = source_binding["source_binding_state"]
     stage = runtime.get("stage") or "unknown"
     reachable = 200 <= int(root_probe.get("http") or 0) < 400
     if stage != "RUNNING" or not reachable:
         operational_state = "DEGRADED"
     elif not dynamic:
         operational_state = "STATIC_REACHABLE"
-    elif healthz == 200 and source_revision:
+    elif healthz == 200 and source_binding_state == "OBSERVED":
         operational_state = "OPERATIONAL_SOURCE_BOUND"
     elif healthz == 200:
         operational_state = "RUNTIME_HEALTHY_UNBOUND"
@@ -761,21 +1233,21 @@ def normalize_space(item: dict[str, Any]) -> dict[str, Any]:
         "healthz": healthz,
         "healthz_error": healthz_probe.get("error"),
         "healthz_contract": healthz == 200,
-        "build_info_http": (
-            _http_status(build_info_error) if dynamic and root_url else None
-        ),
-        "build_info_error": build_info_error,
+        "build_info_http": source_binding.get("build_info_http"),
+        "build_info_error": source_binding.get("build_info_error"),
+        "source_binding_error": source_binding.get("source_binding_error"),
+        "source_evidence": source_binding.get("source_evidence"),
+        "source_repository": source_binding.get("source_repository"),
         "source_revision": source_revision,
-        "source_binding_state": (
-            "OBSERVED"
-            if source_revision
-            else "UNAVAILABLE"
-            if dynamic
-            else "NOT_APPLICABLE"
-        ),
+        "source_workflow_run_id": source_binding.get("source_workflow_run_id"),
+        "source_hf_revision": source_binding.get("source_hf_revision"),
+        "source_artifact_sha256": source_binding.get("source_artifact_sha256"),
+        "source_binding_state": source_binding_state,
         "operational_state": operational_state,
         "card_present": (
-            "README.md" in repo_siblings if item.get("siblings") is not None else None
+            "README.md" in repo_siblings
+            if item.get("siblings") is not None
+            else None
         ),
         "license_declared": license_declared,
         "managed_marker_present": (
