@@ -92,6 +92,29 @@ class EffectiveBranchRulesTests(unittest.TestCase):
         )
 
     @mock.patch("census.github.gh")
+    def test_workflow_and_code_scanning_api_rules_are_enforcing(self, gh):
+        for rule_type in ("workflows", "code_scanning"):
+            with self.subTest(rule_type=rule_type):
+                detail = inherited_detail(bypass_actors=[])
+                detail["rules"] = [{"type": rule_type}]
+                gh.side_effect = [
+                    (None, "http404"),
+                    ([inherited_rule(rule_type)], None),
+                    ([inherited_summary()], None),
+                    (detail, None),
+                ]
+
+                result = evaluate()
+
+                self.assertIs(result["protected"], True)
+                self.assertEqual(result["protection_state"], "PROTECTED")
+                self.assertEqual(result["protection_source"], "effective-ruleset")
+                self.assertEqual(result["protection_rule_types"], [rule_type])
+                self.assertEqual(
+                    result["protection_ruleset_ids"], [ORG_RULESET_ID]
+                )
+
+    @mock.patch("census.github.gh")
     def test_classic_branch_protection_remains_the_first_fallback(self, gh):
         gh.return_value = ({"enforce_admins": {"enabled": True}}, None)
 

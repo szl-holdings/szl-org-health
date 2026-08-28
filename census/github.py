@@ -66,11 +66,11 @@ RULESET_PAGE_SIZE = 100
 ENFORCING_BRANCH_RULE_TYPES = frozenset(
     {
         "pull_request",
-        "required_code_scanning",
+        "code_scanning",
         "required_deployments",
         "required_signatures",
         "required_status_checks",
-        "required_workflows",
+        "workflows",
         "update",
     }
 )
