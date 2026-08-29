@@ -1,0 +1,112 @@
+name: Native SZL org convergence 2026-08-28
+
+on:
+  push:
+    branches:
+      - ops/org-convergence-no-replit-20260828
+    paths:
+      - .github/workflows/zz-org-convergence-20260828.yml
+      - tools/org_converge_20260828.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: native-org-convergence-20260828-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  converge:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Check out exact convergence branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install the repository's hash-locked runtime dependency
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --require-hashes -r requirements.txt
+
+      - name: Compile the bounded executor
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/org_converge_20260828.py refresh_snapshot.py census/*.py
+          git diff --check
+
+      - name: Inventory every repository and retry bounded failed latest runs
+        env:
+          ORG_TOKEN: ${{ secrets.SZL_GITHUB_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
+          EXECUTE_RERUNS: 'true'
+        run: |
+          set -euo pipefail
+          python tools/org_converge_20260828.py
+
+      - name: Refresh the governed public org-health snapshot
+        if: always()
+        env:
+          SZL_GITHUB_TOKEN: ${{ secrets.SZL_GITHUB_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
+        run: |
+          set +e
+          mkdir -p reports
+          python refresh_snapshot.py > reports/org-health-refresh-status.txt 2>&1
+          code=$?
+          printf '\nexit_code=%s\n' "$code" >> reports/org-health-refresh-status.txt
+          rm -f census-internal.json
+          exit 0
+
+      - name: Upload immutable convergence evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: szl-org-convergence-${{ github.run_id }}
+          path: |
+            reports/org-convergence-20260828.json
+            reports/org-convergence-20260828.md
+            reports/org-health-refresh-status.txt
+            static/data.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Seal evidence and remove the one-shot executor
+        if: always()
+        run: |
+          set -euo pipefail
+          test -f reports/org-convergence-20260828.json
+          test -f reports/org-convergence-20260828.md
+          rm -f census-internal.json
+          git rm .github/workflows/zz-org-convergence-20260828.yml tools/org_converge_20260828.py
+          git add reports/org-convergence-20260828.json reports/org-convergence-20260828.md
+          if [ -f reports/org-health-refresh-status.txt ]; then
+            git add reports/org-health-refresh-status.txt
+          fi
+          if [ -f static/data.json ]; then
+            git add static/data.json
+          fi
+          git diff --cached --check
+          git config user.name 'Lutar, Stephen P.'
+          git config user.email 'stephenlutar2@gmail.com'
+          git commit \
+            -m 'chore(ops): record native organization convergence' \
+            -m 'Record the repository-wide GitHub Actions recovery pass, Hugging Face estate alignment, public-domain readback, and the refreshed fail-closed public snapshot. Remove the bounded executor after use; no Replit dependency is introduced.' \
+            -m 'Signed-off-by: Lutar, Stephen P. <stephenlutar2@gmail.com>'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
