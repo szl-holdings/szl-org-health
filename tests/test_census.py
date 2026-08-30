@@ -5,7 +5,11 @@ import urllib.parse
 from unittest import mock
 
 from census.common import next_link
-from census.github import aggregate_workflow_runs, classify_repo
+from census.github import (
+    _repository_visibility,
+    aggregate_workflow_runs,
+    classify_repo,
+)
 from census.huggingface import (
     _full_bucket,
     _full_kernel,
@@ -70,6 +74,27 @@ class ClassificationTests(unittest.TestCase):
 
     def test_unknown_role_is_not_guessed(self):
         self.assertEqual(classify_repo({"name": "new-unknown-repo"}), "unclassified")
+
+    def test_repository_visibility_never_defaults_missing_evidence_to_public(self):
+        self.assertEqual(_repository_visibility({}), "unknown")
+        self.assertEqual(_repository_visibility({"private": None}), "unknown")
+        self.assertEqual(_repository_visibility({"private": False}), "public")
+        self.assertEqual(_repository_visibility({"private": True}), "private")
+        self.assertEqual(_repository_visibility({"visibility": "public"}), "public")
+        self.assertEqual(
+            _repository_visibility({"visibility": "internal", "private": True}),
+            "internal",
+        )
+
+    def test_repository_visibility_fails_closed_on_contradictory_fields(self):
+        self.assertEqual(
+            _repository_visibility({"visibility": "public", "private": True}),
+            "unknown",
+        )
+        self.assertEqual(
+            _repository_visibility({"visibility": "private", "private": False}),
+            "unknown",
+        )
 
 
 class HuggingFaceNormalizationTests(unittest.TestCase):
