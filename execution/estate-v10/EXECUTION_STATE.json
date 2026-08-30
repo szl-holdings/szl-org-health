@@ -1,0 +1,131 @@
+{
+  "control_authority": "szl-holdings/szl-org-health",
+  "destructive_actions": {
+    "datasets_deleted": [],
+    "models_deleted": [],
+    "notes": "No destructive action is admitted until migration, parity, successor, readback and rollback evidence pass.",
+    "repositories_archived_this_program": [],
+    "spaces_deleted": []
+  },
+  "doctrine": {
+    "archive_before_parity": false,
+    "commercial_product": "a11oy",
+    "controller_mutation_authority": false,
+    "force_merge": false,
+    "protected_prs_only": true,
+    "unsupported_model_promotion": false
+  },
+  "execution_started_at": "2026-08-30T12:00:00-04:00",
+  "gates": [
+    {
+      "id": "G0",
+      "name": "Live truth and admission freeze",
+      "status": "IN_PROGRESS"
+    },
+    {
+      "id": "G1",
+      "name": "Green protected delivery",
+      "status": "IN_PROGRESS"
+    },
+    {
+      "id": "G2",
+      "name": "Repository convergence",
+      "status": "BLOCKED_BY_G0_G1"
+    },
+    {
+      "id": "G3",
+      "name": "Model qualification",
+      "status": "BLOCKED_BY_G0_G1_G2"
+    },
+    {
+      "id": "G4",
+      "name": "Kernel qualification",
+      "status": "BLOCKED_BY_G0_G1_G2"
+    },
+    {
+      "id": "G5",
+      "name": "CPU/GPU execution",
+      "status": "BLOCKED_BY_G3_G4"
+    },
+    {
+      "id": "G6",
+      "name": "Runtime production readiness",
+      "status": "BLOCKED_BY_G1_G3_G4"
+    },
+    {
+      "id": "G7",
+      "name": "Investor diligence",
+      "status": "IN_PROGRESS_PRIVATE_EVIDENCE_REQUIRED"
+    }
+  ],
+  "live_blockers": [
+    {
+      "id": "BLK-A11OY-1517",
+      "reason": "One-file security pin inherits red Tests baseline; merge API rejected protected red head.",
+      "required_next": "Land dedicated baseline repair PR, rerun exact-head required checks, then update and merge.",
+      "status": "BLOCKED_REQUIRED_CHECKS",
+      "target": "szl-holdings/a11oy#1517"
+    },
+    {
+      "id": "BLK-A11OY-BASELINE",
+      "reason": "Missing Khipu/investor/estate routes, command-bar wiring, IA/deep-link/empty-state contracts and truthful runtime copy.",
+      "required_next": "Restore reviewed source contracts, preserve later Lean-count fix, run complete CI.",
+      "status": "ACTIVE_REPAIR",
+      "target": "szl-holdings/a11oy@main"
+    },
+    {
+      "id": "BLK-HF-WRITE",
+      "reason": "This session has GitHub write authority but no Hugging Face mutation connector.",
+      "required_next": "Use existing protected GitHub publication workflow with configured token, or connect authenticated HF write transport; never expose token.",
+      "status": "BLOCKED_NO_AUTHENTICATED_WRITE_TRANSPORT",
+      "target": "huggingface.co/SZLHOLDINGS"
+    }
+  ],
+  "mutation_ledger": [
+    {
+      "branch": "codex/estate-v10-execution-20260830",
+      "evidence": "This branch contains the program, state ledger, validator and CI workflow.",
+      "id": "MUT-0001",
+      "operation": "INSTALL_CONTROL_PLANE",
+      "status": "IN_PROGRESS",
+      "target": "szl-holdings/szl-org-health"
+    }
+  ],
+  "program": "SZL Estate v10",
+  "schema_version": "1.0",
+  "seed_audit_date": "2026-08-29",
+  "seed_counts": {
+    "github_active_public": 59,
+    "github_archived": 34,
+    "github_private": 5,
+    "github_repositories": 98,
+    "github_target_keep_active_public": 20,
+    "github_target_migrate_then_archive": 39,
+    "hf_buckets": 1,
+    "hf_collections": 18,
+    "hf_datasets": 28,
+    "hf_kernels": 14,
+    "hf_models": 43,
+    "hf_spaces": 7
+  },
+  "status": "IN_PROGRESS",
+  "target_architecture": {
+    "commercial_product": "a11oy",
+    "evidence_authority": "szl-lake",
+    "hf_collection_target": 5,
+    "kernel_authority": "szl-kernels",
+    "model_authority": "szl-forge",
+    "private_mutation_authority": "szl-org-health",
+    "product_foundation": "platform",
+    "proof_front": "a11oy-net",
+    "public_repo_target": 20,
+    "vertical_packages": [
+      "terra",
+      "aegis/immune",
+      "puriq-markets/szl-quant",
+      "counsel",
+      "vessels/killinchu",
+      "lyte"
+    ]
+  }
+}
