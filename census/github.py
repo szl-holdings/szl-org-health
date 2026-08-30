@@ -107,6 +107,23 @@ def gh_paginate(
     )
 
 
+def _repository_visibility(repo: dict[str, Any]) -> str:
+    """Return explicit or derived visibility; missing contradictions stay unknown."""
+    explicit = repo.get("visibility")
+    if explicit not in {"public", "private", "internal"}:
+        explicit = None
+
+    private = repo.get("private")
+    derived = "private" if private is True else "public" if private is False else None
+    if explicit is None:
+        return derived or "unknown"
+    if derived is None:
+        return explicit
+    if explicit == "public":
+        return explicit if derived == "public" else "unknown"
+    return explicit if derived == "private" else "unknown"
+
+
 def classify_repo(repo: dict[str, Any]) -> str:
     """Preliminary deterministic classification; unknown roles stay unclassified."""
     name = str(repo.get("name") or "")
@@ -543,8 +560,7 @@ def _repo_census(
     return name, {
         **aggregate,
         "classification": classify_repo(repo),
-        "visibility": repo.get("visibility")
-        or ("private" if repo.get("private") else "public"),
+        "visibility": _repository_visibility(repo),
         "archived": archived,
         "fork": bool(repo.get("fork")),
         "default_branch": default,

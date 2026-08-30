@@ -39,6 +39,7 @@ The governed operating model is intentionally `solo-maintainer`. It does not cla
 - a cryptographically verified signed commit;
 - protected exact-head CI and resolved review threads;
 - least-privilege workflow permissions and credentials;
+- provider-fixed, schedule-only execution for jobs that receive organization secrets;
 - immutable provenance and artifact digests;
 - an auditable, fail-closed merge receipt.
 
