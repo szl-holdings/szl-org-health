@@ -2,9 +2,18 @@ import hashlib
 import json
 import unittest
 import urllib.parse
+import urllib.error
+import urllib.request
 from unittest import mock
 
-from census.common import next_link
+from census.common import (
+    _CredentialSafeRedirectHandler,
+    _response_header_map,
+    next_link,
+    paginate_json,
+    request_bytes,
+    request_json,
+)
 from census.github import (
     _repository_visibility,
     aggregate_workflow_runs,
@@ -66,6 +75,75 @@ class WorkflowAggregationTests(unittest.TestCase):
         result = aggregate_workflow_runs(runs)
         self.assertEqual(result["ci"], "success")
         self.assertEqual(result["failing_workflows"], [])
+
+    def test_only_coherent_terminal_green_conclusions_are_success(self):
+        incoherent = [
+            ("completed", None),
+            ("completed", "future_conclusion"),
+            ("queued", "success"),
+            (None, "success"),
+        ]
+        for status, conclusion in incoherent:
+            with self.subTest(status=status, conclusion=conclusion):
+                result = aggregate_workflow_runs(
+                    [
+                        {
+                            "workflow_id": 1,
+                            "name": "ambiguous",
+                            "created_at": "2026-08-31T00:00:00Z",
+                            "status": status,
+                            "conclusion": conclusion,
+                        }
+                    ]
+                )
+                self.assertEqual(result["ci"], "unknown")
+                self.assertEqual(result["unknown_workflows"], ["ambiguous"])
+
+    def test_stale_is_failure_and_failure_dominates_unknown_and_pending(self):
+        runs = [
+            {
+                "workflow_id": 1,
+                "name": "stale-run",
+                "status": "completed",
+                "conclusion": "stale",
+            },
+            {
+                "workflow_id": 2,
+                "name": "mystery",
+                "status": "completed",
+                "conclusion": None,
+            },
+            {
+                "workflow_id": 3,
+                "name": "waiting",
+                "status": "queued",
+                "conclusion": None,
+            },
+        ]
+        result = aggregate_workflow_runs(runs)
+        self.assertEqual(result["ci"], "failure")
+        self.assertEqual(result["failing_workflows"], ["stale-run"])
+        self.assertEqual(result["unknown_workflows"], ["mystery"])
+        self.assertEqual(result["pending_workflows"], ["waiting"])
+
+    def test_unknown_dominates_pending_without_failure(self):
+        result = aggregate_workflow_runs(
+            [
+                {
+                    "workflow_id": 1,
+                    "name": "unknown",
+                    "status": "completed",
+                    "conclusion": None,
+                },
+                {
+                    "workflow_id": 2,
+                    "name": "pending",
+                    "status": "in_progress",
+                    "conclusion": None,
+                },
+            ]
+        )
+        self.assertEqual(result["ci"], "unknown")
 
 
 class ClassificationTests(unittest.TestCase):
@@ -432,7 +510,270 @@ class PaginationTests(unittest.TestCase):
             '<https://example.test?page=4>; rel="last"'
         )
         self.assertEqual(next_link(value), "https://example.test?page=2")
+        self.assertEqual(
+            next_link('<https://example.test?page=3>; rel=next'),
+            "https://example.test?page=3",
+        )
         self.assertIsNone(next_link(None))
+
+    @mock.patch("census.common.request_json")
+    def test_quoted_link_parameters_cannot_inject_a_next_relation(
+        self, request_json
+    ):
+        request_json.return_value = (
+            [{"id": 1}],
+            {
+                "link": (
+                    '<https://api.github.com/items?page=2>; '
+                    'title="ordinary; rel=next ; text"'
+                )
+            },
+            None,
+        )
+
+        result, error = paginate_json(
+            "https://api.github.com/items?page=1",
+            headers={},
+            timeout=1.0,
+            retries=0,
+        )
+
+        self.assertIsNone(error)
+        self.assertEqual(result, [{"id": 1}])
+        request_json.assert_called_once()
+
+    def test_real_rel_after_quoted_link_parameter_is_observed(self):
+        value = (
+            '<https://api.github.com/items?page=2>; '
+            'title="ordinary; text"; rel="next"'
+        )
+        self.assertEqual(
+            next_link(value),
+            "https://api.github.com/items?page=2",
+        )
+
+    @mock.patch("census.common.request_json")
+    def test_malformed_or_ambiguous_link_header_fails_closed(self, request_json):
+        for link in (
+            '<https://api.github.com/items?page=2>; rel="next"; rel="last"',
+            '<https://api.github.com/items?page=2; rel="next"',
+            'https://api.github.com/items?page=2; rel="next"',
+            '<https://api.github.com/items?page=2>; title="a"; title="b"',
+            '<https://api.github.com/items?page=2>; rel',
+            '<https://api.github.com/items?page=2>; rel=""',
+            '<https://api.github.com/items?page=2>; rel="next,last"',
+        ):
+            with self.subTest(link=link):
+                request_json.return_value = ([{"id": 1}], {"link": link}, None)
+                result, error = paginate_json(
+                    "https://api.github.com/items?page=1",
+                    headers={},
+                    timeout=1.0,
+                    retries=0,
+                )
+                self.assertIsNone(result)
+                self.assertIn("Link", error)
+
+    @mock.patch("census.common.request_json")
+    def test_pagination_aggregates_same_origin_exact_path_pages(self, request_json):
+        request_json.side_effect = [
+            (
+                [{"id": 1}],
+                {
+                    "link": (
+                        '<https://api.github.com/items?per_page=100&page=2>; '
+                        'rel="next"'
+                    )
+                },
+                None,
+            ),
+            ([{"id": 2}], {}, None),
+        ]
+
+        result, error = paginate_json(
+            "https://api.github.com/items?per_page=100",
+            headers={"Authorization": "Bearer opaque"},
+            timeout=1.0,
+            retries=0,
+        )
+
+        self.assertIsNone(error)
+        self.assertEqual(result, [{"id": 1}, {"id": 2}])
+        self.assertEqual(request_json.call_count, 2)
+        self.assertTrue(
+            all(
+                call.kwargs["redirect_path"] == "/items"
+                for call in request_json.call_args_list
+            )
+        )
+
+    @mock.patch("census.common.request_json")
+    def test_pagination_rejects_cross_origin_and_path_changes(self, request_json):
+        for target, expected in (
+            ("https://evil.example/items?page=2", "origin changed"),
+            ("https://api.github.com/other?page=2", "path changed"),
+        ):
+            with self.subTest(target=target):
+                request_json.reset_mock()
+                request_json.return_value = (
+                    [{"id": 1}],
+                    {"link": f'<{target}>; rel="next"'},
+                    None,
+                )
+                result, error = paginate_json(
+                    "https://api.github.com/items?page=1",
+                    headers={},
+                    timeout=1.0,
+                    retries=0,
+                )
+                self.assertIsNone(result)
+                self.assertIn(expected, error)
+
+    @mock.patch("census.common.request_json")
+    def test_pagination_rejects_cycles_nonobjects_and_cap_exhaustion(
+        self, request_json
+    ):
+        request_json.return_value = (
+            [{"id": 1}],
+            {"link": '<https://api.github.com/items?page=1>; rel="next"'},
+            None,
+        )
+        result, error = paginate_json(
+            "https://api.github.com/items?page=1",
+            headers={},
+            timeout=1.0,
+            retries=0,
+        )
+        self.assertIsNone(result)
+        self.assertIn("cycle", error)
+
+        request_json.return_value = ([{"id": 1}, "bad"], {}, None)
+        result, error = paginate_json(
+            "https://api.github.com/items",
+            headers={},
+            timeout=1.0,
+            retries=0,
+        )
+        self.assertIsNone(result)
+        self.assertIn("non-object", error)
+
+        request_json.return_value = (
+            [{"id": 1}],
+            {"link": '<https://api.github.com/items?page=2>; rel="next"'},
+            None,
+        )
+        result, error = paginate_json(
+            "https://api.github.com/items?page=1",
+            headers={},
+            timeout=1.0,
+            retries=0,
+            max_pages=1,
+        )
+        self.assertIsNone(result)
+        self.assertIn("exceeded 1 pages", error)
+
+    def test_cross_origin_redirect_strips_credentials(self):
+        handler = _CredentialSafeRedirectHandler()
+        request = urllib.request.Request(
+            "https://api.github.com/items",
+            headers={"Authorization": "Bearer secret", "Cookie": "session=secret"},
+        )
+
+        redirected = handler.redirect_request(
+            request,
+            None,
+            302,
+            "Found",
+            {},
+            "https://objects.githubusercontent.com/items",
+        )
+
+        self.assertFalse(redirected.has_header("Authorization"))
+        self.assertFalse(redirected.has_header("Cookie"))
+
+    def test_locked_redirect_rejects_origin_path_downgrade_userinfo_and_port(self):
+        handler = _CredentialSafeRedirectHandler(
+            locked_origin=("https", "api.github.com", 443),
+            locked_path="/items",
+        )
+        request = urllib.request.Request("https://api.github.com/items")
+        for target in (
+            "https://evil.example/items",
+            "https://api.github.com/other",
+            "http://api.github.com/items",
+            "https://user@api.github.com/items",
+            "https://api.github.com:8443/items",
+            "https://api.github.com/items bad",
+        ):
+            with self.subTest(target=target), self.assertRaises(urllib.error.URLError):
+                handler.redirect_request(request, None, 302, "Found", {}, target)
+
+    @mock.patch("census.common.urllib.request.build_opener")
+    def test_network_errors_do_not_reflect_secret_or_url(self, build_opener):
+        build_opener.return_value.open.side_effect = RuntimeError(
+            "Bearer super-secret https://api.github.com/items?token=secret"
+        )
+
+        body, headers, error = request_bytes(
+            "https://api.github.com/items?token=secret",
+            headers={"Authorization": "Bearer super-secret"},
+            retries=0,
+        )
+
+        self.assertIsNone(body)
+        self.assertEqual(headers, {})
+        self.assertEqual(error, "RuntimeError")
+
+    @mock.patch("census.common.urllib.request.build_opener")
+    def test_success_body_read_is_bounded(self, build_opener):
+        response = mock.MagicMock()
+        response.headers.items.return_value = []
+        response.read.return_value = b"12345"
+        build_opener.return_value.open.return_value.__enter__.return_value = response
+
+        body, headers, error = request_bytes(
+            "https://api.github.com/items",
+            retries=0,
+            max_bytes=4,
+        )
+
+        self.assertIsNone(body)
+        self.assertEqual(headers, {})
+        self.assertEqual(error, "response-body-limit-exceeded")
+        response.read.assert_called_once_with(5)
+
+    def test_repeated_link_headers_are_preserved(self):
+        headers = mock.MagicMock()
+        headers.items.return_value = [
+            ("Link", '<https://api.github.com/items?page=2>; rel="next"'),
+            ("LINK", '<https://api.github.com/items?page=3>; rel="last"'),
+        ]
+
+        result = _response_header_map(headers)
+
+        self.assertIn('page=2>; rel="next"', result["link"])
+        self.assertIn('page=3>; rel="last"', result["link"])
+
+    @mock.patch("census.common.request_bytes")
+    def test_json_parser_rejects_ambiguous_or_resource_hostile_input(
+        self, request_bytes_mock
+    ):
+        cases = (
+            b'{"key":1,"key":2}',
+            b'{"number":NaN}',
+            b'{"number":Infinity}',
+            b"[" * 2_000 + b"0" + b"]" * 2_000,
+        )
+        for payload in cases:
+            with self.subTest(payload=payload[:24]):
+                request_bytes_mock.return_value = (payload, {}, None)
+                value, headers, error = request_json(
+                    "https://api.github.com/items",
+                    retries=0,
+                )
+                self.assertIsNone(value)
+                self.assertEqual(headers, {})
+                self.assertTrue(error.startswith("invalid-json:"), error)
 
 
 if __name__ == "__main__":

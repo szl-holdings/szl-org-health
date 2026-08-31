@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import concurrent.futures as cf
+import json
+import math
 import urllib.parse
 from typing import Any
 
@@ -59,9 +61,12 @@ FAILURE_CONCLUSIONS = {
     "action_required",
     "cancelled",
     "failure",
+    "stale",
     "startup_failure",
     "timed_out",
 }
+GREEN_CONCLUSIONS = {"neutral", "skipped", "success"}
+PENDING_STATUSES = {"in_progress", "pending", "queued", "requested", "waiting"}
 RULESET_PAGE_SIZE = 100
 ENFORCING_BRANCH_RULE_TYPES = frozenset(
     {
@@ -74,6 +79,21 @@ ENFORCING_BRANCH_RULE_TYPES = frozenset(
         "update",
     }
 )
+PARAMETERIZED_BRANCH_RULE_TYPES = frozenset(
+    {
+        "code_scanning",
+        "pull_request",
+        "required_deployments",
+        "required_status_checks",
+        "workflows",
+    }
+)
+REQUIRED_PARAMETER_LISTS = {
+    "code_scanning": "code_scanning_tools",
+    "required_deployments": "required_deployment_environments",
+    "required_status_checks": "required_status_checks",
+    "workflows": "workflows",
+}
 
 
 def github_headers() -> dict[str, str]:
@@ -170,24 +190,44 @@ def aggregate_workflow_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
             "workflow_count": 0,
             "failing_workflows": [],
             "pending_workflows": [],
+            "unknown_workflows": [],
         }
 
-    failing = sorted(
-        str(run.get("name") or key)
-        for key, run in latest.items()
-        if run.get("conclusion") in FAILURE_CONCLUSIONS
+    failing: list[str] = []
+    pending: list[str] = []
+    unknown: list[str] = []
+    for key, run in latest.items():
+        name = str(run.get("name") or key)
+        status = run.get("status")
+        conclusion = run.get("conclusion")
+        if status == "completed" and conclusion in FAILURE_CONCLUSIONS:
+            failing.append(name)
+        elif status == "completed" and conclusion in GREEN_CONCLUSIONS:
+            continue
+        elif status in PENDING_STATUSES and conclusion is None:
+            pending.append(name)
+        else:
+            # Missing, future, decorated, or status/conclusion-incoherent values
+            # are not evidence of a successful terminal workflow.
+            unknown.append(name)
+    failing.sort()
+    pending.sort()
+    unknown.sort()
+    ci = (
+        "failure"
+        if failing
+        else "unknown"
+        if unknown
+        else "pending"
+        if pending
+        else "success"
     )
-    pending = sorted(
-        str(run.get("name") or key)
-        for key, run in latest.items()
-        if not run.get("conclusion") and run.get("status") != "completed"
-    )
-    ci = "failure" if failing else "pending" if pending else "success"
     return {
         "ci": ci,
         "workflow_count": len(latest),
         "failing_workflows": failing,
         "pending_workflows": pending,
+        "unknown_workflows": unknown,
     }
 
 
@@ -213,11 +253,17 @@ def _branch_governance_result(
 
 
 def _classic_protection_observed(protection: Any) -> bool:
-    """Retain the collector's existing classic-protection acceptance contract."""
-    return isinstance(protection, dict) and (
-        "enforce_admins" in protection
-        or "required_pull_request_reviews" in protection
-    )
+    """Accept classic protection only when administrators cannot bypass it."""
+    if not isinstance(protection, dict):
+        return False
+    enforce_admins = protection.get("enforce_admins")
+    if not isinstance(enforce_admins, dict) or enforce_admins.get("enabled") is not True:
+        return False
+    for escape_hatch in ("allow_force_pushes", "allow_deletions"):
+        setting = protection.get(escape_hatch)
+        if isinstance(setting, dict) and setting.get("enabled") is True:
+            return False
+    return True
 
 
 def _positive_ruleset_id(value: Any) -> int | None:
@@ -233,14 +279,98 @@ def _ruleset_source_identity(
 ) -> tuple[str, str] | None:
     if not isinstance(source_type, str) or not isinstance(source, str):
         return None
-    normalized_type = source_type.strip().casefold()
-    normalized_source = source.strip().casefold()
-    if normalized_type == "organization" and normalized_source == ORG.casefold():
-        return normalized_type, normalized_source
-    expected_repo = f"{ORG}/{repo_name}".casefold()
-    if normalized_type == "repository" and normalized_source == expected_repo:
-        return normalized_type, normalized_source
+    if source_type == "Organization" and source == ORG:
+        return "organization", source
+    expected_repo = f"{ORG}/{repo_name}"
+    if source_type == "Repository" and source == expected_repo:
+        return "repository", source
     return None
+
+
+def _exact_rule_type(value: Any) -> str | None:
+    """Accept GitHub's exact discriminator, never a decorated equivalent."""
+    if not isinstance(value, str) or not value:
+        return None
+    if value != value.strip() or not all(
+        char.isascii() and (char.islower() or char.isdigit() or char == "_")
+        for char in value
+    ):
+        return None
+    return value
+
+
+def _strict_json_value(value: Any, *, depth: int = 0) -> bool:
+    """Validate the exact JSON data model without Python equality coercions."""
+    if depth > 128:
+        return False
+    if value is None or isinstance(value, (str, bool, int)):
+        return True
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, list):
+        return all(_strict_json_value(item, depth=depth + 1) for item in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str)
+            and _strict_json_value(item, depth=depth + 1)
+            for key, item in value.items()
+        )
+    return False
+
+
+def _rule_parameter_signature(
+    rule_type: str,
+    rule: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    """Return one canonical signature for a semantically enforcing rule body."""
+    has_parameters = "parameters" in rule
+    parameters = rule.get("parameters")
+    if rule_type in PARAMETERIZED_BRANCH_RULE_TYPES and (
+        not has_parameters or not isinstance(parameters, dict)
+    ):
+        return None, f"{rule_type} rule parameters are missing or malformed"
+    if not has_parameters:
+        parameters = None
+    if not _strict_json_value(parameters):
+        return None, f"{rule_type} rule parameters are not strict JSON"
+
+    required_list = REQUIRED_PARAMETER_LISTS.get(rule_type)
+    if required_list is not None:
+        entries = parameters.get(required_list) if isinstance(parameters, dict) else None
+        if not isinstance(entries, list) or not entries:
+            return None, f"{rule_type} rule has no enforced {required_list}"
+        if rule_type == "required_deployments":
+            if any(not isinstance(item, str) or not item for item in entries):
+                return None, f"{rule_type} rule contains a malformed requirement"
+        elif any(not isinstance(item, dict) or not item for item in entries):
+            return None, f"{rule_type} rule contains a malformed requirement"
+        elif rule_type == "required_status_checks" and any(
+            not isinstance(item.get("context"), str) or not item["context"]
+            for item in entries
+        ):
+            return None, f"{rule_type} rule contains a malformed requirement"
+        elif rule_type == "workflows" and any(
+            not isinstance(item.get("path"), str) or not item["path"]
+            for item in entries
+        ):
+            return None, f"{rule_type} rule contains a malformed requirement"
+        elif rule_type == "code_scanning" and any(
+            not isinstance(item.get("tool"), str) or not item["tool"]
+            for item in entries
+        ):
+            return None, f"{rule_type} rule contains a malformed requirement"
+
+    try:
+        signature = json.dumps(
+            parameters,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (RecursionError, TypeError, ValueError):
+        return None, f"{rule_type} rule parameters cannot be canonicalized"
+    return signature, None
 
 
 def _failed_branch_governance(
@@ -287,10 +417,11 @@ def _branch_governance(
             inherited=False,
         )
 
-    effective, effective_error = gh(
-        f"{repo_path}/rules/branches/{encoded_branch}",
-        timeout=request_timeout,
-        retries=retries,
+    effective, effective_error = gh_paginate(
+        f"{repo_path}/rules/branches/{encoded_branch}?per_page={RULESET_PAGE_SIZE}",
+        request_timeout,
+        retries,
+        max_pages=MAX_PAGES,
     )
     if effective_error is not None or not isinstance(effective, list):
         reason = effective_error or "effective branch rules response is malformed"
@@ -299,11 +430,12 @@ def _branch_governance(
             f"classic protection: {classic_error or 'not observed'}"
         )
 
-    rulesets, rulesets_error = gh(
+    rulesets, rulesets_error = gh_paginate(
         f"{repo_path}/rulesets?includes_parents=true&targets=branch"
         f"&per_page={RULESET_PAGE_SIZE}",
-        timeout=request_timeout,
-        retries=retries,
+        request_timeout,
+        retries,
+        max_pages=MAX_PAGES,
     )
     if rulesets_error is not None or not isinstance(rulesets, list):
         reason = rulesets_error or "ruleset inventory response is malformed"
@@ -311,11 +443,6 @@ def _branch_governance(
             f"inherited ruleset inventory unavailable: {reason}; "
             f"classic protection: {classic_error or 'not observed'}"
         )
-    if len(rulesets) >= RULESET_PAGE_SIZE:
-        return _failed_branch_governance(
-            "inherited ruleset inventory may be truncated at the page limit"
-        )
-
     summaries: dict[int, dict[str, Any]] = {}
     summary_sources: dict[int, tuple[str, str]] = {}
     for summary in rulesets:
@@ -344,14 +471,14 @@ def _branch_governance(
             summary_sources[ruleset_id] = source_identity
 
     effective_types: set[str] = set()
-    candidate_types: dict[int, set[str]] = {}
+    candidate_parameters: dict[int, dict[str, str]] = {}
     candidate_sources: dict[int, tuple[str, str]] = {}
     for rule in effective:
-        if not isinstance(rule, dict) or not isinstance(rule.get("type"), str):
+        if not isinstance(rule, dict):
             return _failed_branch_governance(
                 "effective branch rules contain a malformed entry"
             )
-        rule_type = rule["type"].strip()
+        rule_type = _exact_rule_type(rule.get("type"))
         ruleset_id = _positive_ruleset_id(rule.get("ruleset_id"))
         source_identity = _ruleset_source_identity(
             rule.get("ruleset_source_type"),
@@ -365,17 +492,33 @@ def _branch_governance(
         effective_types.add(rule_type)
         if rule_type not in ENFORCING_BRANCH_RULE_TYPES:
             continue
+        parameter_signature, parameter_error = _rule_parameter_signature(
+            rule_type, rule
+        )
+        if parameter_error is not None or parameter_signature is None:
+            return _failed_branch_governance(
+                f"effective branch rule is not enforcing: {parameter_error}",
+                rule_types=effective_types,
+                ruleset_ids=set(candidate_parameters),
+            )
         prior_source = candidate_sources.get(ruleset_id)
         if prior_source is not None and prior_source != source_identity:
             return _failed_branch_governance(
                 "effective branch rules disagree on ruleset source identity",
                 rule_types=effective_types,
-                ruleset_ids=set(candidate_types),
+                ruleset_ids=set(candidate_parameters),
             )
         candidate_sources[ruleset_id] = source_identity
-        candidate_types.setdefault(ruleset_id, set()).add(rule_type)
+        rules = candidate_parameters.setdefault(ruleset_id, {})
+        if rule_type in rules:
+            return _failed_branch_governance(
+                "effective branch rules contain a duplicate rule type",
+                rule_types=effective_types,
+                ruleset_ids=set(candidate_parameters),
+            )
+        rules[rule_type] = parameter_signature
 
-    if not candidate_types:
+    if not candidate_parameters:
         inactive = sorted(
             ruleset_id
             for ruleset_id, summary in summaries.items()
@@ -387,7 +530,7 @@ def _branch_governance(
             rule_types=effective_types,
         )
 
-    candidate_ids = set(candidate_types)
+    candidate_ids = set(candidate_parameters)
     inherited = any(
         source_identity[0] == "organization"
         for source_identity in candidate_sources.values()
@@ -458,29 +601,62 @@ def _branch_governance(
                 inherited=inherited,
             )
 
-        detailed_types: set[str] = set()
+        detailed_parameters: dict[str, str] = {}
         for detailed_rule in detail_rules:
-            if (
-                not isinstance(detailed_rule, dict)
-                or not isinstance(detailed_rule.get("type"), str)
-                or not detailed_rule["type"].strip()
-            ):
+            if not isinstance(detailed_rule, dict):
                 return _failed_branch_governance(
                     f"ruleset {ruleset_id} contains a malformed rule",
                     rule_types=effective_types,
                     ruleset_ids=candidate_ids,
                     inherited=inherited,
                 )
-            detailed_types.add(detailed_rule["type"].strip())
-        if not candidate_types[ruleset_id].issubset(detailed_types):
+            detailed_type = _exact_rule_type(detailed_rule.get("type"))
+            if detailed_type is None:
+                return _failed_branch_governance(
+                    f"ruleset {ruleset_id} contains a malformed rule",
+                    rule_types=effective_types,
+                    ruleset_ids=candidate_ids,
+                    inherited=inherited,
+                )
+            parameter_signature, parameter_error = _rule_parameter_signature(
+                detailed_type, detailed_rule
+            )
+            if parameter_error is not None or parameter_signature is None:
+                return _failed_branch_governance(
+                    f"ruleset {ruleset_id} contains a non-enforcing rule: "
+                    f"{parameter_error}",
+                    rule_types=effective_types,
+                    ruleset_ids=candidate_ids,
+                    inherited=inherited,
+                )
+            if detailed_type in detailed_parameters:
+                return _failed_branch_governance(
+                    f"ruleset {ruleset_id} contains a duplicate rule type",
+                    rule_types=effective_types,
+                    ruleset_ids=candidate_ids,
+                    inherited=inherited,
+                )
+            detailed_parameters[detailed_type] = parameter_signature
+        if not set(candidate_parameters[ruleset_id]).issubset(detailed_parameters):
             return _failed_branch_governance(
                 f"ruleset {ruleset_id} detail omits effective governance rules",
                 rule_types=effective_types,
                 ruleset_ids=candidate_ids,
                 inherited=inherited,
             )
+        for rule_type, signature in candidate_parameters[ruleset_id].items():
+            if detailed_parameters[rule_type] != signature:
+                return _failed_branch_governance(
+                    f"ruleset {ruleset_id} detail parameters do not match "
+                    f"effective {rule_type} rule",
+                    rule_types=effective_types,
+                    ruleset_ids=candidate_ids,
+                    inherited=inherited,
+                )
 
-    governing_types = set().union(*candidate_types.values())
+    governing_types = set().union(
+        *(set(rules) for rules in candidate_parameters.values())
+    )
     return _branch_governance_result(
         protected=True,
         state="PROTECTED",
@@ -508,6 +684,7 @@ def _repo_census(
             "workflow_count": 0,
             "failing_workflows": [],
             "pending_workflows": [],
+            "unknown_workflows": [],
             "error": None,
             "ci_scope": "archived",
             "run_window_observed": 0,
@@ -537,6 +714,7 @@ def _repo_census(
                 "workflow_count": None,
                 "failing_workflows": [],
                 "pending_workflows": [],
+                "unknown_workflows": [],
                 "error": run_error or "workflow runs unavailable",
                 "ci_scope": "unavailable",
                 "run_window_observed": None,
@@ -681,6 +859,9 @@ def collect_github(
             "archived": sum(1 for repo in repos.values() if repo["archived"]),
             "ci_green": sum(1 for repo in repos.values() if repo["ci"] == "success"),
             "ci_red": sum(1 for repo in repos.values() if repo["ci"] == "failure"),
+            "ci_pending": sum(
+                1 for repo in repos.values() if repo["ci"] == "pending"
+            ),
             "ci_unknown": sum(1 for repo in repos.values() if repo["ci"] == "unknown"),
             "classifications": classifications,
         },
