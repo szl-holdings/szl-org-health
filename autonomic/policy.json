@@ -1,0 +1,55 @@
+{
+  "allowed_hf_repositories": [
+    "SZLHOLDINGS/a11oy",
+    "SZLHOLDINGS/killinchu",
+    "SZLHOLDINGS/lyte",
+    "SZLHOLDINGS/finance",
+    "SZLHOLDINGS/terra",
+    "SZLHOLDINGS/counsel"
+  ],
+  "controller_branch": "main",
+  "controller_repository": "szl-holdings/szl-org-health",
+  "probe": {
+    "failure_threshold": 2,
+    "interval_minutes": 5,
+    "max_response_bytes": 262144,
+    "parallelism": 12,
+    "timeout_seconds": 8
+  },
+  "recovery": {
+    "cooldown_minutes": 30,
+    "enabled": true,
+    "max_actions_per_cycle": 1,
+    "max_attempts_before_incident": 3,
+    "paused_stages": [
+      "PAUSED",
+      "SLEEPING",
+      "STOPPED"
+    ],
+    "terminal_stages": [
+      "RUNTIME_ERROR",
+      "BUILD_ERROR",
+      "CONFIG_ERROR",
+      "SYSTEM_FAILURE"
+    ],
+    "transitional_stages": [
+      "BUILDING",
+      "STARTING",
+      "RESTARTING",
+      "RUNNING_BUILDING",
+      "APP_STARTING",
+      "SPACE_STARTING"
+    ]
+  },
+  "schema": "szl.autonomic-sre-policy/v1",
+  "source_manifest": {
+    "branch": "main",
+    "path": "governance/public-estate.v1.json",
+    "repository": "szl-holdings/a11oy",
+    "require_verified_commit": true
+  },
+  "state_issue": {
+    "heartbeat_minutes": 60,
+    "title": "[AUTONOMIC-SRE] Public estate state"
+  }
+}
