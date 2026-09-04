@@ -1,0 +1,75 @@
+name: Autonomic SRE contracts
+
+on:
+  pull_request:
+    paths:
+      - "autonomic/**"
+      - "tests/test_autonomic_controller.py"
+      - "tests/test_secret_workflow_boundary.py"
+      - "requirements-autonomic.lock"
+      - ".github/workflows/autonomic-sre.yml"
+      - ".github/workflows/autonomic-sre-contract.yml"
+      - ".github/workflows/ci.yml"
+      - "README.md"
+  push:
+    branches: [main]
+    paths:
+      - "autonomic/**"
+      - "tests/test_autonomic_controller.py"
+      - "tests/test_secret_workflow_boundary.py"
+      - "requirements-autonomic.lock"
+      - ".github/workflows/autonomic-sre.yml"
+      - ".github/workflows/autonomic-sre-contract.yml"
+      - ".github/workflows/ci.yml"
+      - "README.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autonomic-sre-contract-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Fail-closed autonomic contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact change revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Validate controller, policy, schedule authority, and state transitions
+        run: |
+          set -euo pipefail
+          python -m py_compile autonomic/*.py tests/test_autonomic_controller.py
+          python -m unittest \
+            tests.test_autonomic_controller \
+            tests.test_secret_workflow_boundary \
+            -v
+          python -m autonomic.controller \
+            --offline-contract-only \
+            --output reports/autonomic-sre-contract.json
+          git diff --check
+
+      - name: Upload contract receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: autonomic-sre-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/autonomic-sre-contract.json
+          if-no-files-found: error
+          retention-days: 90

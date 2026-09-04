@@ -75,11 +75,45 @@ python3 refresh_snapshot.py --stdout
 
 The snapshot refresh has a hard deadline, derives public output from the exact in-memory internal report, and replaces files atomically. If collection or projection cannot finish, it does not publish a partial file as a fresh complete census.
 
+## Autonomic SRE control plane
+
+`.github/workflows/autonomic-sre.yml` runs a single-flight controller every five
+minutes. It reads the public-estate manifest only from the cryptographically
+verified `szl-holdings/a11oy` default-branch tip, probes every declared required
+route from its fixed HTTPS origin, and persists the state machine in one private
+machine-managed issue.
+
+The states are `HEALTHY`, `SUSPECT`, `DEGRADED`, `RECOVERING`, and `INCIDENT`.
+Two consecutive availability failures are required before mutation. The
+controller then admits only one of three exact Hugging Face operations:
+`resume`, `soft-restart`, or `factory-restart`. One action is allowed per cycle,
+each surface has a 30-minute cooldown, and three failed recovery attempts
+terminalize to `INCIDENT` instead of creating a restart storm.
+
+Source drift is never treated as an availability restart. The controller records
+it as an incident because a runtime reboot cannot repair source identity. DNS,
+billing, hardware allocation, visibility, repository content, arbitrary shell,
+and asset deletion are outside this controller's authority.
+
+Each cycle emits a sanitized JSON receipt and SHA-256 artifact. Credential values
+are neither read back nor included in state, summaries, or artifacts.
+
+Offline contract check:
+
+```bash
+python -m autonomic.controller --offline-contract-only \
+  --output reports/autonomic-sre-contract.json
+```
+
+The workflow requires the existing `HF_TOKEN` secret for recovery. Without it,
+the controller remains fail-closed and records `HF_TOKEN_MISSING`; it never
+converts missing authority into a successful repair.
+
 ## Tests
 
 ```bash
 python -m unittest discover -s tests -v
-python -m py_compile app.py refresh_snapshot.py census/*.py
+python -m py_compile app.py refresh_snapshot.py census/*.py autonomic/*.py
 ```
 
 The regression suite verifies latest-per-workflow aggregation, fail-closed asset-class errors, strict Hugging Face identity and Space-host validation, model artifact and contract evidence, revision-bound operational-payload integrity, `FAIL > UNKNOWN > PASS` precedence, receipt non-disclosure, and public-projection canaries.
@@ -98,6 +132,8 @@ refresh_snapshot.py    atomic internal/public snapshot writer
 static/index.html       responsive, searchable dashboard
 static/data.json        timestamped public fallback projection
 governance/policy.json  solo-maintainer fail-closed control policy
+autonomic/               fixed-origin state machine and recovery policy
+requirements-autonomic.lock hash-locked Hugging Face control closure
 tests/                  collector, governance, receipt, and leak contracts
 Dockerfile              pinned container runtime
 ```
