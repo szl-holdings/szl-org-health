@@ -111,7 +111,10 @@ class SecretWorkflowBoundaryTests(unittest.TestCase):
                 workflow.name,
             )
 
-        self.assertEqual(secret_workflows, ["scheduled-estate-census.yml"])
+        self.assertEqual(
+            secret_workflows,
+            ["autonomic-sre.yml", "scheduled-estate-census.yml"],
+        )
 
 
 if __name__ == "__main__":
