@@ -3,6 +3,7 @@ name: Scheduled estate census
 on:
   schedule:
     - cron: "17 9 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -35,6 +36,16 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
+      - name: Mint short-lived organization reader
+        id: org-reader
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.QILLQAQ_CLIENT_ID }}
+          private-key: ${{ secrets.QILLQAQ_PRIVATE_KEY }}
+          owner: szl-holdings
+          permission-contents: read
+
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -47,8 +58,8 @@ jobs:
         id: collect
         continue-on-error: true
         env:
-          GITHUB_TOKEN: ${{ secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token }}
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.org-reader.outputs.token || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token }}
+          HF_TOKEN: ${{ secrets.HF_ORG_TOKEN || secrets.HF_WRITE_TOKEN || secrets.HF_TOKEN || secrets.HUGGINGFACE_TOKEN || secrets.HUGGING_FACE_HUB_TOKEN }}
           REFRESH_DEADLINE_S: "600"
         run: python -I -B refresh_snapshot.py
 
@@ -58,8 +69,8 @@ jobs:
         env:
           COLLECT_OUTCOME: ${{ steps.collect.outcome }}
           EXPECTED_GITHUB_REPOSITORIES_MINIMUM: "63"
-          HAS_CROSS_REPO_GITHUB_TOKEN: ${{ secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN != '' }}
-          HAS_HF_TOKEN: ${{ secrets.HF_TOKEN != '' }}
+          HAS_CROSS_REPO_GITHUB_TOKEN: ${{ steps.org-reader.outputs.token != '' || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN != '' }}
+          HAS_HF_TOKEN: ${{ secrets.HF_ORG_TOKEN != '' || secrets.HF_WRITE_TOKEN != '' || secrets.HF_TOKEN != '' || secrets.HUGGINGFACE_TOKEN != '' || secrets.HUGGING_FACE_HUB_TOKEN != '' }}
           RECEIPT_REPOSITORY: ${{ github.repository }}
           RECEIPT_RUN_ATTEMPT: ${{ github.run_attempt }}
           RECEIPT_RUN_ID: ${{ github.run_id }}
