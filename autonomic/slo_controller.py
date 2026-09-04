@@ -944,7 +944,12 @@ def summarize_window(
     minimum_coverage_percent: float,
 ) -> WindowResult:
     cutoff = now_epoch - minutes * 60
-    rows = [item for item in normalize_buckets(buckets) if item[0] >= cutoff]
+    bucket_span = BUCKET_MINUTES * 60
+    rows = [
+        item
+        for item in normalize_buckets(buckets)
+        if item[0] <= now_epoch and item[0] + bucket_span > cutoff
+    ]
     observed = sum(item[1] for item in rows)
     failures = sum(item[2] for item in rows)
     latency_breaches = sum(item[3] for item in rows)
