@@ -1,0 +1,296 @@
+from __future__ import annotations
+
+import datetime as dt
+import unittest
+
+from autonomic import controller as base
+from autonomic import controller_v2 as v2
+
+
+def exact_surface() -> dict:
+    return {
+        "id": "a11oy",
+        "hf_repository": "SZLHOLDINGS/a11oy",
+        "base_url": "https://szlholdings-a11oy.hf.space",
+        "deployment_source_repository": "szl-holdings/a11oy",
+        "revision_policy": "exact-default-branch",
+        "default_branch": "main",
+        "build_info_path": "/api/build-info",
+        "required_paths": ["/", "/api/build-info"],
+    }
+
+
+def declared_surface() -> dict:
+    value = exact_surface()
+    value.update(
+        {
+            "id": "terra",
+            "hf_repository": "SZLHOLDINGS/terra",
+            "base_url": "https://szlholdings-terra.hf.space",
+            "revision_policy": "declared-commit",
+            "default_branch": None,
+        }
+    )
+    return value
+
+
+def policy() -> dict:
+    return {
+        "probe": {"failure_threshold": 2},
+        "recovery": {
+            "enabled": True,
+            "max_actions_per_cycle": 1,
+            "cooldown_minutes": 30,
+            "max_attempts_before_incident": 3,
+            "paused_stages": ["PAUSED", "SLEEPING", "STOPPED"],
+            "transitional_stages": ["BUILDING", "STARTING", "RESTARTING"],
+            "terminal_stages": ["RUNTIME_ERROR", "BUILD_ERROR", "CONFIG_ERROR"],
+        },
+    }
+
+
+def observation(*, available: bool, source_ok: bool = True) -> v2.SurfaceObservation:
+    row = base.PathObservation(
+        path="/api/build-info",
+        status=200 if available else 503,
+        elapsed_ms=8,
+        content_type="application/json",
+        body_sha256="a" * 64 if available else None,
+        body_bytes=2 if available else None,
+        ok=available,
+        error_kind=None if available else "HTTP_503",
+    )
+    return v2.SurfaceObservation(
+        surface_id="a11oy",
+        hf_repository="SZLHOLDINGS/a11oy",
+        base_url="https://szlholdings-a11oy.hf.space",
+        availability_ok=available,
+        source_ok=source_ok,
+        source_status="EXACT" if source_ok else "DRIFT",
+        source_repository="szl-holdings/a11oy",
+        source_revision="a" * 40,
+        expected_revision="a" * 40 if source_ok else "b" * 40,
+        source_evidence="EXPLICIT_REPOSITORY_AND_REVISION",
+        paths=(row,),
+        failures=() if available and source_ok else ("unhealthy",),
+    )
+
+
+class SourceIdentityTests(unittest.TestCase):
+    def test_explicit_gateway_source_is_accepted(self) -> None:
+        identity = v2.select_source_identity(
+            {
+                "service": "terra",
+                "source_repository": "szl-holdings/a11oy",
+                "source_revision": "a" * 40,
+            },
+            declared_surface(),
+        )
+        self.assertEqual(identity["source_repository"], "szl-holdings/a11oy")
+        self.assertEqual(identity["source_revision"], "a" * 40)
+        self.assertEqual(identity["evidence"], "EXPLICIT_REPOSITORY_AND_REVISION")
+
+    def test_trusted_runtime_revision_source_binds_manifest_repository(self) -> None:
+        identity = v2.select_source_identity(
+            {
+                "status": "OBSERVED",
+                "service": "a11oy",
+                "build": {
+                    "revision": "b" * 40,
+                    "revision_source": "env:A11OY_GIT_SHA",
+                },
+            },
+            exact_surface(),
+        )
+        self.assertEqual(identity["source_repository"], "szl-holdings/a11oy")
+        self.assertEqual(identity["source_revision"], "b" * 40)
+        self.assertEqual(
+            identity["evidence"],
+            "MANIFEST_PLUS_env:A11OY_GIT_SHA",
+        )
+
+    def test_repository_local_git_head_is_not_deployment_binding(self) -> None:
+        with self.assertRaises(base.ContractError):
+            v2.select_source_identity(
+                {
+                    "service": "a11oy",
+                    "build": {
+                        "revision": "c" * 40,
+                        "revision_source": "git:HEAD",
+                    },
+                },
+                exact_surface(),
+            )
+
+    def test_declared_commit_requires_explicit_repository(self) -> None:
+        with self.assertRaises(base.ContractError):
+            v2.select_source_identity(
+                {
+                    "service": "terra",
+                    "build": {
+                        "revision": "d" * 40,
+                        "revision_source": "env:SZL_GIT_SHA",
+                    },
+                },
+                declared_surface(),
+            )
+
+    def test_wrong_explicit_repository_is_rejected(self) -> None:
+        with self.assertRaises(base.ContractError):
+            v2.select_source_identity(
+                {
+                    "source_repository": "other/repository",
+                    "source_revision": "e" * 40,
+                },
+                declared_surface(),
+            )
+
+
+class VerifiedCommitTests(unittest.TestCase):
+    def test_declared_commit_must_be_cryptographically_verified(self) -> None:
+        revision = "f" * 40
+
+        class FakeApi(v2.GitHubApi):
+            def __init__(self, verified: bool) -> None:
+                self.verified = verified
+
+            def _request(self, method: str, path: str, payload=None):
+                del method, path, payload
+                return {
+                    "sha": revision,
+                    "commit": {"verification": {"verified": self.verified}},
+                }
+
+        self.assertEqual(
+            FakeApi(True).verified_commit("szl-holdings/a11oy", revision),
+            revision,
+        )
+        with self.assertRaises(base.ContractError):
+            FakeApi(False).verified_commit("szl-holdings/a11oy", revision)
+
+
+class AuthorityBudgetTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.now = dt.datetime(2026, 9, 4, 13, 0, tzinfo=dt.timezone.utc)
+
+    def test_v1_blocked_attempts_are_released_and_remain_retryable(self) -> None:
+        previous = {
+            "state": "INCIDENT",
+            "consecutive_failures": 18,
+            "recovery_attempts": 3,
+            "last_action": "resume",
+            "last_action_at": "2026-09-04T12:55:00Z",
+            "last_action_result": {
+                "ok": False,
+                "status": "BLOCKED",
+                "reason": "HF_TOKEN_MISSING",
+            },
+        }
+        plan = v2.plan_recovery(
+            observation=observation(available=False),
+            previous=previous,
+            hf_stage="PAUSED",
+            policy=policy(),
+            now=self.now,
+            action_budget_available=True,
+        )
+        self.assertEqual(plan.action, "resume")
+        self.assertEqual(plan.recovery_attempts, 1)
+
+        state = v2.make_surface_state(
+            previous=previous,
+            observation=observation(available=False),
+            plan=plan,
+            stage="PAUSED",
+            action_result={
+                "ok": False,
+                "status": "BLOCKED",
+                "reason": "HF_TOKEN_MISSING",
+            },
+            now_text="2026-09-04T13:00:00Z",
+        )
+        self.assertEqual(state["state"], "DEGRADED")
+        self.assertEqual(state["recovery_attempts"], 0)
+        self.assertIsNone(state["last_action_at"])
+        self.assertIsNone(state["last_action"])
+        self.assertEqual(state["last_blocked_action"], "resume")
+        self.assertIn("not consumed", state["last_reason"])
+
+    def test_real_provider_failure_consumes_attempt_and_cooldown(self) -> None:
+        plan = v2.plan_recovery(
+            observation=observation(available=False),
+            previous={"consecutive_failures": 1, "recovery_attempts": 0},
+            hf_stage="RUNNING",
+            policy=policy(),
+            now=self.now,
+            action_budget_available=True,
+        )
+        state = v2.make_surface_state(
+            previous={"consecutive_failures": 1, "recovery_attempts": 0},
+            observation=observation(available=False),
+            plan=plan,
+            stage="RUNNING",
+            action_result={"ok": False, "status": "FAILED"},
+            now_text="2026-09-04T13:00:00Z",
+        )
+        self.assertEqual(state["state"], "DEGRADED")
+        self.assertEqual(state["recovery_attempts"], 1)
+        self.assertEqual(state["last_action_at"], "2026-09-04T13:00:00Z")
+
+        cooldown = v2.plan_recovery(
+            observation=observation(available=False),
+            previous=state,
+            hf_stage="RUNNING",
+            policy=policy(),
+            now=self.now + dt.timedelta(minutes=5),
+            action_budget_available=True,
+        )
+        self.assertIsNone(cooldown.action)
+        self.assertIn("cooldown", cooldown.reason)
+
+
+class TokenSelectionTests(unittest.TestCase):
+    def test_all_admitted_aliases_are_discovered_in_fixed_order(self) -> None:
+        token, source = v2.select_hf_token(
+            {
+                "HF_TOKEN": "generic",
+                "HF_WRITE_TOKEN": "writer",
+                "HF_ORG_TOKEN": "org-writer",
+            }
+        )
+        self.assertEqual(token, "org-writer")
+        self.assertEqual(source, "HF_ORG_TOKEN")
+        self.assertEqual(
+            v2.select_hf_token({"HUGGING_FACE_HUB_TOKEN": "fallback"}),
+            ("fallback", "HUGGING_FACE_HUB_TOKEN"),
+        )
+        self.assertEqual(v2.select_hf_token({}), (None, None))
+
+
+class OfflineContractTests(unittest.TestCase):
+    def test_v2_contract_exposes_bounded_migrations_without_values(self) -> None:
+        receipt = v2.offline_contract(
+            {
+                "controller_repository": "szl-holdings/szl-org-health",
+                "controller_branch": "main",
+                "source_manifest": {},
+                "allowed_hf_repositories": ["SZLHOLDINGS/a11oy"],
+                "recovery": {"max_actions_per_cycle": 1},
+            },
+            "0" * 64,
+        )
+        self.assertEqual(receipt["schema"], v2.OFFLINE_SCHEMA)
+        self.assertFalse(receipt["blocked_authority_consumes_attempt"])
+        self.assertTrue(receipt["declared_commit_verification_required"])
+        self.assertEqual(receipt["secret_values_recorded"], False)
+        self.assertNotIn("org-writer", json_string(receipt))
+
+
+def json_string(value) -> str:
+    import json
+
+    return json.dumps(value, sort_keys=True)
+
+
+if __name__ == "__main__":
+    unittest.main()
