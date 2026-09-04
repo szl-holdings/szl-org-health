@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - "autonomic/**"
-      - "tests/test_autonomic_controller.py"
+      - "tests/test_autonomic_controller*.py"
       - "tests/test_secret_workflow_boundary.py"
       - "requirements-autonomic.lock"
       - ".github/workflows/autonomic-sre.yml"
@@ -15,7 +15,7 @@ on:
     branches: [main]
     paths:
       - "autonomic/**"
-      - "tests/test_autonomic_controller.py"
+      - "tests/test_autonomic_controller*.py"
       - "tests/test_secret_workflow_boundary.py"
       - "requirements-autonomic.lock"
       - ".github/workflows/autonomic-sre.yml"
@@ -53,15 +53,16 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate controller, policy, schedule authority, and state transitions
+      - name: Validate source identity, authority budgets, and schedule boundaries
         run: |
           set -euo pipefail
-          python -m py_compile autonomic/*.py tests/test_autonomic_controller.py
+          python -m py_compile autonomic/*.py tests/test_autonomic_controller*.py
           python -m unittest \
             tests.test_autonomic_controller \
+            tests.test_autonomic_controller_v2 \
             tests.test_secret_workflow_boundary \
             -v
-          python -m autonomic.controller \
+          python -m autonomic.controller_v2 \
             --offline-contract-only \
             --output reports/autonomic-sre-contract.json
           git diff --check
