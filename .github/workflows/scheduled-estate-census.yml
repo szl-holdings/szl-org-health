@@ -3,6 +3,20 @@ name: Scheduled estate census
 on:
   schedule:
     - cron: "17 9 * * *"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why this fail-closed estate census is running"
+        required: false
+        default: "manual convergence audit"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/scheduled-estate-census.yml"
+      - "refresh_snapshot.py"
+      - "census/**"
+      - "governance/**"
+      - "requirements.txt"
 
 permissions:
   contents: read
