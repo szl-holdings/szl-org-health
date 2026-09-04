@@ -1,0 +1,65 @@
+{
+  "schema": "szl.autonomic-slo-policy/v1",
+  "controller_repository": "szl-holdings/szl-org-health",
+  "controller_branch": "main",
+  "source_manifest": {
+    "repository": "szl-holdings/a11oy",
+    "branch": "main",
+    "path": "governance/public-estate.v1.json",
+    "require_verified_commit": true
+  },
+  "cadence_minutes": 5,
+  "history_retention_minutes": 20160,
+  "availability_objective_percent": 99.9,
+  "latency_objective_ms": 2500,
+  "recovery_objective_minutes": 20,
+  "minimum_window_coverage_percent": 50,
+  "probe": {
+    "timeout_seconds": 8,
+    "max_response_bytes": 262144,
+    "parallelism": 16
+  },
+  "burn_windows": [
+    {
+      "name": "fast",
+      "minutes": 60,
+      "burn_threshold": 14.4
+    },
+    {
+      "name": "medium",
+      "minutes": 360,
+      "burn_threshold": 6.0
+    },
+    {
+      "name": "slow",
+      "minutes": 1440,
+      "burn_threshold": 3.0
+    }
+  ],
+  "deadman": {
+    "workflow_file": "autonomic-sre.yml",
+    "maximum_age_minutes": 20,
+    "accepted_conclusions": [
+      "success",
+      "failure"
+    ]
+  },
+  "incident": {
+    "label": "autonomic-slo",
+    "title": "[AUTONOMIC-SLO] Public estate reliability incident",
+    "healthy_cycles_before_close": 3,
+    "refresh_minutes": 30
+  },
+  "state_issue": {
+    "title": "[AUTONOMIC-SLO] Public estate reliability state",
+    "heartbeat_minutes": 60
+  },
+  "allowed_hf_repositories": [
+    "SZLHOLDINGS/a11oy",
+    "SZLHOLDINGS/killinchu",
+    "SZLHOLDINGS/lyte",
+    "SZLHOLDINGS/finance",
+    "SZLHOLDINGS/terra",
+    "SZLHOLDINGS/counsel"
+  ]
+}

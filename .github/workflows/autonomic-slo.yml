@@ -1,0 +1,127 @@
+name: Autonomic public-estate SLO
+
+on:
+  schedule:
+    - cron: "2-59/5 * * * *"
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: autonomic-public-estate-slo
+  cancel-in-progress: false
+
+jobs:
+  observe:
+    name: Measure, budget, deadman, incident, and receipt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact scheduled default-branch revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Require exact schedule authority
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$DEFAULT_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git status --porcelain)" = ""
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Re-prove the observational authority boundary
+        run: |
+          set -euo pipefail
+          python -m py_compile autonomic/slo_controller.py tests/test_autonomic_slo.py
+          python -m unittest tests.test_autonomic_slo -v
+          python -m autonomic.slo_controller \
+            --offline-contract-only \
+            --output reports/autonomic-slo-contract.json
+          git diff --check
+
+      - name: Run the independent SLO controller
+        id: slo
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set +e
+          python -m autonomic.slo_controller \
+            --output reports/autonomic-slo.json
+          rc=$?
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Write reliability summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("reports/autonomic-slo.json")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as stream:
+              stream.write("# SZL Autonomic SLO\n\n")
+              if not path.exists():
+                  stream.write("The SLO receipt was not produced.\n")
+                  raise SystemExit(0)
+              report = json.loads(path.read_text(encoding="utf-8"))
+              stream.write(f"- Verdict: `{report.get('verdict', 'UNKNOWN')}`\n")
+              stream.write(f"- Severity: `{report.get('severity') or 'NONE'}`\n")
+              stream.write(f"- Deadman: `{(report.get('deadman') or {}).get('state', 'UNKNOWN')}`\n")
+              stream.write(f"- Incident action: `{(report.get('incident') or {}).get('action', 'UNKNOWN')}`\n")
+              stream.write(f"- Receipt SHA-256: `{report.get('receipt_sha256', 'UNAVAILABLE')}`\n\n")
+              stream.write("| Surface | Current | Provider blocker | Max latency | Severity |\n")
+              stream.write("|---|---|---|---:|---|\n")
+              for row in report.get("surfaces", []):
+                  stream.write(
+                      f"| {row.get('id')} | {'UP' if row.get('current_ok') else 'DOWN'} | "
+                      f"{row.get('provider_blocker') or '—'} | "
+                      f"{row.get('maximum_latency_ms', 0)} ms | "
+                      f"{row.get('severity') or '—'} |\n"
+                  )
+          PY
+
+      - name: Upload immutable SLO evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: autonomic-slo-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            reports/autonomic-slo-contract.json
+            reports/autonomic-slo.json
+            reports/autonomic-slo.json.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Preserve the reliability verdict as workflow evidence
+        if: always()
+        shell: bash
+        env:
+          SLO_EXIT_CODE: ${{ steps.slo.outputs.exit_code || '1' }}
+        run: |
+          set -euo pipefail
+          case "$SLO_EXIT_CODE" in
+            0) exit 0 ;;
+            2) echo "Reliability incident is active; issue state and receipt were persisted." >&2; exit 2 ;;
+            *) echo "SLO controller failed closed." >&2; exit 1 ;;
+          esac
