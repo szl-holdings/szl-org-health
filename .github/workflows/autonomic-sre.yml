@@ -47,12 +47,16 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-autonomic.lock
 
-      - name: Re-prove controller contracts before mutation
+      - name: Re-prove source, authority, and schedule contracts before mutation
         run: |
           set -euo pipefail
-          python -m py_compile autonomic/*.py tests/test_autonomic_controller.py
-          python -m unittest tests.test_autonomic_controller -v
-          python -m autonomic.controller \
+          python -m py_compile autonomic/*.py tests/test_autonomic_controller*.py
+          python -m unittest \
+            tests.test_autonomic_controller \
+            tests.test_autonomic_controller_v2 \
+            tests.test_secret_workflow_boundary \
+            -v
+          python -m autonomic.controller_v2 \
             --offline-contract-only \
             --output reports/autonomic-sre-contract.json
           git diff --check
@@ -64,14 +68,18 @@ jobs:
             --requirement requirements-autonomic.lock
           python -m pip check
 
-      - name: Run the closed-loop controller
+      - name: Run the closed-loop controller v2
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          HF_ORG_TOKEN: ${{ secrets.HF_ORG_TOKEN }}
+          HF_WRITE_TOKEN: ${{ secrets.HF_WRITE_TOKEN }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+          HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          python -m autonomic.controller \
+          python -m autonomic.controller_v2 \
             --output reports/autonomic-sre.json
 
       - name: Write operator summary
@@ -86,30 +94,41 @@ jobs:
           report_path = Path("reports/autonomic-sre.json")
           summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
           with summary_path.open("a", encoding="utf-8") as stream:
-              stream.write("# SZL Autonomic SRE\n\n")
+              stream.write("# SZL Autonomic SRE v2\n\n")
               if not report_path.exists():
                   stream.write("Controller receipt was not produced.\n")
                   raise SystemExit(0)
               report = json.loads(report_path.read_text(encoding="utf-8"))
+              stream.write(
+                  f"- Controller: `{report.get('controller_schema', 'UNAVAILABLE')}`\n"
+              )
               stream.write(f"- All healthy: `{report.get('all_healthy', False)}`\n")
               stream.write(
                   f"- Healthy surfaces: `{report.get('healthy_surface_count', 0)}/"
                   f"{report.get('public_surface_count', 0)}`\n"
               )
-              stream.write(f"- Recovery actions: `{len(report.get('actions', []))}`\n")
+              stream.write(
+                  f"- Provider mutations attempted: "
+                  f"`{report.get('attempted_mutation_count', 0)}`\n"
+              )
+              stream.write(
+                  f"- HF authority source: "
+                  f"`{report.get('hf_token_source_name', 'UNAVAILABLE')}`\n"
+              )
               stream.write(
                   f"- Manifest revision: `{report.get('manifest_revision', 'UNAVAILABLE')}`\n"
               )
               stream.write(
                   f"- Receipt SHA-256: `{report.get('receipt_sha256', 'UNAVAILABLE')}`\n\n"
               )
-              stream.write("| Surface | State | HF stage | Availability | Source | Action |\n")
-              stream.write("|---|---|---|---:|---|---|\n")
+              stream.write("| Surface | State | HF stage | Availability | Source | Evidence | Action |\n")
+              stream.write("|---|---|---|---:|---|---|---|\n")
               for row in report.get("surfaces", []):
                   stream.write(
                       f"| {row.get('id')} | {row.get('state_after')} | "
                       f"{row.get('hf_stage')} | {row.get('availability_ok')} | "
-                      f"{row.get('source_status')} | {row.get('planned_action') or '—'} |\n"
+                      f"{row.get('source_status')} | {row.get('source_evidence')} | "
+                      f"{row.get('planned_action') or '—'} |\n"
                   )
           PY
 
