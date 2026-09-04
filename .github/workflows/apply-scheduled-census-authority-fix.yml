@@ -1,0 +1,346 @@
+name: Apply scheduled census authority fix
+
+on:
+  push:
+    branches:
+      - fix/scheduled-census-authority-20260904
+    paths:
+      - .github/workflows/apply-scheduled-census-authority-fix.yml
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: scheduled-census-authority-fix
+  cancel-in-progress: false
+
+jobs:
+  apply-and-prove:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact repair branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fix/scheduled-census-authority-20260904
+          fetch-depth: 1
+
+      - name: Apply exact permanent workflow and test changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          workflow_path = Path('.github/workflows/scheduled-estate-census.yml')
+          test_path = Path('tests/test_report_contract.py')
+          source = workflow_path.read_text(encoding='utf-8')
+
+          setup_anchor = '''      - name: Set up Python
+          '''
+          reader_step = '''      - name: Mint preferred organization-complete reader
+              id: reader
+              continue-on-error: true
+              uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+              with:
+                client-id: ${{ vars.QILLQAQ_CLIENT_ID }}
+                private-key: ${{ secrets.QILLQAQ_PRIVATE_KEY }}
+                owner: szl-holdings
+                permission-actions: read
+                permission-contents: read
+
+              - name: Set up Python
+          '''
+          if source.count(setup_anchor) != 1:
+              raise SystemExit('setup anchor drifted')
+          source = source.replace(setup_anchor, reader_step, 1)
+
+          install_anchor = '''      - name: Install locked runtime dependencies
+              run: python -m pip install --no-cache-dir --require-hashes -r requirements.txt
+
+          '''
+          selector_step = '''      - name: Install locked runtime dependencies
+              run: python -m pip install --no-cache-dir --require-hashes -r requirements.txt
+
+              - name: Select an authenticated organization-scoped Hugging Face reader
+              id: hf
+              shell: bash
+              env:
+                HF_ORG_TOKEN_CANDIDATE: ${{ secrets.HF_ORG_TOKEN }}
+                HF_ORG_TOKEN1_CANDIDATE: ${{ secrets.HF_ORG_TOKEN1 }}
+                HF_WRITE_TOKEN_CANDIDATE: ${{ secrets.HF_WRITE_TOKEN }}
+                HF_TOKEN_CANDIDATE: ${{ secrets.HF_TOKEN }}
+                HUGGINGFACE_TOKEN_CANDIDATE: ${{ secrets.HUGGINGFACE_TOKEN }}
+                HUGGING_FACE_HUB_TOKEN_CANDIDATE: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
+                HUGGINGFACEHUB_API_TOKEN_CANDIDATE: ${{ secrets.HUGGINGFACEHUB_API_TOKEN }}
+              run: |
+                set -euo pipefail
+                python - <<'PY'
+                import json
+                import os
+                import urllib.error
+                import urllib.request
+
+                candidates = (
+                    ('HF_ORG_TOKEN', 'HF_ORG_TOKEN_CANDIDATE'),
+                    ('HF_ORG_TOKEN1', 'HF_ORG_TOKEN1_CANDIDATE'),
+                    ('HF_WRITE_TOKEN', 'HF_WRITE_TOKEN_CANDIDATE'),
+                    ('HF_TOKEN', 'HF_TOKEN_CANDIDATE'),
+                    ('HUGGINGFACE_TOKEN', 'HUGGINGFACE_TOKEN_CANDIDATE'),
+                    ('HUGGING_FACE_HUB_TOKEN', 'HUGGING_FACE_HUB_TOKEN_CANDIDATE'),
+                    ('HUGGINGFACEHUB_API_TOKEN', 'HUGGINGFACEHUB_API_TOKEN_CANDIDATE'),
+                )
+                selected = None
+                for source, variable in candidates:
+                    token = os.environ.get(variable, '').strip()
+                    if not token or '\n' in token or '\r' in token:
+                        continue
+                    request = urllib.request.Request(
+                        'https://huggingface.co/api/whoami-v2',
+                        headers={
+                            'Accept': 'application/json',
+                            'Authorization': 'Bearer ' + token,
+                            'User-Agent': 'szl-estate-census-auth/1',
+                        },
+                    )
+                    try:
+                        with urllib.request.urlopen(request, timeout=20) as response:
+                            if response.status != 200:
+                                continue
+                            payload = json.load(response)
+                    except (OSError, ValueError, urllib.error.URLError):
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    orgs = payload.get('orgs') or []
+                    matched = False
+                    if isinstance(orgs, list):
+                        for item in orgs:
+                            if not isinstance(item, dict):
+                                continue
+                            name = str(
+                                item.get('name')
+                                or item.get('id')
+                                or item.get('fullname')
+                                or ''
+                            ).upper()
+                            if name == 'SZLHOLDINGS':
+                                matched = True
+                                break
+                    if not matched:
+                        continue
+                    selected = (source, token)
+                    break
+
+                output = os.environ['GITHUB_OUTPUT']
+                if selected is None:
+                    with open(output, 'a', encoding='utf-8') as stream:
+                        stream.write('selected=false\nsource=NONE\n')
+                    raise SystemExit('no authenticated SZLHOLDINGS Hugging Face credential')
+
+                source, token = selected
+                print('::add-mask::' + token)
+                delimiter = 'SZL_HF_TOKEN_EOF'
+                with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+                    stream.write(f'HF_TOKEN<<{delimiter}\n{token}\n{delimiter}\n')
+                with open(output, 'a', encoding='utf-8') as stream:
+                    stream.write(f'selected=true\nsource={source}\n')
+                print('selected validated Hugging Face credential source: ' + source)
+                PY
+
+          '''
+          if source.count(install_anchor) != 1:
+              raise SystemExit('install anchor drifted')
+          source = source.replace(install_anchor, selector_step, 1)
+
+          collect_old = '''          GITHUB_TOKEN: ${{ secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token }}
+                HF_TOKEN: ${{ secrets.HF_TOKEN }}
+                REFRESH_DEADLINE_S: "600"
+          '''
+          collect_new = '''          GITHUB_TOKEN: ${{ steps.reader.outputs.token || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token }}
+                REFRESH_DEADLINE_S: "600"
+          '''
+          if source.count(collect_old) != 1:
+              raise SystemExit('collector credential block drifted')
+          source = source.replace(collect_old, collect_new, 1)
+
+          gate_old = '''          HAS_CROSS_REPO_GITHUB_TOKEN: ${{ secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN != '' }}
+                HAS_HF_TOKEN: ${{ secrets.HF_TOKEN != '' }}
+          '''
+          gate_new = '''          HAS_CROSS_REPO_GITHUB_TOKEN: ${{ steps.reader.outputs.token != '' || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN != '' }}
+                HAS_HF_TOKEN: ${{ steps.hf.outputs.selected == 'true' }}
+          '''
+          if source.count(gate_old) != 1:
+              raise SystemExit('receipt credential block drifted')
+          source = source.replace(gate_old, gate_new, 1)
+          workflow_path.write_text(source, encoding='utf-8', newline='\n')
+
+          tests = test_path.read_text(encoding='utf-8')
+          assertion_anchor = '''        self.assertNotIn("workflow_dispatch:", workflow)
+          '''
+          assertions = '''        self.assertNotIn("workflow_dispatch:", workflow)
+              self.assertIn(
+                  "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+                  workflow,
+              )
+              self.assertIn("vars.QILLQAQ_CLIENT_ID", workflow)
+              self.assertIn("secrets.QILLQAQ_PRIVATE_KEY", workflow)
+              self.assertIn("HF_ORG_TOKEN1_CANDIDATE", workflow)
+              self.assertIn("https://huggingface.co/api/whoami-v2", workflow)
+              self.assertIn("steps.reader.outputs.token", workflow)
+              self.assertIn("steps.hf.outputs.selected == 'true'", workflow)
+              self.assertLess(
+                  workflow.index("Mint preferred organization-complete reader"),
+                  workflow.index("Collect live estate census"),
+              )
+              self.assertLess(
+                  workflow.index("Select an authenticated organization-scoped Hugging Face reader"),
+                  workflow.index("Collect live estate census"),
+              )
+          '''
+          if tests.count(assertion_anchor) != 1:
+              raise SystemExit('workflow test assertion anchor drifted')
+          tests = tests.replace(assertion_anchor, assertions, 1)
+          test_path.write_text(tests, encoding='utf-8', newline='\n')
+          PY
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12.10"
+
+      - name: Install locked dependencies and prove permanent contracts
+        run: |
+          set -euo pipefail
+          python -m pip install --no-cache-dir --require-hashes -r requirements.txt
+          python -m py_compile refresh_snapshot.py census/receipt.py tests/test_report_contract.py tests/test_secret_workflow_boundary.py
+          python -m unittest tests.test_report_contract tests.test_secret_workflow_boundary tests.test_receipt -v
+          git diff --check
+
+      - name: Mint the same organization-complete reader used by the schedule
+        id: reader
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.QILLQAQ_CLIENT_ID }}
+          private-key: ${{ secrets.QILLQAQ_PRIVATE_KEY }}
+          owner: szl-holdings
+          permission-actions: read
+          permission-contents: read
+
+      - name: Select the same authenticated Hugging Face reader
+        id: hf
+        shell: bash
+        env:
+          HF_ORG_TOKEN_CANDIDATE: ${{ secrets.HF_ORG_TOKEN }}
+          HF_ORG_TOKEN1_CANDIDATE: ${{ secrets.HF_ORG_TOKEN1 }}
+          HF_WRITE_TOKEN_CANDIDATE: ${{ secrets.HF_WRITE_TOKEN }}
+          HF_TOKEN_CANDIDATE: ${{ secrets.HF_TOKEN }}
+          HUGGINGFACE_TOKEN_CANDIDATE: ${{ secrets.HUGGINGFACE_TOKEN }}
+          HUGGING_FACE_HUB_TOKEN_CANDIDATE: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
+          HUGGINGFACEHUB_API_TOKEN_CANDIDATE: ${{ secrets.HUGGINGFACEHUB_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          candidates = (
+              ('HF_ORG_TOKEN', 'HF_ORG_TOKEN_CANDIDATE'),
+              ('HF_ORG_TOKEN1', 'HF_ORG_TOKEN1_CANDIDATE'),
+              ('HF_WRITE_TOKEN', 'HF_WRITE_TOKEN_CANDIDATE'),
+              ('HF_TOKEN', 'HF_TOKEN_CANDIDATE'),
+              ('HUGGINGFACE_TOKEN', 'HUGGINGFACE_TOKEN_CANDIDATE'),
+              ('HUGGING_FACE_HUB_TOKEN', 'HUGGING_FACE_HUB_TOKEN_CANDIDATE'),
+              ('HUGGINGFACEHUB_API_TOKEN', 'HUGGINGFACEHUB_API_TOKEN_CANDIDATE'),
+          )
+          selected = None
+          for source, variable in candidates:
+              token = os.environ.get(variable, '').strip()
+              if not token or '\n' in token or '\r' in token:
+                  continue
+              request = urllib.request.Request(
+                  'https://huggingface.co/api/whoami-v2',
+                  headers={
+                      'Accept': 'application/json',
+                      'Authorization': 'Bearer ' + token,
+                      'User-Agent': 'szl-estate-census-preflight/1',
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=20) as response:
+                      if response.status != 200:
+                          continue
+                      payload = json.load(response)
+              except (OSError, ValueError, urllib.error.URLError):
+                  continue
+              orgs = payload.get('orgs') if isinstance(payload, dict) else []
+              if not isinstance(orgs, list):
+                  continue
+              if any(
+                  isinstance(item, dict)
+                  and str(item.get('name') or item.get('id') or item.get('fullname') or '').upper()
+                  == 'SZLHOLDINGS'
+                  for item in orgs
+              ):
+                  selected = (source, token)
+                  break
+          if selected is None:
+              with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as stream:
+                  stream.write('selected=false\nsource=NONE\n')
+              raise SystemExit('no authenticated SZLHOLDINGS Hugging Face credential')
+          source, token = selected
+          print('::add-mask::' + token)
+          delimiter = 'SZL_HF_TOKEN_EOF'
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+              stream.write(f'HF_TOKEN<<{delimiter}\n{token}\n{delimiter}\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as stream:
+              stream.write(f'selected=true\nsource={source}\n')
+          print('selected validated Hugging Face credential source: ' + source)
+          PY
+
+      - name: Execute one exact credentialed census preflight
+        id: collect
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ steps.reader.outputs.token || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token }}
+          REFRESH_DEADLINE_S: "600"
+        run: python -I -B refresh_snapshot.py
+
+      - name: Require a valid source-bound census receipt
+        env:
+          COLLECT_OUTCOME: ${{ steps.collect.outcome }}
+          EXPECTED_GITHUB_REPOSITORIES_MINIMUM: "63"
+          HAS_CROSS_REPO_GITHUB_TOKEN: ${{ steps.reader.outputs.token != '' || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN != '' }}
+          HAS_HF_TOKEN: ${{ steps.hf.outputs.selected == 'true' }}
+          RECEIPT_REPOSITORY: ${{ github.repository }}
+          RECEIPT_RUN_ATTEMPT: ${{ github.run_attempt }}
+          RECEIPT_RUN_ID: ${{ github.run_id }}
+          RECEIPT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RECEIPT_WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python -I -B census/receipt.py --snapshot census-internal.json
+          python -m json.tool census-receipt.json >/dev/null
+          rm -f -- census-internal.json census-receipt.json
+          git checkout -- static/data.json
+
+      - name: Remove one-shot machinery and commit the tested permanent repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/apply-scheduled-census-authority-fix.yml
+          git add .github/workflows/scheduled-estate-census.yml tests/test_report_contract.py
+          git diff --cached --check
+          git config user.name "Lutar, Stephen P."
+          git config user.email "stephenlutar2@gmail.com"
+          git commit -s -m "fix(census): use validated organization read authority"
+          git push origin HEAD:fix/scheduled-census-authority-20260904
