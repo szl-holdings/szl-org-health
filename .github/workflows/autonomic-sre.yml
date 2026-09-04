@@ -1,32 +1,8 @@
 name: Autonomic public-estate SRE
 
 on:
-  pull_request:
-    paths:
-      - "autonomic/**"
-      - "tests/test_autonomic_controller.py"
-      - "requirements-autonomic.lock"
-      - ".github/workflows/autonomic-sre.yml"
-      - ".github/workflows/ci.yml"
-      - "README.md"
-  push:
-    branches: [main]
-    paths:
-      - "autonomic/**"
-      - "tests/test_autonomic_controller.py"
-      - "requirements-autonomic.lock"
-      - ".github/workflows/autonomic-sre.yml"
-      - ".github/workflows/ci.yml"
-      - "README.md"
   schedule:
     - cron: "*/5 * * * *"
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Probe and plan without changing Space runtime or durable state
-        type: boolean
-        required: false
-        default: false
 
 permissions:
   contents: read
@@ -37,50 +13,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  contract:
-    name: Fail-closed autonomic contract
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Harden runner
-        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
-        with:
-          egress-policy: audit
-
-      - name: Checkout exact workflow source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          fetch-depth: 1
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-
-      - name: Validate controller, policy, and adversarial state transitions
-        run: |
-          set -euo pipefail
-          python -m py_compile autonomic/*.py tests/test_autonomic_controller.py
-          python -m unittest tests.test_autonomic_controller -v
-          python -m autonomic.controller \
-            --offline-contract-only \
-            --output reports/autonomic-sre-contract.json
-          git diff --check
-
-      - name: Upload contract receipt
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: autonomic-sre-contract-${{ github.run_id }}-${{ github.run_attempt }}
-          path: reports/autonomic-sre-contract.json
-          if-no-files-found: error
-          retention-days: 90
-
   live:
     name: Sense, decide, recover, verify, and receipt
-    if: github.event_name != 'pull_request'
-    needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -89,17 +23,20 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout exact protected main event revision
+      - name: Checkout exact scheduled default-branch revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Require the scheduled run to own the exact main tip
+      - name: Require exact verified schedule authority
         shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$DEFAULT_BRANCH"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git status --porcelain)" = ""
 
@@ -109,6 +46,16 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements-autonomic.lock
+
+      - name: Re-prove controller contracts before mutation
+        run: |
+          set -euo pipefail
+          python -m py_compile autonomic/*.py tests/test_autonomic_controller.py
+          python -m unittest tests.test_autonomic_controller -v
+          python -m autonomic.controller \
+            --offline-contract-only \
+            --output reports/autonomic-sre-contract.json
+          git diff --check
 
       - name: Install exact Hugging Face control dependency closure
         run: |
@@ -121,17 +68,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          INPUT_DRY_RUN: ${{ inputs.dry_run || 'false' }}
         shell: bash
         run: |
           set -euo pipefail
-          args=()
-          if [[ "$INPUT_DRY_RUN" == "true" ]]; then
-            args+=(--dry-run)
-          fi
           python -m autonomic.controller \
-            --output reports/autonomic-sre.json \
-            "${args[@]}"
+            --output reports/autonomic-sre.json
 
       - name: Write operator summary
         if: always()
@@ -172,12 +113,13 @@ jobs:
                   )
           PY
 
-      - name: Upload immutable cycle receipt
+      - name: Upload immutable cycle evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: autonomic-sre-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            reports/autonomic-sre-contract.json
             reports/autonomic-sre.json
             reports/autonomic-sre.json.sha256
           if-no-files-found: error
