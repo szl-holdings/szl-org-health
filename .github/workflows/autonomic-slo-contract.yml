@@ -1,0 +1,93 @@
+name: Autonomic SLO contracts
+
+on:
+  pull_request:
+    paths:
+      - "autonomic/slo_controller.py"
+      - "autonomic/slo_policy.json"
+      - "tests/test_autonomic_slo.py"
+      - ".github/workflows/autonomic-slo.yml"
+      - ".github/workflows/autonomic-slo-contract.yml"
+  push:
+    branches: [main]
+    paths:
+      - "autonomic/slo_controller.py"
+      - "autonomic/slo_policy.json"
+      - "tests/test_autonomic_slo.py"
+      - ".github/workflows/autonomic-slo.yml"
+      - ".github/workflows/autonomic-slo-contract.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autonomic-slo-contract-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: SLO, burn-rate, and deadman contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact change revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Compile and run fail-closed SLO contracts
+        run: |
+          set -euo pipefail
+          python -m py_compile autonomic/slo_controller.py tests/test_autonomic_slo.py
+          python -m unittest tests.test_autonomic_slo -v
+          python -m autonomic.slo_controller \
+            --offline-contract-only \
+            --output reports/autonomic-slo-contract.json
+          git diff --check
+
+      - name: Validate the offline authority receipt
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          receipt = json.loads(Path("reports/autonomic-slo-contract.json").read_text())
+          assert receipt["schema"] == "szl.autonomic-slo-contract/v1"
+          assert receipt["valid"] is True
+          assert receipt["secret_values_recorded"] is False
+          authority = receipt["authority"]
+          assert authority["fixed_signed_manifest"] is True
+          assert authority["fixed_https_origins"] is True
+          assert authority["issue_state_only"] is True
+          for key in (
+              "service_restart",
+              "workflow_dispatch",
+              "source_write",
+              "dns_mutation",
+              "asset_deletion",
+              "product_action",
+              "arbitrary_shell",
+          ):
+              assert authority[key] is False, (key, authority[key])
+          PY
+
+      - name: Upload immutable contract receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: autonomic-slo-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reports/autonomic-slo-contract.json
+          if-no-files-found: error
+          retention-days: 90
