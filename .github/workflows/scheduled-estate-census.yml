@@ -15,10 +15,15 @@ jobs:
   census:
     name: census / fail-closed evidence
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
       - name: Check out exact workflow source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,3 +96,131 @@ jobs:
             census-receipt.json
           if-no-files-found: error
           retention-days: 30
+
+  file-audit:
+    name: every repository / every default-branch Git blob
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Check out exact audit source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify file-audit checkout subject
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Mint short-lived organization reader
+        id: org-reader
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.QILLQAQ_CLIENT_ID }}
+          private-key: ${{ secrets.QILLQAQ_PRIVATE_KEY }}
+          owner: szl-holdings
+          permission-contents: read
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install locked dependencies
+        run: python -m pip install --no-cache-dir --require-hashes -r requirements.txt
+
+      - name: Re-run file-audit contracts
+        run: |
+          python -m unittest \
+            tests.test_file_audit \
+            tests.test_repository_file_audit_runner \
+            -v
+
+      - name: Verify authoritative estate and every tracked default-branch blob
+        id: collect
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ steps.org-reader.outputs.token || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          python -B -m tools.run_repository_file_audit \
+            --output artifacts/repository-file-audit.private.json \
+            --public-output artifacts/repository-file-audit.public.json \
+            --minimum-repositories 123 \
+            --max-workers 4 \
+            --max-text-bytes 2097152 \
+            --max-archive-bytes 536870912 \
+            --max-repository-bytes 4294967296
+
+      - name: Publish sanitized file-audit summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("artifacts/repository-file-audit.public.json")
+          if not path.exists():
+              raise SystemExit(0)
+          value = json.loads(path.read_text(encoding="utf-8"))
+          summary = value["summary"]
+          totals = summary["totals"]
+          lines = [
+              "## Complete repository file audit",
+              "",
+              f"- State: **{summary['state']}**",
+              f"- Repositories: **{totals['repositories']}**",
+              f"- Files byte-verified: **{totals['files']}**",
+              f"- Tracked bytes verified: **{totals['bytes_tracked_and_verified']}**",
+              f"- Findings: **{totals['findings']}**",
+              f"- Receipt: `{value['receipt_sha256']}`",
+          ]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
+              handle.write("\n".join(lines) + "\n")
+          PY
+
+      - name: Retain private file evidence
+        if: always() && hashFiles('artifacts/repository-file-audit.private.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: repository-file-audit-private-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/repository-file-audit.private.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 9
+
+      - name: Retain public file projection
+        if: always() && hashFiles('artifacts/repository-file-audit.public.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: repository-file-audit-public-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/repository-file-audit.public.json
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 9
+
+      - name: Fail closed on incomplete file audit
+        if: always()
+        env:
+          COLLECT_OUTCOME: ${{ steps.collect.outcome }}
+        run: |
+          test "$COLLECT_OUTCOME" = success || {
+            echo "::error::Complete repository file audit did not produce a valid authoritative receipt."
+            exit 2
+          }
