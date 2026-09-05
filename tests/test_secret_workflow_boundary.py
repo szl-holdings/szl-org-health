@@ -113,7 +113,11 @@ class SecretWorkflowBoundaryTests(unittest.TestCase):
 
         self.assertEqual(
             secret_workflows,
-            ["autonomic-sre.yml", "scheduled-estate-census.yml"],
+            [
+                "autonomic-sre.yml",
+                "repository-file-audit.yml",
+                "scheduled-estate-census.yml",
+            ],
         )
 
 
