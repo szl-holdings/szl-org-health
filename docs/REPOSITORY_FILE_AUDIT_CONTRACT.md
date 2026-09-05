@@ -11,17 +11,29 @@ It is not a disposable repair script, a source-code publisher, or an autonomous 
 A successful run:
 
 1. paginates every repository visible to the organization reader, including public, private, active, and archived repositories;
-2. enforces the known organization floor of 123 repositories and, when GitHub exposes authoritative public/private totals, requires an exact count match;
-3. resolves each repository's exact default-branch commit and root tree;
-4. enumerates every tree entry, falling back from GitHub's recursive-tree API to an explicit subtree walk whenever the recursive response is truncated;
-5. downloads the immutable commit archive for that exact commit;
-6. reads every tracked Git blob byte and recomputes the canonical Git blob SHA-1 before accepting it;
-7. commits every blob into a SHA-256 file receipt and a repository-level receipt;
-8. compares the archive path set with the Git tree path set so omitted, duplicated, injected, or traversal-like paths fail closed;
-9. records submodules as external commit pointers without pretending their target repositories were recursively audited; and
-10. emits a private evidence report plus a public projection that does not disclose private repository names, paths, hashes, or findings.
+2. enforces the known organization floor of 123 repositories and requires GitHub's authoritative public-plus-private repository total to match the paginated inventory exactly;
+3. requires at least one private or internal repository to be visible before the hosted private audit can claim organization coverage;
+4. resolves each repository's exact default-branch commit and root tree;
+5. enumerates every tree entry, falling back from GitHub's recursive-tree API to an explicit subtree walk whenever the recursive response is truncated;
+6. downloads the immutable commit archive for that exact commit;
+7. reads every tracked Git blob byte and recomputes the canonical Git blob SHA-1 before accepting it;
+8. commits every blob into a SHA-256 file receipt and a repository-level receipt;
+9. compares the archive path set with the Git tree path set so omitted, duplicated, injected, or traversal-like paths fail closed;
+10. records submodules as external commit pointers without pretending their target repositories were recursively audited; and
+11. emits a private evidence report plus a public projection that does not disclose private repository names, paths, hashes, or findings.
 
 Archived repositories are evidence-bearing repositories and remain in scope. Repositories without a resolvable default branch remain `INCOMPLETE`; they are never counted as clean by absence.
+
+## Hosted authority gate
+
+The schedule-only hosted job invokes `tools.run_repository_file_audit`, not the reusable collector directly. The runner requires all of the following before file collection begins:
+
+- authoritative organization public and private repository totals are available;
+- the complete paginated inventory equals that authoritative total;
+- the known 123-repository floor is met; and
+- at least one private or internal repository is visible.
+
+The repository-scoped fallback token is permitted only as a diagnostic input. It cannot satisfy the hosted authority gate by itself. Missing or insufficient organization credentials therefore produce an `INCOMPLETE` private receipt and a redacted `INCOMPLETE` public receipt. Both are retained before the workflow terminates red. No credential failure can become a partial green result or an absent evidence artifact.
 
 ## Source inspection
 
@@ -50,9 +62,9 @@ No file content or suspected credential value is copied into a finding. Reports 
 | `PASS` | Every tracked blob was verified and no finding was observed. |
 | `WARN` | The audit is complete, with medium or low findings. |
 | `FAIL` | The audit is complete, with at least one critical or high finding. |
-| `INCOMPLETE` | Repository enumeration, tree traversal, archive retrieval, object verification, or a declared resource ceiling prevented proof of completeness. |
+| `INCOMPLETE` | Repository enumeration, authority reconciliation, tree traversal, archive retrieval, object verification, or a declared resource ceiling prevented proof of completeness. |
 
-The scheduled workflow uses `--allow-findings` so it retains a complete `WARN` or `FAIL` receipt for remediation. `INCOMPLETE` always fails the workflow. This prevents a finding from suppressing evidence while also preventing partial evidence from becoming a green claim.
+The scheduled workflow retains a complete `WARN` or `FAIL` receipt for remediation. `INCOMPLETE` always fails the workflow. This prevents a finding from suppressing evidence while also preventing partial evidence from becoming a green claim.
 
 ## Bounded resources
 
