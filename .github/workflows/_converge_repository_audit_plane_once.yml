@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: Apache-2.0
+name: Converge repository audit plane once
+
+on:
+  push:
+    branches:
+      - feat/complete-repository-file-audit-20260905
+    paths:
+      - .github/workflows/_converge_repository_audit_plane_once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: converge-repository-audit-plane-once
+  cancel-in-progress: false
+
+jobs:
+  converge:
+    if: github.repository == 'szl-holdings/szl-org-health' && github.ref == 'refs/heads/feat/complete-repository-file-audit-20260905'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Check out exact audit branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/complete-repository-file-audit-20260905
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up exact Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12.14'
+
+      - name: Merge protected main and retire the duplicate audit plane
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch --no-tags origin main
+          git merge --no-edit origin/main
+          git rm -- \
+            .github/workflows/deep-repository-audit.yml \
+            census/deep_repository_audit.py \
+            docs/DEEP_REPOSITORY_AUDIT.md \
+            tests/test_deep_repository_audit.py
+          test ! -e .github/workflows/deep-repository-audit.yml
+          test ! -e census/deep_repository_audit.py
+          test ! -e docs/DEEP_REPOSITORY_AUDIT.md
+          test ! -e tests/test_deep_repository_audit.py
+
+      - name: Prove the single scheduled audit plane
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r requirements.txt
+          python -m py_compile app.py refresh_snapshot.py census/*.py autonomic/*.py
+          python -m unittest discover -s tests -v
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('.github/workflows/scheduled-estate-census.yml').read_text(encoding='utf-8')
+          assert 'file-audit:' in source
+          assert 'census.file_audit' in source
+          assert 'workflow_dispatch:' not in source
+          assert '\npush:' not in source
+          assert 'persist-credentials: false' in source
+          assert 'step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c' in source
+          PY
+          git diff --check
+
+      - name: Commit the durable convergence and self-remove
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch=feat/complete-repository-file-audit-20260905
+          git rm -- .github/workflows/_converge_repository_audit_plane_once.yml
+          git add -A
+          git diff --cached --check
+          git commit -s -m 'fix(audit): converge on one scheduled repository audit plane'
+          git push origin "HEAD:refs/heads/$branch"
