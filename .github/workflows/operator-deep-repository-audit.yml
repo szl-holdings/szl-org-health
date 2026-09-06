@@ -1,0 +1,182 @@
+name: Operator deep repository audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: operator-deep-repository-audit
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    name: Authorize exact default-branch read-only audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Authorize named solo maintainer and exact default branch
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REQUEST_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          test "$REQUEST_ACTOR" = "stephenlutar2-hash" || {
+            echo "::error::Operator deep audit is restricted to the named organization maintainer."
+            exit 2
+          }
+          test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH" || {
+            echo "::error::Operator deep audit must target the exact default branch."
+            exit 2
+          }
+
+  audit:
+    name: operator deep audit / shard ${{ matrix.shard }}
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
+
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Check out exact workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact default-branch checkout subject
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Mint short-lived organization audit reader
+        id: org-reader
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.QILLQAQ_CLIENT_ID }}
+          private-key: ${{ secrets.QILLQAQ_PRIVATE_KEY }}
+          owner: szl-holdings
+          permission-actions: read
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Inventory and verify every tracked file in this shard
+        id: collect
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ steps.org-reader.outputs.token || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          test -n "${GITHUB_TOKEN:-}" || {
+            echo "::error::No organization-readable GitHub token is available."
+            exit 2
+          }
+          python -I -B census/deep_repository_audit_v2.py shard \
+            --org szl-holdings \
+            --shard-index "${{ matrix.shard }}" \
+            --shard-count 6 \
+            --expected-repositories-minimum 100 \
+            --output-dir "operator-deep-audit-shard-${{ matrix.shard }}"
+
+      - name: Upload immutable shard evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: operator-deep-audit-shard-${{ matrix.shard }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: operator-deep-audit-shard-${{ matrix.shard }}/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 6
+
+      - name: Fail closed on incomplete shard collection
+        if: always()
+        env:
+          COLLECT_OUTCOME: ${{ steps.collect.outcome }}
+        run: |
+          test "$COLLECT_OUTCOME" = success || {
+            echo "::error::Operator audit shard collection was incomplete."
+            exit 2
+          }
+
+  merge:
+    name: operator deep audit / merge and verify
+    if: always()
+    needs: [authorize, audit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Check out exact workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download all exact operator shard receipts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: operator-deep-audit-shard-*-${{ github.sha }}-${{ github.run_attempt }}
+          path: operator-deep-audit-shards
+          merge-multiple: true
+
+      - name: Verify complete coverage and build final evidence
+        id: merge
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python -I -B census/deep_repository_audit_v2.py merge \
+            --org szl-holdings \
+            --shard-count 6 \
+            --input-dir operator-deep-audit-shards \
+            --output-dir operator-deep-audit-final
+
+      - name: Upload final operator organization audit
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: operator-deep-repository-audit-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            operator-deep-audit-final/
+            operator-deep-audit-shards/file-inventory-shard-*.ndjson.gz
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 6
+
+      - name: Enforce complete merged evidence
+        if: always()
+        env:
+          MERGE_OUTCOME: ${{ steps.merge.outcome }}
+        run: |
+          test "$MERGE_OUTCOME" = success || {
+            echo "::error::Final operator audit evidence is incomplete or internally inconsistent."
+            exit 2
+          }
