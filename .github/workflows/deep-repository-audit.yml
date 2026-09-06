@@ -1,4 +1,4 @@
-name: Deep repository and file audit
+name: Deep repository audit contracts
 
 on:
   pull_request:
@@ -7,6 +7,7 @@ on:
       - tests/test_deep_repository_audit.py
       - docs/DEEP_REPOSITORY_AUDIT.md
       - .github/workflows/deep-repository-audit.yml
+      - .github/workflows/scheduled-estate-census.yml
   push:
     branches: [main]
     paths:
@@ -14,16 +15,14 @@ on:
       - tests/test_deep_repository_audit.py
       - docs/DEEP_REPOSITORY_AUDIT.md
       - .github/workflows/deep-repository-audit.yml
-  schedule:
-    - cron: "23 7 * * 1"
-  workflow_dispatch: {}
+      - .github/workflows/scheduled-estate-census.yml
 
 permissions:
   contents: read
 
 concurrency:
-  group: deep-repository-audit-${{ github.ref }}
-  cancel-in-progress: false
+  group: deep-repository-audit-contract-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 
 jobs:
   contract:
@@ -56,142 +55,3 @@ jobs:
             tests/test_deep_repository_audit.py
           python -m unittest -v tests.test_deep_repository_audit
           git diff --check
-
-  audit:
-    name: Audit shard ${{ matrix.shard }}
-    if: github.event_name != 'pull_request'
-    needs: contract
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      max-parallel: 3
-      matrix:
-        shard: [0, 1, 2, 3, 4, 5]
-
-    steps:
-      - name: Harden runner
-        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
-        with:
-          egress-policy: audit
-
-      - name: Check out exact protected audit source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Mint short-lived organization reader
-        id: org-reader
-        continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.QILLQAQ_CLIENT_ID }}
-          private-key: ${{ secrets.QILLQAQ_PRIVATE_KEY }}
-          owner: szl-holdings
-          permission-actions: read
-          permission-contents: read
-          permission-pull-requests: read
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-
-      - name: Inventory and verify every tracked file in this shard
-        id: collect
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ steps.org-reader.outputs.token || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token }}
-        run: |
-          set -euo pipefail
-          test -n "${GITHUB_TOKEN:-}" || {
-            echo "::error::No organization-readable GitHub token is available."
-            exit 2
-          }
-          python -I -B census/deep_repository_audit.py shard \
-            --org szl-holdings \
-            --shard-index "${{ matrix.shard }}" \
-            --shard-count 6 \
-            --output-dir "deep-audit-shard-${{ matrix.shard }}"
-
-      - name: Upload immutable shard evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: deep-audit-shard-${{ matrix.shard }}-${{ github.sha }}-${{ github.run_attempt }}
-          path: deep-audit-shard-${{ matrix.shard }}/
-          if-no-files-found: error
-          retention-days: 90
-          compression-level: 6
-
-      - name: Fail closed on incomplete shard collection
-        if: always()
-        env:
-          COLLECT_OUTCOME: ${{ steps.collect.outcome }}
-        run: |
-          test "$COLLECT_OUTCOME" = success || {
-            echo "::error::Shard collection was incomplete."
-            exit 2
-          }
-
-  merge:
-    name: Merge and verify organization evidence
-    if: always() && github.event_name != 'pull_request'
-    needs: [contract, audit]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Harden runner
-        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
-        with:
-          egress-policy: audit
-
-      - name: Check out exact protected audit source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Download all exact shard receipts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: deep-audit-shard-*-${{ github.sha }}-${{ github.run_attempt }}
-          path: deep-audit-shards
-          merge-multiple: true
-
-      - name: Verify complete coverage and build final evidence
-        id: merge
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          python -I -B census/deep_repository_audit.py merge \
-            --org szl-holdings \
-            --shard-count 6 \
-            --input-dir deep-audit-shards \
-            --output-dir deep-audit-final
-
-      - name: Upload final organization audit
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: deep-repository-audit-${{ github.sha }}-${{ github.run_attempt }}
-          path: |
-            deep-audit-final/
-            deep-audit-shards/file-inventory-shard-*.ndjson.gz
-          if-no-files-found: error
-          retention-days: 90
-          compression-level: 6
-
-      - name: Enforce complete merged evidence
-        if: always()
-        env:
-          MERGE_OUTCOME: ${{ steps.merge.outcome }}
-        run: |
-          test "$MERGE_OUTCOME" = success || {
-            echo "::error::Final audit evidence is incomplete or internally inconsistent."
-            exit 2
-          }
