@@ -116,6 +116,29 @@ class SecretWorkflowBoundaryTests(unittest.TestCase):
             ["autonomic-sre.yml", "scheduled-estate-census.yml"],
         )
 
+    def test_scheduled_census_cadence_and_reader_aliases_are_closed(self) -> None:
+        workflow = (WORKFLOWS / "scheduled-estate-census.yml").read_text(
+            encoding="utf-8"
+        )
+        events, crons = _canonical_triggers(workflow, "scheduled-estate-census.yml")
+
+        self.assertEqual(events, ("schedule",))
+        self.assertEqual(crons, ("17 */6 * * *",))
+        self.assertEqual(workflow.count("secrets.SZL_GITHUB_TOKEN"), 3)
+        self.assertEqual(workflow.count("secrets.HF_ORG_TOKEN1"), 2)
+        self.assertIn(
+            "steps.org-reader.outputs.token || secrets.SZL_GITHUB_TOKEN || "
+            "secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token",
+            workflow,
+        )
+        self.assertIn(
+            "steps.org-reader.outputs.token != '' || "
+            "secrets.SZL_GITHUB_TOKEN != '' || "
+            "secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN != ''",
+            workflow,
+        )
+        self.assertNotIn("workflow_dispatch:", workflow)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
