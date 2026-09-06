@@ -1,3 +1,8 @@
 # Generated ephemeral internal evidence and receipt, never committed.
 /census-internal.json
 /census-receipt.json
+
+# Python build and interpreter output is never source evidence.
+__pycache__/
+*.py[cod]
+*$py.class
