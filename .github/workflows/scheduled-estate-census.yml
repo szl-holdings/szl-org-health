@@ -42,6 +42,7 @@ jobs:
 
       - name: Mint short-lived organization reader
         id: org-reader
+        if: vars.QILLQAQ_CLIENT_ID != ''
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -49,6 +50,7 @@ jobs:
           private-key: ${{ secrets.QILLQAQ_PRIVATE_KEY }}
           owner: szl-holdings
           permission-contents: read
+          permission-organization-administration: read
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -58,14 +60,29 @@ jobs:
       - name: Install locked runtime dependencies
         run: python -m pip install --no-cache-dir --require-hashes -r requirements.txt
 
-      - name: Collect live estate census
+      - name: Collect live estate census with a validated organization reader
         id: collect
         continue-on-error: true
         env:
-          GITHUB_TOKEN: ${{ steps.org-reader.outputs.token || secrets.SZL_GITHUB_TOKEN || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token }}
+          GITHUB_READER_APP_TOKEN: ${{ steps.org-reader.outputs.token }}
+          SZL_GITHUB_TOKEN: ${{ secrets.SZL_GITHUB_TOKEN }}
+          DOCS_AUTOMATION_TEAM_READ_TOKEN: ${{ secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN }}
+          ORG_REPO_WORKFLOW_TOKEN: ${{ secrets.ORG_REPO_WORKFLOW_TOKEN }}
+          SZL_ORG_PAT: ${{ secrets.SZL_ORG_PAT }}
+          SZL_GITHUB_PAT: ${{ secrets.SZL_GITHUB_PAT }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+          GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPOSITORY_GITHUB_TOKEN: ${{ github.token }}
           HF_TOKEN: ${{ secrets.HF_ORG_TOKEN || secrets.HF_ORG_TOKEN1 || secrets.HF_WRITE_TOKEN || secrets.HF_TOKEN || secrets.HUGGINGFACE_TOKEN || secrets.HUGGING_FACE_HUB_TOKEN }}
           REFRESH_DEADLINE_S: "600"
-        run: python -I -B refresh_snapshot.py
+        run: |
+          python -B -m tools.run_with_validated_github_reader \
+            --org szl-holdings \
+            --minimum-repositories 123 \
+            -- \
+            python -I -B refresh_snapshot.py
 
       - name: Build and enforce census receipt
         id: gate
@@ -73,7 +90,7 @@ jobs:
         env:
           COLLECT_OUTCOME: ${{ steps.collect.outcome }}
           EXPECTED_GITHUB_REPOSITORIES_MINIMUM: "63"
-          HAS_CROSS_REPO_GITHUB_TOKEN: ${{ steps.org-reader.outputs.token != '' || secrets.SZL_GITHUB_TOKEN != '' || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN != '' }}
+          HAS_CROSS_REPO_GITHUB_TOKEN: ${{ steps.org-reader.outputs.token != '' || secrets.SZL_GITHUB_TOKEN != '' || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN != '' || secrets.ORG_REPO_WORKFLOW_TOKEN != '' || secrets.SZL_ORG_PAT != '' || secrets.SZL_GITHUB_PAT != '' || secrets.GH_PAT != '' || secrets.PAT_TOKEN != '' || secrets.GITHUB_PAT != '' || secrets.GH_TOKEN != '' }}
           HAS_HF_TOKEN: ${{ secrets.HF_ORG_TOKEN != '' || secrets.HF_ORG_TOKEN1 != '' || secrets.HF_WRITE_TOKEN != '' || secrets.HF_TOKEN != '' || secrets.HUGGINGFACE_TOKEN != '' || secrets.HUGGING_FACE_HUB_TOKEN != '' }}
           RECEIPT_REPOSITORY: ${{ github.repository }}
           RECEIPT_RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -127,6 +144,7 @@ jobs:
 
       - name: Mint short-lived organization reader
         id: org-reader
+        if: vars.QILLQAQ_CLIENT_ID != ''
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -134,6 +152,7 @@ jobs:
           private-key: ${{ secrets.QILLQAQ_PRIVATE_KEY }}
           owner: szl-holdings
           permission-contents: read
+          permission-organization-administration: read
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -143,29 +162,45 @@ jobs:
       - name: Install locked dependencies
         run: python -m pip install --no-cache-dir --require-hashes -r requirements.txt
 
-      - name: Re-run file-audit contracts
+      - name: Re-run file-audit and reader-selection contracts
         run: |
           python -m unittest \
             tests.test_file_audit \
             tests.test_repository_file_audit_runner \
+            tests.test_validated_github_reader \
+            tests.test_repository_hygiene \
             -v
 
       - name: Verify authoritative estate and every tracked default-branch blob
         id: collect
         continue-on-error: true
         env:
-          GITHUB_TOKEN: ${{ steps.org-reader.outputs.token || secrets.SZL_GITHUB_TOKEN || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token }}
+          GITHUB_READER_APP_TOKEN: ${{ steps.org-reader.outputs.token }}
+          SZL_GITHUB_TOKEN: ${{ secrets.SZL_GITHUB_TOKEN }}
+          DOCS_AUTOMATION_TEAM_READ_TOKEN: ${{ secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN }}
+          ORG_REPO_WORKFLOW_TOKEN: ${{ secrets.ORG_REPO_WORKFLOW_TOKEN }}
+          SZL_ORG_PAT: ${{ secrets.SZL_ORG_PAT }}
+          SZL_GITHUB_PAT: ${{ secrets.SZL_GITHUB_PAT }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+          GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPOSITORY_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          python -B -m tools.run_repository_file_audit \
-            --output artifacts/repository-file-audit.private.json \
-            --public-output artifacts/repository-file-audit.public.json \
+          python -B -m tools.run_with_validated_github_reader \
+            --org szl-holdings \
             --minimum-repositories 123 \
-            --max-workers 4 \
-            --max-text-bytes 2097152 \
-            --max-archive-bytes 536870912 \
-            --max-repository-bytes 4294967296
+            -- \
+            python -B -m tools.run_repository_file_audit \
+              --output artifacts/repository-file-audit.private.json \
+              --public-output artifacts/repository-file-audit.public.json \
+              --minimum-repositories 123 \
+              --max-workers 4 \
+              --max-text-bytes 2097152 \
+              --max-archive-bytes 536870912 \
+              --max-repository-bytes 4294967296
 
       - name: Publish sanitized file-audit summary
         if: always()

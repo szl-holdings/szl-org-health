@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import re
@@ -116,7 +117,7 @@ class SecretWorkflowBoundaryTests(unittest.TestCase):
             ["autonomic-sre.yml", "scheduled-estate-census.yml"],
         )
 
-    def test_scheduled_census_cadence_and_reader_aliases_are_closed(self) -> None:
+    def test_scheduled_census_validates_each_reader_before_use(self) -> None:
         workflow = (WORKFLOWS / "scheduled-estate-census.yml").read_text(
             encoding="utf-8"
         )
@@ -124,20 +125,55 @@ class SecretWorkflowBoundaryTests(unittest.TestCase):
 
         self.assertEqual(events, ("schedule",))
         self.assertEqual(crons, ("17 */6 * * *",))
-        self.assertEqual(workflow.count("secrets.SZL_GITHUB_TOKEN"), 3)
-        self.assertEqual(workflow.count("secrets.HF_ORG_TOKEN1"), 2)
-        self.assertIn(
-            "steps.org-reader.outputs.token || secrets.SZL_GITHUB_TOKEN || "
-            "secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token",
-            workflow,
-        )
-        self.assertIn(
-            "steps.org-reader.outputs.token != '' || "
-            "secrets.SZL_GITHUB_TOKEN != '' || "
-            "secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN != ''",
-            workflow,
-        )
         self.assertNotIn("workflow_dispatch:", workflow)
+        self.assertEqual(
+            workflow.count("python -B -m tools.run_with_validated_github_reader"),
+            2,
+        )
+        self.assertEqual(
+            workflow.count("permission-organization-administration: read"),
+            2,
+        )
+        self.assertEqual(
+            workflow.count("if: vars.QILLQAQ_CLIENT_ID != ''"),
+            2,
+        )
+        self.assertNotIn(
+            "GITHUB_TOKEN: ${{ steps.org-reader.outputs.token ||",
+            workflow,
+        )
+        self.assertGreaterEqual(
+            workflow.count("--minimum-repositories 123"),
+            3,
+        )
+
+        aliases = (
+            "SZL_GITHUB_TOKEN",
+            "DOCS_AUTOMATION_TEAM_READ_TOKEN",
+            "ORG_REPO_WORKFLOW_TOKEN",
+            "SZL_ORG_PAT",
+            "SZL_GITHUB_PAT",
+            "GH_PAT",
+            "PAT_TOKEN",
+            "GITHUB_PAT",
+            "GH_TOKEN",
+        )
+        for alias in aliases:
+            self.assertIn(f"secrets.{alias}", workflow)
+
+        self.assertIn("REPOSITORY_GITHUB_TOKEN: ${{ github.token }}", workflow)
+        self.assertIn(
+            "EXPECTED_GITHUB_REPOSITORIES_MINIMUM: \"63\"",
+            workflow,
+        )
+        self.assertIn(
+            "tests.test_validated_github_reader",
+            workflow,
+        )
+        self.assertIn(
+            "tests.test_repository_hygiene",
+            workflow,
+        )
 
 
 if __name__ == "__main__":
