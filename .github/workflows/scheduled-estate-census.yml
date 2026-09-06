@@ -2,7 +2,7 @@ name: Scheduled estate census
 
 on:
   schedule:
-    - cron: "17 9 * * *"
+    - cron: "17 */6 * * *"
 
 permissions:
   contents: read
@@ -62,8 +62,8 @@ jobs:
         id: collect
         continue-on-error: true
         env:
-          GITHUB_TOKEN: ${{ steps.org-reader.outputs.token || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token }}
-          HF_TOKEN: ${{ secrets.HF_ORG_TOKEN || secrets.HF_WRITE_TOKEN || secrets.HF_TOKEN || secrets.HUGGINGFACE_TOKEN || secrets.HUGGING_FACE_HUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.org-reader.outputs.token || secrets.SZL_GITHUB_TOKEN || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token }}
+          HF_TOKEN: ${{ secrets.HF_ORG_TOKEN || secrets.HF_ORG_TOKEN1 || secrets.HF_WRITE_TOKEN || secrets.HF_TOKEN || secrets.HUGGINGFACE_TOKEN || secrets.HUGGING_FACE_HUB_TOKEN }}
           REFRESH_DEADLINE_S: "600"
         run: python -I -B refresh_snapshot.py
 
@@ -73,8 +73,8 @@ jobs:
         env:
           COLLECT_OUTCOME: ${{ steps.collect.outcome }}
           EXPECTED_GITHUB_REPOSITORIES_MINIMUM: "63"
-          HAS_CROSS_REPO_GITHUB_TOKEN: ${{ steps.org-reader.outputs.token != '' || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN != '' }}
-          HAS_HF_TOKEN: ${{ secrets.HF_ORG_TOKEN != '' || secrets.HF_WRITE_TOKEN != '' || secrets.HF_TOKEN != '' || secrets.HUGGINGFACE_TOKEN != '' || secrets.HUGGING_FACE_HUB_TOKEN != '' }}
+          HAS_CROSS_REPO_GITHUB_TOKEN: ${{ steps.org-reader.outputs.token != '' || secrets.SZL_GITHUB_TOKEN != '' || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN != '' }}
+          HAS_HF_TOKEN: ${{ secrets.HF_ORG_TOKEN != '' || secrets.HF_ORG_TOKEN1 != '' || secrets.HF_WRITE_TOKEN != '' || secrets.HF_TOKEN != '' || secrets.HUGGINGFACE_TOKEN != '' || secrets.HUGGING_FACE_HUB_TOKEN != '' }}
           RECEIPT_REPOSITORY: ${{ github.repository }}
           RECEIPT_RUN_ATTEMPT: ${{ github.run_attempt }}
           RECEIPT_RUN_ID: ${{ github.run_id }}
@@ -154,7 +154,7 @@ jobs:
         id: collect
         continue-on-error: true
         env:
-          GITHUB_TOKEN: ${{ steps.org-reader.outputs.token || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ steps.org-reader.outputs.token || secrets.SZL_GITHUB_TOKEN || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN || github.token }}
         run: |
           set -euo pipefail
           mkdir -p artifacts
