@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import gzip
+import importlib.util
 import hashlib
 import io
 import json
+import sys
 import tarfile
 import tempfile
 import unittest
 from argparse import Namespace
 from pathlib import Path
 
-from census import deep_repository_audit as audit
+SCRIPT = Path(__file__).resolve().parents[1] / "census" / "deep_repository_audit.py"
+SPEC = importlib.util.spec_from_file_location("szl_deep_repository_audit_test", SCRIPT)
+assert SPEC is not None and SPEC.loader is not None
+audit = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = audit
+SPEC.loader.exec_module(audit)
 
 
 class DeepRepositoryAuditContracts(unittest.TestCase):
@@ -37,9 +44,7 @@ class DeepRepositoryAuditContracts(unittest.TestCase):
         repos = [{"full_name": f"szl-holdings/repo-{index:03d}"} for index in range(23)]
         shards = [audit.select_shard(repos, index, 6) for index in range(6)]
         flattened = [row["full_name"] for shard in shards for row in shard]
-        self.assertEqual(
-            sorted(flattened), sorted(row["full_name"] for row in repos)
-        )
+        self.assertEqual(sorted(flattened), sorted(row["full_name"] for row in repos))
         self.assertEqual(len(flattened), len(set(flattened)))
         self.assertEqual(audit.select_shard(repos, 2, 6), shards[2])
 
