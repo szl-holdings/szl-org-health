@@ -22,6 +22,11 @@ EVENT = re.compile(
 CRON = re.compile(
     r"""^ {4}-\s+cron\s*:\s*(?P<q>['"])(?P<cron>[^'"]+)(?P=q)\s*(?:#.*)?$"""
 )
+EXPECTED_SECRET_WORKFLOWS = {
+    "autonomic-sre.yml": ("schedule",),
+    "operator-deep-repository-audit.yml": ("workflow_dispatch",),
+    "scheduled-estate-census.yml": ("schedule",),
+}
 
 
 def _uses_actions_secrets(source: str) -> bool:
@@ -87,7 +92,7 @@ class SecretWorkflowBoundaryTests(unittest.TestCase):
         self.assertFalse((WORKFLOWS / "zz-org-convergence-20260828.yml").exists())
         self.assertFalse((REPO_ROOT / "tools" / "org_converge_20260828.py").exists())
 
-    def test_actions_secret_workflows_are_provider_scheduled_only(self) -> None:
+    def test_actions_secret_workflows_have_exact_bounded_triggers(self) -> None:
         secret_workflows: list[str] = []
         workflows = sorted(
             {*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")},
@@ -99,9 +104,13 @@ class SecretWorkflowBoundaryTests(unittest.TestCase):
                 continue
 
             secret_workflows.append(workflow.name)
+            self.assertIn(workflow.name, EXPECTED_SECRET_WORKFLOWS)
             events, crons = _canonical_triggers(source, workflow.name)
-            self.assertEqual(events, ("schedule",), workflow.name)
-            self.assertTrue(crons, workflow.name)
+            self.assertEqual(
+                events,
+                EXPECTED_SECRET_WORKFLOWS[workflow.name],
+                workflow.name,
+            )
             self.assertNotIn("persist-credentials: true", source, workflow.name)
             self.assertIn("persist-credentials: false", source, workflow.name)
             self.assertIn(r"ref: ${{ github.sha }}", source, workflow.name)
@@ -111,10 +120,28 @@ class SecretWorkflowBoundaryTests(unittest.TestCase):
                 workflow.name,
             )
 
-        self.assertEqual(
-            secret_workflows,
-            ["autonomic-sre.yml", "scheduled-estate-census.yml"],
-        )
+            if events == ("schedule",):
+                self.assertTrue(crons, workflow.name)
+                self.assertNotIn("workflow_dispatch", source, workflow.name)
+            elif events == ("workflow_dispatch",):
+                self.assertEqual(crons, (), workflow.name)
+                self.assertEqual(workflow.name, "operator-deep-repository-audit.yml")
+                self.assertIn(
+                    'test "$REQUEST_ACTOR" = "stephenlutar2-hash"',
+                    source,
+                    workflow.name,
+                )
+                self.assertIn(
+                    'test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"',
+                    source,
+                    workflow.name,
+                )
+                self.assertIn("permissions:\n  actions: read\n  contents: read", source)
+                self.assertNotRegex(source, r"(?m)^\s+(?:contents|pull-requests):\s+write\s*$")
+            else:  # pragma: no cover - expected map makes this unreachable
+                self.fail(f"{workflow.name}: unhandled secret trigger contract")
+
+        self.assertEqual(secret_workflows, sorted(EXPECTED_SECRET_WORKFLOWS))
 
 
 if __name__ == "__main__":
