@@ -153,10 +153,11 @@ jobs:
             echo "::error::No organization-readable GitHub token is available."
             exit 2
           }
-          python -I -B census/deep_repository_audit.py shard \
+          python -I -B census/deep_repository_audit_v2.py shard \
             --org szl-holdings \
             --shard-index "${{ matrix.shard }}" \
             --shard-count 6 \
+            --expected-repositories-minimum 100 \
             --output-dir "deep-audit-shard-${{ matrix.shard }}"
 
       - name: Upload immutable shard evidence
@@ -211,7 +212,7 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          python -I -B census/deep_repository_audit.py merge \
+          python -I -B census/deep_repository_audit_v2.py merge \
             --org szl-holdings \
             --shard-count 6 \
             --input-dir deep-audit-shards \
