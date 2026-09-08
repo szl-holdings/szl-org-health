@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import hashlib
+import json
 import posixpath
 import re
 import urllib.parse
@@ -765,6 +766,8 @@ def _normalize_sha256(value: Any) -> str | None:
 def _workflow_run_id(value: Any, repository: str) -> int | None:
     if isinstance(value, dict):
         value = _first_value(value, ("id",), ("run_id",), ("url",), ("html_url",))
+    if isinstance(value, bool):
+        return None
     if isinstance(value, int) and value > 0:
         return value
     text = str(value or "").strip()
@@ -917,13 +920,118 @@ def _source_claim(
     )
 
 
+V2_DOCUMENT_SCHEMAS = {
+    "manifest": "szl.hf-deploy-manifest/v2",
+    "source": "szl.source-attestation/v2",
+    "build": "szl.build-info/v2",
+}
+
+
+def _v2_source_claim(payload: dict[str, Any], evidence: str, mode: str):
+    """Parse each exact v2 family without inventing an in-document HF revision."""
+    source = payload.get("source", {})
+    if not isinstance(source, dict):
+        return None, f"{evidence}: invalid v2 source object"
+    repository = _normalize_github_repository(_first_value(
+        payload, ("source", "repository"), ("source_repository",)
+    ))
+    revision = _first_value(
+        payload, ("source", "revision"), ("source", "commit"), ("source_revision",)
+    )
+    if repository is None or not isinstance(revision, str) or not SHA40.fullmatch(revision):
+        return None, f"{evidence}: invalid v2 source identity"
+    repository = repository.casefold()
+    repository_aliases = (source.get("repository"), payload.get("source_repository"))
+    revision_aliases = (source.get("revision"), source.get("commit"), payload.get("source_revision"))
+    if any(
+        value is not None and (_normalize_github_repository(value) or "").casefold() != repository
+        for value in repository_aliases
+    ) or any(value is not None and value != revision for value in revision_aliases):
+        return None, f"{evidence}: contradictory v2 source identity aliases"
+    claim = {
+        "version": 2, "mode": mode, "evidence": evidence,
+        "repository": repository, "source_revision": revision, "payload": payload,
+    }
+    if mode == "build":
+        count = payload.get("artifact_count")
+        if type(count) is not int or count <= 0 or payload.get("runtime_hash_match") is not True:
+            return None, f"{evidence}: runtime artifact integrity is not established"
+        claim["artifact_count"] = count
+        return claim, None
+
+    workflow = payload.get("workflow")
+    destination = payload.get("destination")
+    if not isinstance(workflow, dict) or not isinstance(destination, dict):
+        return None, f"{evidence}: v2 workflow and destination are required"
+    def positive_integer(value):
+        if type(value) is int and value > 0:
+            return value
+        if isinstance(value, str) and re.fullmatch(r"[1-9][0-9]{0,19}", value):
+            return int(value)
+        return None
+
+    run_id = positive_integer(workflow.get("run_id"))
+    attempt = positive_integer(workflow.get("run_attempt"))
+    source_ref = _first_value(payload, ("source", "ref"), ("source_ref",))
+    if (
+        run_id is None or attempt is None
+        or (_normalize_github_repository(workflow.get("repository")) or "").casefold() != repository
+        or not isinstance(source_ref, str) or not source_ref.startswith("refs/heads/")
+        or any(value is not None and value != source_ref for value in (source.get("ref"), payload.get("source_ref")))
+        or workflow.get("ref") != source_ref
+        or destination.get("repo_type") != "space"
+        or not isinstance(destination.get("repo_id"), str)
+        or not destination["repo_id"]
+    ):
+        return None, f"{evidence}: invalid v2 workflow or destination identity"
+    deployment = payload.get("deployment")
+    if deployment is not None and not isinstance(deployment, dict):
+        return None, f"{evidence}: invalid v2 deployment object"
+    if isinstance(deployment, dict) and deployment.get("workflow_run") is not None:
+        if _workflow_run_id(deployment["workflow_run"], repository) != run_id:
+            return None, f"{evidence}: contradictory deployment workflow run"
+    claim.update({
+        "workflow_run_id": run_id, "workflow_run_attempt": attempt,
+        "source_ref": source_ref, "hf_repository": destination["repo_id"],
+    })
+    if mode == "source":
+        integrity = payload.get("artifact_integrity")
+        if (
+            payload.get("manifest_schema") != V2_DOCUMENT_SCHEMAS["manifest"]
+            or not isinstance(integrity, dict) or integrity.get("status") != "MATCH"
+            or type(integrity.get("checked")) is not int or integrity["checked"] <= 0
+            or integrity.get("failures") != []
+        ):
+            return None, f"{evidence}: runtime artifact integrity is not established"
+        claim["artifact_count"] = integrity["checked"]
+    else:
+        artifacts = payload.get("artifacts")
+        if not isinstance(artifacts, dict) or not 0 < len(artifacts) <= 128:
+            return None, f"{evidence}: bounded nonempty artifact map is required"
+        for path, digest in artifacts.items():
+            if (
+                not isinstance(path, str) or not path or len(path) > 512
+                or path.startswith("/") or "\\" in path or "%" in path
+                or any(part in {"", ".", ".."} for part in path.split("/"))
+                or any(ord(char) < 32 for char in path)
+                or not isinstance(digest, str) or not SHA256.fullmatch(digest)
+            ):
+                return None, f"{evidence}: invalid artifact path or digest"
+        claim["artifacts"] = artifacts
+        claim["artifact_count"] = len(artifacts)
+        claim["artifact_sha256"] = hashlib.sha256(json.dumps(
+            artifacts, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")).hexdigest()
+    return claim, None
+
+
 def _read_source_document(
     url: str,
     *,
     evidence: str,
     schema_mode: str,
     headers: dict[str, str] | None = None,
-) -> tuple[dict[str, Any] | None, str, str | None]:
+) -> tuple[dict[str, Any] | None, str, str | None, int]:
     payload, _, error = request_json(
         url,
         headers=headers or {"Accept": "application/json"},
@@ -932,18 +1040,26 @@ def _read_source_document(
     )
     if error:
         if error in {"http404", "http410"}:
-            return None, "ABSENT", error
+            return None, "ABSENT", error, _http_status(error)
         if error.startswith("invalid-json:"):
-            return None, "INVALID", f"{evidence}: HTTP success did not return JSON"
-        return None, "UNKNOWN", f"{evidence}: {error}"
+            return None, "INVALID", f"{evidence}: HTTP success did not return JSON", 200
+        return None, "UNKNOWN", f"{evidence}: {error}", _http_status(error)
+    schema = payload.get("schema") if isinstance(payload, dict) else None
+    if schema == "szl.deployment-source/v3":
+        return None, "UNKNOWN", f"{evidence}: attestation reference has not been verified", 200
+    if schema_mode == "build" and isinstance(payload, dict) and schema is None:
+        return None, "UNKNOWN", f"{evidence}: versioned build evidence is unavailable", 200
+    if schema == V2_DOCUMENT_SCHEMAS[schema_mode]:
+        claim, validation_error = _v2_source_claim(payload, evidence, schema_mode)
+        return (None, "INVALID", validation_error, 200) if validation_error else (claim, "VALID", None, 200)
     claim, validation_error = _source_claim(
         payload,
         evidence=evidence,
         schema_mode=schema_mode,
     )
     if validation_error:
-        return None, "INVALID", validation_error
-    return claim, "VALID", None
+        return None, "INVALID", validation_error, 200
+    return claim, "VALID", None, 200
 
 
 def _binding_result(
@@ -999,10 +1115,18 @@ def _authenticate_github_claim(
         return "UNKNOWN", f"GitHub source commit could not be authenticated: {detail}"
     if str(commit.get("sha") or "").lower() != revision:
         return "INVALID", "GitHub source commit response does not match the claim"
+    verification = _first_value(commit, ("commit", "verification"))
+    if not isinstance(verification, dict):
+        return "UNKNOWN", "GitHub source signature evidence is unavailable"
+    if verification.get("verified") is not True or verification.get("reason") != "valid":
+        return "INVALID", "GitHub source commit signature is not verified"
 
     run_id = claim["workflow_run_id"]
+    run_endpoint = f"{GITHUB_API}/repos/{encoded_repository}/actions/runs/{run_id}"
+    if claim.get("workflow_run_attempt") is not None:
+        run_endpoint += f"/attempts/{claim['workflow_run_attempt']}"
     run, _, run_error = request_json(
-        f"{GITHUB_API}/repos/{encoded_repository}/actions/runs/{run_id}",
+        run_endpoint,
         headers=headers,
         timeout=20,
         retries=1,
@@ -1010,31 +1134,33 @@ def _authenticate_github_claim(
     if run_error or not isinstance(run, dict):
         detail = run_error or "invalid response"
         return "UNKNOWN", f"GitHub workflow run could not be authenticated: {detail}"
-    if run.get("id") != run_id:
+    if type(run.get("id")) is not int or run.get("id") != run_id:
         return "INVALID", "GitHub workflow run ID does not match the claim"
     if str(run.get("head_sha") or "").lower() != revision:
         return "INVALID", "GitHub workflow run head does not match the source commit"
-    run_repository = _first_value(
-        run,
-        ("repository", "full_name"),
-        ("head_repository", "full_name"),
-    )
-    if (
-        run_repository
-        and str(run_repository).casefold() != str(repository).casefold()
-    ):
+    run_repository = _normalize_github_repository(_first_value(run, ("repository", "full_name")))
+    if run_repository is None or run_repository.casefold() != repository.casefold():
         return "INVALID", "GitHub workflow run repository does not match the claim"
+    if claim.get("workflow_run_attempt") is not None and (
+        type(run.get("run_attempt")) is not int
+        or run["run_attempt"] != claim["workflow_run_attempt"]
+    ):
+        return "INVALID", "GitHub workflow run attempt does not match the manifest"
+    if claim.get("source_ref") is not None and (
+        f"refs/heads/{run.get('head_branch')}" != claim["source_ref"]
+    ):
+        return "INVALID", "GitHub workflow source ref does not match the manifest"
     if run.get("status") != "completed":
         return "UNKNOWN", "GitHub workflow run is not terminal"
     if run.get("conclusion") != "success":
         return "INVALID", "GitHub workflow run did not conclude successfully"
     workflow_identity = " ".join(
         str(run.get(key) or "")
-        for key in ("name", "path", "display_title", "head_branch")
+        for key in ("name", "path")
     ).casefold()
     if not any(marker in workflow_identity for marker in DEPLOYMENT_WORKFLOW_MARKERS):
         jobs_payload, _, jobs_error = request_json(
-            f"{GITHUB_API}/repos/{encoded_repository}/actions/runs/{run_id}/jobs",
+            f"{run_endpoint}/jobs",
             headers=headers,
             timeout=20,
             retries=1,
@@ -1048,6 +1174,10 @@ def _authenticate_github_claim(
             str(job.get("name") or "")
             for job in (jobs_payload.get("jobs") or [])
             if isinstance(job, dict)
+            and job.get("status") == "completed"
+            and job.get("conclusion") == "success"
+            and type(job.get("run_id")) is int and job["run_id"] == run_id
+            and job.get("head_sha") == revision
         ).casefold()
         if not any(
             marker in f"{workflow_identity} {job_identity}"
@@ -1058,6 +1188,80 @@ def _authenticate_github_claim(
                 "GitHub workflow run is not a Hugging Face deployment workflow",
             )
     return "OBSERVED", None
+
+
+def _resolve_v2_binding(claims, repo_id, repo_revision, runtime_revision):
+    """Corroborate three v2 documents, immutable bytes, and signed source/run."""
+    by_mode = {claim.get("mode"): claim for claim in claims}
+    if any(claim.get("version") != 2 for claim in claims):
+        return "INVALID", "source evidence mixes incompatible schema families", None
+    if set(by_mode) != {"manifest", "source", "build"}:
+        return "UNKNOWN", "v2 binding requires immutable manifest, runtime source, and build evidence", None
+    manifest, source, build = (by_mode[key] for key in ("manifest", "source", "build"))
+    for key in ("repository", "source_revision", "artifact_count"):
+        if source[key] != manifest[key] or build[key] != manifest[key]:
+            return "INVALID", f"v2 source evidence disagrees on {key}", None
+    for key in ("workflow_run_id", "workflow_run_attempt", "source_ref", "hf_repository"):
+        if source[key] != manifest[key]:
+            return "INVALID", f"v2 source evidence disagrees on {key}", None
+    if not SHA40.fullmatch(repo_revision) or not runtime_revision:
+        return "UNKNOWN", "immutable Hugging Face repository/runtime revision is unavailable", None
+    if not SHA40.fullmatch(runtime_revision) or repo_revision != runtime_revision:
+        return "INVALID", "repository and runtime Hugging Face revisions do not match", None
+    if manifest["hf_repository"] != repo_id:
+        return "INVALID", "v2 destination does not match the observed Space", None
+    for document in claims:
+        payload = document["payload"]
+        deployment = payload.get("deployment")
+        if isinstance(deployment, dict):
+            target = deployment.get("hf_space")
+            if target is not None and target != repo_id:
+                return "INVALID", "runtime destination contradicts the manifest", None
+        revisions = [payload.get(key) for key in (
+            "expected_huggingface_revision", "observed_huggingface_revision"
+        )]
+        if isinstance(deployment, dict):
+            revisions.append(deployment.get("hf_revision"))
+        if any(value is not None and value != repo_revision for value in revisions):
+            return "INVALID", "explicit runtime HF revision contradicts the provider", None
+    claim = {key: value for key, value in manifest.items() if key != "payload"}
+    claim["hf_revision"] = repo_revision
+    github_state, github_error = _authenticate_github_claim(claim)
+    if github_state == "INVALID":
+        return github_state, github_error, claim
+    total_bytes = 0
+    artifact_error = None
+    for path, expected in manifest["artifacts"].items():
+        remaining = 16 * 1024 * 1024 - total_bytes
+        if remaining <= 0:
+            artifact_error = "immutable artifact verification exceeded its byte budget"
+            break
+        artifact_url = (
+            f"{HF}/spaces/{urllib.parse.quote(repo_id, safe='/')}/resolve/"
+            f"{repo_revision}/{urllib.parse.quote(path, safe='/')}"
+        )
+        read_limit = min(4 * 1024 * 1024, remaining)
+        body, _, error = request_bytes(
+            artifact_url, headers=hf_headers(), timeout=12, retries=0,
+            max_bytes=read_limit,
+        )
+        if error or body is None:
+            # A failed/oversized read may have consumed its full allowance.
+            total_bytes += read_limit
+            artifact_error = "immutable artifact bytes could not be verified"
+            continue
+        total_bytes += len(body)
+        if hashlib.sha256(body).hexdigest() != expected:
+            return "INVALID", "immutable artifact digest does not match the manifest", claim
+    if artifact_error:
+        return "UNKNOWN", artifact_error, claim
+    if github_state != "OBSERVED":
+        return github_state, github_error, claim
+    return (
+        "UNKNOWN",
+        "v2 documents and immutable bytes agree, but artifact provenance linking the manifest to the signed GitHub run is unavailable",
+        claim,
+    )
 
 
 def _resolve_space_source_binding(
@@ -1074,7 +1278,7 @@ def _resolve_space_source_binding(
         or ""
     ).lower()
 
-    documents: list[tuple[dict[str, Any] | None, str, str | None]] = []
+    documents: list[tuple[dict[str, Any] | None, str, str | None, int]] = []
     build_document = _read_source_document(
         urllib.parse.urljoin(root_url, "api/build-info"),
         evidence="api/build-info",
@@ -1082,11 +1286,7 @@ def _resolve_space_source_binding(
     )
     documents.append(build_document)
     build_info_error = build_document[2] if build_document[1] != "VALID" else None
-    build_info_http = (
-        200
-        if build_document[1] in {"VALID", "INVALID"}
-        else _http_status(build_info_error)
-    )
+    build_info_http = build_document[3]
 
     documents.append(
         _read_source_document(
@@ -1119,14 +1319,14 @@ def _resolve_space_source_binding(
 
     claims = [
         document
-        for document, state, _ in documents
+        for document, state, _, _ in documents
         if state == "VALID" and document
     ]
     invalid_errors = [
-        error for _, state, error in documents if state == "INVALID" and error
+        error for _, state, error, _ in documents if state == "INVALID" and error
     ]
     unknown_errors = [
-        error for _, state, error in documents if state == "UNKNOWN" and error
+        error for _, state, error, _ in documents if state == "UNKNOWN" and error
     ]
     evidence = [str(claim["evidence"]) for claim in claims]
 
@@ -1150,6 +1350,15 @@ def _resolve_space_source_binding(
             evidence=evidence,
             build_info_http=build_info_http,
             build_info_error=build_info_error,
+        )
+
+    if any(claim.get("version") == 2 for claim in claims):
+        state, error, claim = _resolve_v2_binding(claims, repo_id, repo_revision, runtime_revision)
+        if state == "OBSERVED" and unknown_errors:
+            state, error = "UNKNOWN", "; ".join(unknown_errors)
+        return _binding_result(
+            state, error=error, claim=claim, evidence=evidence,
+            build_info_http=build_info_http, build_info_error=build_info_error,
         )
 
     claim = claims[0]
@@ -1226,6 +1435,15 @@ def _resolve_space_source_binding(
             build_info_error=build_info_error,
         )
 
+    if not (
+        any(name in DEPLOYMENT_MANIFEST_PATHS for name in evidence)
+        and any(name in {"api/build-info", ".well-known/szl-source.json"} for name in evidence)
+    ):
+        return _binding_result(
+            "UNKNOWN", error="runtime evidence and an immutable manifest are both required",
+            claim=claim, evidence=evidence, build_info_http=build_info_http,
+            build_info_error=build_info_error,
+        )
     github_state, github_error = _authenticate_github_claim(claim)
     return _binding_result(
         github_state,
