@@ -1031,7 +1031,7 @@ def _read_source_document(
     evidence: str,
     schema_mode: str,
     headers: dict[str, str] | None = None,
-) -> tuple[dict[str, Any] | None, str, str | None]:
+) -> tuple[dict[str, Any] | None, str, str | None, int]:
     payload, _, error = request_json(
         url,
         headers=headers or {"Accept": "application/json"},
@@ -1040,26 +1040,26 @@ def _read_source_document(
     )
     if error:
         if error in {"http404", "http410"}:
-            return None, "ABSENT", error
+            return None, "ABSENT", error, _http_status(error)
         if error.startswith("invalid-json:"):
-            return None, "INVALID", f"{evidence}: HTTP success did not return JSON"
-        return None, "UNKNOWN", f"{evidence}: {error}"
+            return None, "INVALID", f"{evidence}: HTTP success did not return JSON", 200
+        return None, "UNKNOWN", f"{evidence}: {error}", _http_status(error)
     schema = payload.get("schema") if isinstance(payload, dict) else None
     if schema == "szl.deployment-source/v3":
-        return None, "UNKNOWN", f"{evidence}: attestation reference has not been verified"
+        return None, "UNKNOWN", f"{evidence}: attestation reference has not been verified", 200
     if schema_mode == "build" and isinstance(payload, dict) and schema is None:
-        return None, "UNKNOWN", f"{evidence}: versioned build evidence is unavailable"
+        return None, "UNKNOWN", f"{evidence}: versioned build evidence is unavailable", 200
     if schema == V2_DOCUMENT_SCHEMAS[schema_mode]:
         claim, validation_error = _v2_source_claim(payload, evidence, schema_mode)
-        return (None, "INVALID", validation_error) if validation_error else (claim, "VALID", None)
+        return (None, "INVALID", validation_error, 200) if validation_error else (claim, "VALID", None, 200)
     claim, validation_error = _source_claim(
         payload,
         evidence=evidence,
         schema_mode=schema_mode,
     )
     if validation_error:
-        return None, "INVALID", validation_error
-    return claim, "VALID", None
+        return None, "INVALID", validation_error, 200
+    return claim, "VALID", None, 200
 
 
 def _binding_result(
@@ -1227,23 +1227,36 @@ def _resolve_v2_binding(claims, repo_id, repo_revision, runtime_revision):
     claim = {key: value for key, value in manifest.items() if key != "payload"}
     claim["hf_revision"] = repo_revision
     github_state, github_error = _authenticate_github_claim(claim)
-    if github_state != "OBSERVED":
+    if github_state == "INVALID":
         return github_state, github_error, claim
     total_bytes = 0
+    artifact_error = None
     for path, expected in manifest["artifacts"].items():
+        remaining = 16 * 1024 * 1024 - total_bytes
+        if remaining <= 0:
+            artifact_error = "immutable artifact verification exceeded its byte budget"
+            break
         artifact_url = (
             f"{HF}/spaces/{urllib.parse.quote(repo_id, safe='/')}/resolve/"
             f"{repo_revision}/{urllib.parse.quote(path, safe='/')}"
         )
+        read_limit = min(4 * 1024 * 1024, remaining)
         body, _, error = request_bytes(
             artifact_url, headers=hf_headers(), timeout=12, retries=0,
-            max_bytes=min(4 * 1024 * 1024, 16 * 1024 * 1024 - total_bytes),
+            max_bytes=read_limit,
         )
         if error or body is None:
-            return "UNKNOWN", "immutable artifact bytes could not be verified", claim
+            # A failed/oversized read may have consumed its full allowance.
+            total_bytes += read_limit
+            artifact_error = "immutable artifact bytes could not be verified"
+            continue
         total_bytes += len(body)
         if hashlib.sha256(body).hexdigest() != expected:
             return "INVALID", "immutable artifact digest does not match the manifest", claim
+    if artifact_error:
+        return "UNKNOWN", artifact_error, claim
+    if github_state != "OBSERVED":
+        return github_state, github_error, claim
     return (
         "UNKNOWN",
         "v2 documents and immutable bytes agree, but artifact provenance linking the manifest to the signed GitHub run is unavailable",
@@ -1265,7 +1278,7 @@ def _resolve_space_source_binding(
         or ""
     ).lower()
 
-    documents: list[tuple[dict[str, Any] | None, str, str | None]] = []
+    documents: list[tuple[dict[str, Any] | None, str, str | None, int]] = []
     build_document = _read_source_document(
         urllib.parse.urljoin(root_url, "api/build-info"),
         evidence="api/build-info",
@@ -1273,11 +1286,7 @@ def _resolve_space_source_binding(
     )
     documents.append(build_document)
     build_info_error = build_document[2] if build_document[1] != "VALID" else None
-    build_info_http = (
-        200
-        if build_document[1] in {"VALID", "INVALID"}
-        else _http_status(build_info_error)
-    )
+    build_info_http = build_document[3]
 
     documents.append(
         _read_source_document(
@@ -1310,14 +1319,14 @@ def _resolve_space_source_binding(
 
     claims = [
         document
-        for document, state, _ in documents
+        for document, state, _, _ in documents
         if state == "VALID" and document
     ]
     invalid_errors = [
-        error for _, state, error in documents if state == "INVALID" and error
+        error for _, state, error, _ in documents if state == "INVALID" and error
     ]
     unknown_errors = [
-        error for _, state, error in documents if state == "UNKNOWN" and error
+        error for _, state, error, _ in documents if state == "UNKNOWN" and error
     ]
     evidence = [str(claim["evidence"]) for claim in claims]
 

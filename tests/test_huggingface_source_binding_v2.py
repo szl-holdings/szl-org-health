@@ -114,6 +114,7 @@ class HuggingFaceSourceBindingV2Tests(unittest.TestCase):
         authenticated=True,
         artifact_bytes=ARTIFACT_BYTES,
         artifact_error=None,
+        artifact_responses=None,
         github_error=None,
     ):
         bundle = copy.deepcopy(bundle if bundle is not None else immune_bundle())
@@ -140,6 +141,10 @@ class HuggingFaceSourceBindingV2Tests(unittest.TestCase):
             return (None, {}, "http404") if key in absent else (bundle[key], {}, None)
 
         def request_artifact(url, **_kwargs):
+            if artifact_responses is not None:
+                self.assertIn(url, artifact_responses, f"unexpected artifact request: {url}")
+                body, error = artifact_responses[url]
+                return body, {}, error
             self.assertEqual(
                 url, ARTIFACT_URL, "artifact must use its immutable HF revision"
             )
@@ -255,16 +260,106 @@ class HuggingFaceSourceBindingV2Tests(unittest.TestCase):
                 result, _, _ = self.resolve(**kwargs)
                 self.assert_unbound(result, "UNKNOWN")
 
+    def test_successful_unverified_build_info_preserves_http_status(self):
+        for schema in (None, "szl.deployment-source/v3"):
+            with self.subTest(schema=schema):
+                bundle = immune_bundle()
+                if schema is None:
+                    del bundle["build"]["schema"]
+                else:
+                    bundle["build"]["schema"] = schema
+                    bundle["build"]["attestation_reference"] = {
+                        "repository": REPOSITORY,
+                        "subject_digest": ARTIFACT_SET_DIGEST,
+                    }
+
+                result, _, _ = self.resolve(bundle)
+
+                self.assert_unbound(result, "UNKNOWN")
+                self.assertEqual(result["build_info_http"], 200)
+                self.assertIsNotNone(result["build_info_error"])
+
     def test_independent_artifact_hash_mismatch_is_invalid(self):
         result, _, artifacts = self.resolve(artifact_bytes=b"different deployed bytes")
 
         self.assert_unbound(result, "INVALID")
         artifacts.assert_called_once()
 
+    def test_artifact_mismatch_dominates_unavailable_github_authentication(self):
+        for kwargs in ({"authenticated": False}, {"github_error": "http403"}):
+            with self.subTest(kwargs=kwargs):
+                result, _, artifacts = self.resolve(
+                    artifact_bytes=b"different deployed bytes", **kwargs
+                )
+
+                self.assert_unbound(result, "INVALID")
+                self.assertIn("digest", result["source_binding_error"])
+                artifacts.assert_called_once()
+
+    def test_later_artifact_mismatch_dominates_earlier_unreadable_artifact(self):
+        second_bytes = b"second manifest artifact\n"
+        second_url = (
+            f"https://huggingface.co/spaces/{SPACE}/resolve/{HF_REVISION}/second.js"
+        )
+        bundle = immune_bundle()
+        bundle["manifest"]["artifacts"]["second.js"] = hashlib.sha256(
+            second_bytes
+        ).hexdigest()
+        bundle["source"]["artifact_integrity"]["checked"] = 2
+        bundle["build"]["artifact_count"] = 2
+        bundle["item"]["siblings"].append({"rfilename": "second.js"})
+        responses = {
+            ARTIFACT_URL: (None, "http403"),
+            second_url: (b"different second artifact", None),
+        }
+        for kwargs in ({}, {"authenticated": False}, {"github_error": "http403"}):
+            with self.subTest(kwargs=kwargs):
+                result, _, artifacts = self.resolve(
+                    bundle, artifact_responses=responses, **kwargs
+                )
+
+                self.assert_unbound(result, "INVALID")
+                self.assertIn("digest", result["source_binding_error"])
+                self.assertEqual(
+                    [call.args[0] for call in artifacts.call_args_list],
+                    [ARTIFACT_URL, second_url],
+                )
+
     def test_unavailable_artifact_is_unknown_despite_runtime_match_claim(self):
         result, _, _ = self.resolve(artifact_bytes=None, artifact_error="http403")
 
         self.assert_unbound(result, "UNKNOWN")
+
+    def test_unavailable_artifact_reads_still_consume_aggregate_byte_budget(self):
+        bundle = immune_bundle()
+        paths = [f"artifact-{index}.js" for index in range(5)]
+        bundle["manifest"]["artifacts"] = {
+            path: ARTIFACTS["app.js"] for path in paths
+        }
+        bundle["source"]["artifact_integrity"]["checked"] = len(paths)
+        bundle["build"]["artifact_count"] = len(paths)
+        bundle["item"]["siblings"].extend(
+            {"rfilename": path} for path in paths
+        )
+        responses = {
+            f"https://huggingface.co/spaces/{SPACE}/resolve/{HF_REVISION}/{path}": (
+                None, "response-body-limit-exceeded"
+            )
+            for path in paths
+        }
+
+        result, _, artifacts = self.resolve(bundle, artifact_responses=responses)
+
+        self.assert_unbound(result, "UNKNOWN")
+        self.assertIn("budget", result["source_binding_error"].lower())
+        self.assertEqual(
+            [call.args[0] for call in artifacts.call_args_list],
+            list(responses)[:4],
+        )
+        self.assertEqual(
+            [call.kwargs["max_bytes"] for call in artifacts.call_args_list],
+            [4 * 1024 * 1024] * 4,
+        )
 
     def test_artifact_count_and_runtime_integrity_disagreement_are_invalid(self):
         mutations = (
