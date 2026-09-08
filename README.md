@@ -24,6 +24,33 @@ The GitHub collector follows pagination instead of maintaining a hand-written re
 - Preliminary repository classifications are deterministic and visible. Anything not proven by the current policy is `unclassified`, not guessed.
 - No credential values are returned by the API or rendered by the interface.
 
+### Space source-binding evidence
+
+Source binding is a separate reading from reachability. A v1 claim requires both
+runtime evidence and an immutable deployment manifest. The v2 reader recognizes
+three exact document families: `szl.hf-deploy-manifest/v2`,
+`szl.source-attestation/v2`, and `szl.build-info/v2`. All three must agree on the
+source and artifact count; the manifest and runtime source must also agree on
+the destination and workflow run, attempt, and ref.
+
+The v2 reader checks equal Hub repository and running revisions, independently
+fetches and hashes manifest-listed bytes at that immutable Hub revision, and
+authenticates a GitHub-verified signed source commit plus a successful deployment
+workflow run for the same repository, commit, ref, and exact historical attempt.
+Artifact reads are bounded to 128 files, 4 MiB per file, and 16 MiB total.
+Missing credentials or unreadable evidence remain `UNKNOWN`; contradictory
+evidence is `INVALID`. Even when those checks agree, v2 remains `UNKNOWN` because
+the artifact map has not been cryptographically bound to the claimed GitHub run.
+It cannot promote a Space to `OPERATIONAL_SOURCE_BOUND`. An attestation reference
+in `szl.deployment-source/v3` likewise remains `UNKNOWN` until cryptographic
+verification is implemented.
+
+This is a narrow cross-source observation, not a cryptographic release receipt,
+proof of whole-repository parity, inference quality, training completion, or a
+safe writable-storage boundary. A runtime's self-reported integrity result is
+not sufficient on its own. Private evidence still passes through the closed
+public-projection allowlist below.
+
 ## Public and internal evidence boundary
 
 The collectors may use read-only credentials to evaluate evidence that is not public. That evidence is never returned directly by `/api/health`, written to `static/data.json`, printed by `refresh_snapshot.py --stdout`, or uploaded as a workflow artifact.

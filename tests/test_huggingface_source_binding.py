@@ -71,7 +71,10 @@ class HuggingFaceSourceBindingTests(unittest.TestCase):
         source_response = source_response or (anatomy_source_document(), {}, None)
         manifest_response = manifest_response or (anatomy_manifest(), {}, None)
         commit_response = commit_response or (
-            {"sha": ANATOMY_SOURCE_REVISION},
+            {
+                "sha": ANATOMY_SOURCE_REVISION,
+                "commit": {"verification": {"verified": True, "reason": "valid"}},
+            },
             {},
             None,
         )
@@ -99,7 +102,11 @@ class HuggingFaceSourceBindingTests(unittest.TestCase):
             if url.endswith(f"/actions/runs/{ANATOMY_WORKFLOW_RUN}"):
                 return run_response
             if url.endswith(f"/actions/runs/{ANATOMY_WORKFLOW_RUN}/jobs"):
-                return ({"jobs": [{"name": "Publish Hugging Face Space"}]}, {}, None)
+                return ({"jobs": [{
+                    "name": "Publish Hugging Face Space", "status": "completed",
+                    "conclusion": "success", "run_id": ANATOMY_WORKFLOW_RUN,
+                    "head_sha": ANATOMY_SOURCE_REVISION,
+                }]}, {}, None)
             raise AssertionError(f"unexpected request: {url}")
 
         def auth(env_names):
@@ -255,6 +262,41 @@ class HuggingFaceSourceBindingTests(unittest.TestCase):
         )
 
         self.assertEqual(result["source_binding_state"], "INVALID")
+
+    def test_one_evidence_class_cannot_establish_source_binding(self):
+        absent = (None, {}, "http404")
+        for changes in (
+            {"manifest_response": absent},
+            {"source_response": absent, "build_response": absent},
+            {"item": {**anatomy_item(), "siblings": []}},
+        ):
+            with self.subTest(changes=changes):
+                self.assertEqual(self.resolve(**changes)["source_binding_state"], "UNKNOWN")
+
+    def test_unsigned_source_cannot_establish_source_binding(self):
+        for verification in (
+            {"verified": False, "reason": "unsigned"},
+            {"verified": "true", "reason": "valid"},
+            {"verified": True, "reason": "unknown_key"},
+        ):
+            with self.subTest(verification=verification):
+                result = self.resolve(commit_response=({
+                    "sha": ANATOMY_SOURCE_REVISION,
+                    "commit": {"verification": verification},
+                }, {}, None))
+                self.assertEqual(result["source_binding_state"], "INVALID")
+
+    def test_workflow_repository_is_required_even_with_a_matching_head_repository(self):
+        for repository in (None, {}, {"full_name": ""}, {"full_name": "other/repo"}):
+            with self.subTest(repository=repository):
+                result = self.resolve(run_response=({
+                    "id": ANATOMY_WORKFLOW_RUN,
+                    "head_sha": ANATOMY_SOURCE_REVISION,
+                    "status": "completed", "conclusion": "success",
+                    "repository": repository,
+                    "head_repository": {"full_name": "szl-holdings/anatomy"},
+                }, {}, None))
+                self.assertEqual(result["source_binding_state"], "INVALID")
 
 
 if __name__ == "__main__":
