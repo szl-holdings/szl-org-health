@@ -152,6 +152,30 @@ The workflow requires the existing `HF_TOKEN` secret for recovery. Without it,
 the controller remains fail-closed and records `HF_TOKEN_MISSING`; it never
 converts missing authority into a successful repair.
 
+## Autonomic SLO verdict evidence
+
+The independent `autonomic-slo.yml` workflow captures the controller exit code
+while it saves immutable receipts. Its final evidence step publishes the
+recorded reasons and rolling-window metrics, then preserves the verdict:
+`HEALTHY` returns 0, `INCIDENT` returns 2, and missing, invalid, or inconsistent
+evidence returns 1. A successful artifact upload does not establish reliability.
+The gate checks the canonical receipt digest, its sidecar, and agreement with
+the controller exit code before accepting a healthy result.
+
+Current `UP` probes do not erase failures retained in the 60-minute, 6-hour,
+and 24-hour windows. For example, main run `34695092582` observed all seven
+surfaces reachable but retained 24-hour availability failures for A11oy,
+Killinchu, and Lyte. Their measured burn exceeded policy and correctly produced
+`INCIDENT` / `SEV3`. Timeout receipts do not establish which service, provider,
+or network component caused the timeout. Recovery requires fresh observations
+passing the existing objectives; history and thresholds must not be changed
+merely to make the workflow green.
+
+`tests/test_slo_workflow_evidence.py` exercises the real workflow gate with
+deterministic healthy and historical-incident fixtures, plus missing, malformed,
+tampered, and contradictory evidence. A passing fixture or CI run proves the
+gate's behavior; only a scheduled live receipt proves that cycle's SLO verdict.
+
 ## Tests
 
 ```bash
