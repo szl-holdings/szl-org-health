@@ -11,8 +11,10 @@ import concurrent.futures as cf
 import copy
 import hashlib
 import json
+import os
 import re
 import time
+import uuid
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -26,6 +28,33 @@ PUBLIC_PROJECTION_SCHEMA = "szl.estate-public-projection/v1"
 _CACHE: dict[str, Any] = {"data": None, "ts": 0.0}
 _CACHE_TTL = 60
 _EXPOSURES = {"public", "internal"}
+
+
+def _timestamp() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _observed_collection(collector: Callable[[], Any]) -> tuple[dict, dict]:
+    observation = {"started_at": _timestamp()}
+    try:
+        source = {"ok": True, "data": collector()}
+    except Exception as exc:  # independent source failure remains visible
+        source = {"ok": False, "error": str(exc)[:160]}
+    observation["completed_at"] = _timestamp()
+    return source, observation
+
+
+def _public_collection(value: Any) -> dict | None:
+    """Collection timing is public; subject and private source digests are not."""
+    if not isinstance(value, Mapping) or value.get("schema") != "szl.census-collection/v1":
+        return None
+    identity = value.get("id")
+    if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{32}", identity):
+        return None
+    times = {key: value.get(key) for key in ("started_at", "completed_at")}
+    if any(not isinstance(t, str) or not _UTC_TIMESTAMP.fullmatch(t) for t in times.values()):
+        return None
+    return {"schema": "szl.census-collection/v1", "id": identity, **times}
 _HF_ASSET_KINDS = (
     "models",
     "datasets",
@@ -276,8 +305,12 @@ def _public_hf_asset(value: Any, kind: str) -> dict[str, Any]:
     )
     return {
         "ok": ok,
-        "count": len(public_items) if items_valid else None,
-        "diagnostic_state": "AVAILABLE" if ok else "SOURCE_UNAVAILABLE",
+        "count": len(public_items) if ok else None,
+        "diagnostic_state": (
+            "AVAILABLE" if ok else "INVALID_RESPONSE"
+            if not items_valid or value.get("diagnostic_state") == "INVALID_RESPONSE"
+            else "SOURCE_UNAVAILABLE"
+        ),
         "error": None if ok else "SOURCE_UNAVAILABLE",
         "items": public_items,
     }
@@ -617,6 +650,7 @@ def project_public_report(internal_report: Mapping[str, Any]) -> dict[str, Any]:
         "projection_schema": PUBLIC_PROJECTION_SCHEMA,
         "source_snapshot_sha256": source_snapshot_sha256,
         "generated_at": generated_at,
+        "collection": _public_collection(internal_report.get("collection")),
         "exposure": "public",
         "sources": {
             "github": _public_source(
@@ -661,9 +695,21 @@ def build_report(
 
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "generated_at": _timestamp(),
         "exposure": "internal",
         "sources": {},
+    }
+    collection = {
+        "schema": "szl.census-collection/v1",
+        "id": uuid.uuid4().hex,
+        "started_at": report["generated_at"],
+        "subject": {
+            "repository": os.environ.get("GITHUB_REPOSITORY"),
+            "workflow_sha": os.environ.get("GITHUB_SHA"),
+            "run_id": os.environ.get("GITHUB_RUN_ID"),
+            "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+        },
+        "source_observations": {},
     }
     collectors: dict[str, Callable[[], Any]] = {
         "github": lambda: collect_github(
@@ -676,16 +722,19 @@ def build_report(
         "dns": collect_dns,
     }
     with cf.ThreadPoolExecutor(max_workers=len(collectors)) as executor:
-        futures = {executor.submit(fn): name for name, fn in collectors.items()}
+        futures = {executor.submit(_observed_collection, fn): name for name, fn in collectors.items()}
         for future in cf.as_completed(futures):
             name = futures[future]
-            try:
-                report["sources"][name] = {"ok": True, "data": future.result()}
-            except Exception as exc:  # noqa: BLE001 - explicit source failure
-                report["sources"][name] = {
-                    "ok": False,
-                    "error": str(exc)[:160],
-                }
+            source, observation = future.result()
+            report["sources"][name] = source
+            collection["source_observations"][name] = observation
+
+    collection["completed_at"] = _timestamp()
+    collection["sources_sha256"] = hashlib.sha256(
+        serialize_report(report["sources"]).encode("utf-8")
+    ).hexdigest()
+    report["generated_at"] = collection["completed_at"]
+    report["collection"] = collection
 
     # Additive schema-v2 field. Policy evaluation is bounded to this exact
     # census and fails closed without changing source evidence.

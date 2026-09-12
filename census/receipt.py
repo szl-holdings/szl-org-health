@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import re
+import sys
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -141,12 +142,89 @@ def _json_object(snapshot_bytes: bytes | None) -> tuple[dict[str, Any], str | No
     if snapshot_bytes is None:
         return {}, None
     try:
-        loaded = json.loads(snapshot_bytes)
-    except (UnicodeError, json.JSONDecodeError):
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate field")
+                result[key] = value
+            return result
+
+        loaded = json.loads(snapshot_bytes, object_pairs_hook=unique)
+        json.dumps(loaded, allow_nan=False).encode("utf-8")
+    except (UnicodeError, ValueError, RecursionError):
         return {}, "INVALID_JSON"
     if not isinstance(loaded, dict):
         return {}, "INVALID_ROOT"
     return loaded, None
+
+
+def validate_collection(snapshot: Mapping[str, Any], subject: Mapping[str, Any]) -> bool:
+    """Bind measurement windows, exact sources and the collecting run attempt.
+
+    This is consistency evidence, not a signature or an organization-completeness
+    claim. A timestamp rewritten on a retained fallback cannot satisfy it.
+    """
+    collection = snapshot.get("collection")
+    if not isinstance(collection, dict) or collection.get("schema") != "szl.census-collection/v1":
+        return False
+    identity = collection.get("id")
+    if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{32}", identity):
+        return False
+    collected_subject = collection.get("subject")
+    if not isinstance(collected_subject, dict) or any(
+        collected_subject.get(key) != subject.get(key) or subject.get(key) is None
+        for key in ("repository", "workflow_sha", "run_id", "run_attempt")
+    ):
+        return False
+    started = parse_utc_timestamp(collection.get("started_at"))
+    completed = parse_utc_timestamp(collection.get("completed_at"))
+    generated = parse_utc_timestamp(snapshot.get("generated_at"))
+    if (started is None or completed is None or generated != completed
+            or not 0 <= (completed - started).total_seconds() <= MAX_SNAPSHOT_AGE_SECONDS):
+        return False
+    observations = collection.get("source_observations")
+    sources = snapshot.get("sources")
+    if not isinstance(observations, dict) or set(observations) != set(REQUIRED_SOURCES):
+        return False
+    if not isinstance(sources, dict) or set(sources) != set(REQUIRED_SOURCES):
+        return False
+    for value in observations.values():
+        if not isinstance(value, dict):
+            return False
+        begin = parse_utc_timestamp(value.get("started_at"))
+        end = parse_utc_timestamp(value.get("completed_at"))
+        if begin is None or end is None or not started <= begin <= end <= completed:
+            return False
+    encoded = (json.dumps(sources, separators=(",", ":"), sort_keys=True, allow_nan=False) + "\n").encode("utf-8")
+    return collection.get("sources_sha256") == hashlib.sha256(encoded).hexdigest()
+
+
+def stage_public_snapshot(snapshot_bytes: bytes | None, public_path: Path,
+                          destination: Path, receipt: Mapping[str, Any]) -> dict[str, Any]:
+    """Only stage the exact projection produced by this collection for upload."""
+    result = {"state": "WITHHELD", "sha256": None, "collection_id": None}
+    # Never carry an artifact candidate left by an earlier invocation into a new run.
+    destination.unlink(missing_ok=True)
+    observations = receipt.get("observations", {})
+    if (receipt.get("collector_outcome") != "success"
+            or observations.get("collection_binding_matches") is not True
+            or observations.get("snapshot_freshness_valid") is not True):
+        return result
+    snapshot, error = _json_object(snapshot_bytes)
+    if error or snapshot_bytes is None:
+        return result
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from census.report import project_public_report, serialize_report
+        expected = serialize_report(project_public_report(snapshot)).encode("utf-8")
+        if public_path.read_bytes() != expected:
+            return result
+        destination.write_bytes(expected)
+    except (OSError, ValueError, TypeError, RecursionError):
+        return result
+    return {"state": "FRESH_COLLECTION_BOUND", "sha256": hashlib.sha256(expected).hexdigest(),
+            "collection_id": snapshot["collection"]["id"]}
 
 
 def _subject_projection(subject: Mapping[str, str | None]) -> dict[str, str | None]:
@@ -612,6 +690,9 @@ def build_receipt(
 
     subject_projection, subject_valid, subject_errors = _validate_subject(subject)
     errors.extend(subject_errors)
+    collection_binding_matches = subject_valid and validate_collection(snapshot, subject_projection)
+    if not collection_binding_matches:
+        errors.append("collection windows, source digest or collecting run identity do not match")
 
     return {
         "schema": RECEIPT_SCHEMA,
@@ -650,6 +731,11 @@ def build_receipt(
             ),
             "governance_recomputed_matches": governance_recomputed_matches,
             "subject_valid": subject_valid,
+            "collection_binding_matches": collection_binding_matches,
+            "snapshot_freshness_valid": (
+                age_seconds is not None
+                and -MAX_FUTURE_SKEW_SECONDS <= raw_age_seconds <= MAX_SNAPSHOT_AGE_SECONDS
+            ),
             "huggingface_authentication": huggingface_authentication,
             "github_discovery": discovery_projection,
             "github_repository_total": github_total
@@ -724,7 +810,11 @@ def main(
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot", default=str(DEFAULT_SNAPSHOT))
     parser.add_argument("--receipt", default=str(DEFAULT_RECEIPT))
+    parser.add_argument("--public-snapshot")
+    parser.add_argument("--publish-snapshot")
     arguments = parser.parse_args(list(argv) if argv is not None else None)
+    if bool(arguments.public_snapshot) != bool(arguments.publish_snapshot):
+        parser.error("--public-snapshot and --publish-snapshot must be supplied together")
 
     environment = os.environ if environ is None else environ
     snapshot_path = Path(arguments.snapshot)
@@ -755,6 +845,18 @@ def main(
         },
         extra_errors=([minimum_error] if minimum_error else []),
     )
+
+    if arguments.public_snapshot:
+        source_paths = {snapshot_path.resolve(), receipt_path.resolve(), Path(arguments.public_snapshot).resolve()}
+        publish_path = Path(arguments.publish_snapshot)
+        if publish_path.resolve() in source_paths:
+            parser.error("publication destination must be separate from snapshot and receipt inputs")
+        receipt["public_snapshot"] = stage_public_snapshot(
+            snapshot_bytes, Path(arguments.public_snapshot), publish_path, receipt
+        )
+        if receipt["public_snapshot"]["state"] != "FRESH_COLLECTION_BOUND":
+            receipt["errors"].append("public snapshot withheld: no exact current collection projection")
+            receipt["status"] = "FAIL_CLOSED"
 
     serialized = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
     try:
