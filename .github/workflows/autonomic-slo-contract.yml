@@ -4,16 +4,20 @@ on:
   pull_request:
     paths:
       - "autonomic/slo_controller.py"
+      - "autonomic/slo_evidence.py"
       - "autonomic/slo_policy.json"
       - "tests/test_autonomic_slo.py"
+      - "tests/test_slo_workflow_evidence.py"
       - ".github/workflows/autonomic-slo.yml"
       - ".github/workflows/autonomic-slo-contract.yml"
   push:
     branches: [main]
     paths:
       - "autonomic/slo_controller.py"
+      - "autonomic/slo_evidence.py"
       - "autonomic/slo_policy.json"
       - "tests/test_autonomic_slo.py"
+      - "tests/test_slo_workflow_evidence.py"
       - ".github/workflows/autonomic-slo.yml"
       - ".github/workflows/autonomic-slo-contract.yml"
 
@@ -50,8 +54,8 @@ jobs:
       - name: Compile and run fail-closed SLO contracts
         run: |
           set -euo pipefail
-          python -m py_compile autonomic/slo_controller.py tests/test_autonomic_slo.py
-          python -m unittest tests.test_autonomic_slo -v
+          python -m py_compile autonomic/slo_controller.py autonomic/slo_evidence.py tests/test_autonomic_slo.py tests/test_slo_workflow_evidence.py
+          python -m unittest tests.test_autonomic_slo tests.test_slo_workflow_evidence -v
           python -m autonomic.slo_controller \
             --offline-contract-only \
             --output reports/autonomic-slo-contract.json
