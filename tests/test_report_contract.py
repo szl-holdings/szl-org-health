@@ -386,6 +386,7 @@ class ReportAssemblyContractTests(unittest.TestCase):
                 "schema_version",
                 "projection_schema",
                 "generated_at",
+                "collection",
                 "exposure",
                 "source_snapshot_sha256",
                 "sources",
@@ -614,7 +615,9 @@ class ReportAssemblyContractTests(unittest.TestCase):
             workflow.index("uses: actions/upload-artifact@"),
         )
         self.assertNotIn("census-internal.json", upload_block)
-        self.assertIn("static/data.json", upload_block)
+        self.assertIn("census-public.json", upload_block)
+        self.assertNotIn("static/data.json", upload_block)
+        self.assertIn("--public-snapshot static/data.json --publish-snapshot census-public.json", workflow)
         self.assertIn("census-receipt.json", upload_block)
         ignored = (root / ".gitignore").read_text(encoding="utf-8")
         self.assertIn("/census-internal.json", ignored)

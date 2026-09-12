@@ -59,6 +59,22 @@ The public report is constructed from a closed, versioned allowlist. Unknown fie
 
 A scheduled refresh creates `census-internal.json` only as an ephemeral, gitignored input to the fail-closed receipt gate. The workflow artifact contains only the public projection and the sanitized receipt; it never contains the internal census.
 
+Each new collection carries its original start/completion times, per-source
+observation windows, a unique collection ID, the exact source-data digest, and
+the collecting GitHub source/run/attempt. Cached reads preserve those fields.
+The public projection exposes only the collection ID and collection times.
+These fields establish consistency; they do not authenticate a signature or
+prove organization-wide coverage.
+
+The scheduled receipt step verifies that binding and recomputes the closed
+public projection before staging `census-public.json` for upload. A failed
+collector, old fallback, different run attempt, changed source bytes, or
+different public projection withholds the snapshot. The failure receipt still
+survives. `static/data.json` remains the dated website fallback and is never
+uploaded merely because a new scheduled run occurred. Missing collection
+metadata in historical snapshots remains unverified. A fresh partial collection
+can be retained as diagnostic evidence while the overall census gate fails.
+
 ## Solo-maintainer change control
 
 The governed operating model is intentionally `solo-maintainer`. It does not claim or require a second human, and it does not use DCO as the primary security control. Releases instead require:

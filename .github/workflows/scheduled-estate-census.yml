@@ -97,7 +97,9 @@ jobs:
           RECEIPT_RUN_ID: ${{ github.run_id }}
           RECEIPT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RECEIPT_WORKFLOW_SHA: ${{ github.sha }}
-        run: python -I -B census/receipt.py --snapshot census-internal.json
+        run: >-
+          python -I -B census/receipt.py --snapshot census-internal.json
+          --public-snapshot static/data.json --publish-snapshot census-public.json
 
       - name: Remove internal census evidence
         if: always()
@@ -109,7 +111,7 @@ jobs:
         with:
           name: estate-census-${{ github.sha }}-${{ github.run_attempt }}
           path: |
-            static/data.json
+            census-public.json
             census-receipt.json
           if-no-files-found: error
           retention-days: 30
