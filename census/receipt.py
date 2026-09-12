@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -214,15 +215,26 @@ def stage_public_snapshot(snapshot_bytes: bytes | None, public_path: Path,
     snapshot, error = _json_object(snapshot_bytes)
     if error or snapshot_bytes is None:
         return result
+    staged: Path | None = None
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         from census.report import project_public_report, serialize_report
         expected = serialize_report(project_public_report(snapshot)).encode("utf-8")
         if public_path.read_bytes() != expected:
             return result
-        destination.write_bytes(expected)
+        with tempfile.NamedTemporaryFile(mode="wb", dir=destination.parent,
+                prefix=".census-public-", suffix=".tmp", delete=False) as handle:
+            staged = Path(handle.name)
+            handle.write(expected)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staged, destination)
+        staged = None
     except (OSError, ValueError, TypeError, RecursionError):
         return result
+    finally:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
     return {"state": "FRESH_COLLECTION_BOUND", "sha256": hashlib.sha256(expected).hexdigest(),
             "collection_id": snapshot["collection"]["id"]}
 

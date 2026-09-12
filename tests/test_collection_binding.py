@@ -111,6 +111,20 @@ class CollectionBindingTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(receipt._json_object(raw), ({}, "INVALID_JSON"))
 
+    def test_failed_durable_write_or_replace_never_leaves_upload_candidate(self):
+        snapshot = collect()
+        raw = report.serialize_report(snapshot).encode()
+        public = report.serialize_report(report.project_public_report(snapshot)).encode()
+        with tempfile.TemporaryDirectory() as directory:
+            candidate, destination = Path(directory) / "snapshot.json", Path(directory) / "upload.json"
+            candidate.write_bytes(public)
+            for operation in ("fsync", "replace"):
+                with self.subTest(operation=operation), patch.object(receipt.os, operation, side_effect=OSError("disk unavailable")):
+                    staged = receipt.stage_public_snapshot(raw, candidate, destination, make_receipt(snapshot))
+                self.assertEqual(staged["state"], "WITHHELD")
+                self.assertFalse(destination.exists())
+                self.assertEqual(list(Path(directory).glob("*.tmp")), [])
+
     def test_stale_and_future_collection_cannot_be_uploaded_under_new_receipt(self):
         snapshot = collect()
         raw = report.serialize_report(snapshot).encode()
