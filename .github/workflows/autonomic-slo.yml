@@ -49,8 +49,8 @@ jobs:
       - name: Re-prove the observational authority boundary
         run: |
           set -euo pipefail
-          python -m py_compile autonomic/slo_controller.py tests/test_autonomic_slo.py
-          python -m unittest tests.test_autonomic_slo -v
+          python -m py_compile autonomic/slo_controller.py autonomic/slo_evidence.py tests/test_autonomic_slo.py tests/test_slo_workflow_evidence.py
+          python -m unittest tests.test_autonomic_slo tests.test_slo_workflow_evidence -v
           python -m autonomic.slo_controller \
             --offline-contract-only \
             --output reports/autonomic-slo-contract.json
@@ -68,38 +68,6 @@ jobs:
           rc=$?
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
           exit 0
-
-      - name: Write reliability summary
-        if: always()
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          path = Path("reports/autonomic-slo.json")
-          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as stream:
-              stream.write("# SZL Autonomic SLO\n\n")
-              if not path.exists():
-                  stream.write("The SLO receipt was not produced.\n")
-                  raise SystemExit(0)
-              report = json.loads(path.read_text(encoding="utf-8"))
-              stream.write(f"- Verdict: `{report.get('verdict', 'UNKNOWN')}`\n")
-              stream.write(f"- Severity: `{report.get('severity') or 'NONE'}`\n")
-              stream.write(f"- Deadman: `{(report.get('deadman') or {}).get('state', 'UNKNOWN')}`\n")
-              stream.write(f"- Incident action: `{(report.get('incident') or {}).get('action', 'UNKNOWN')}`\n")
-              stream.write(f"- Receipt SHA-256: `{report.get('receipt_sha256', 'UNAVAILABLE')}`\n\n")
-              stream.write("| Surface | Current | Provider blocker | Max latency | Severity |\n")
-              stream.write("|---|---|---|---:|---|\n")
-              for row in report.get("surfaces", []):
-                  stream.write(
-                      f"| {row.get('id')} | {'UP' if row.get('current_ok') else 'DOWN'} | "
-                      f"{row.get('provider_blocker') or '—'} | "
-                      f"{row.get('maximum_latency_ms', 0)} ms | "
-                      f"{row.get('severity') or '—'} |\n"
-                  )
-          PY
 
       - name: Upload immutable SLO evidence
         if: always()
@@ -120,8 +88,7 @@ jobs:
           SLO_EXIT_CODE: ${{ steps.slo.outputs.exit_code || '1' }}
         run: |
           set -euo pipefail
-          case "$SLO_EXIT_CODE" in
-            0) exit 0 ;;
-            2) echo "Reliability incident is active; issue state and receipt were persisted." >&2; exit 2 ;;
-            *) echo "SLO controller failed closed." >&2; exit 1 ;;
-          esac
+          python -m autonomic.slo_evidence \
+            --report reports/autonomic-slo.json \
+            --exit-code "$SLO_EXIT_CODE" \
+            --summary "$GITHUB_STEP_SUMMARY"
