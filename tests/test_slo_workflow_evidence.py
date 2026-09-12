@@ -16,6 +16,7 @@ from autonomic.slo_controller import (
     append_sample,
     canonical_json,
     load_policy,
+    observation_digest,
     severity_for_surface,
     sha256_hex,
     summarize_window,
@@ -158,6 +159,30 @@ class WorkflowEvidenceTests(unittest.TestCase):
         result = self.run_gate("0")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("HEALTHY", result.stdout + result.stderr)
+
+    def test_new_observation_digest_and_historical_v1_receipts_both_verify(self) -> None:
+        for include_observation in (False, True):
+            with self.subTest(include_observation=include_observation):
+                report = dict(self.incident)
+                self.assertNotIn("observation_sha256", report)
+                if include_observation:
+                    report["observation_sha256"] = observation_digest(report)
+                self.write_receipt(report)
+                result = self.run_gate("2")
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("INCIDENT", result.stdout + result.stderr)
+
+    def test_invalid_observation_digest_fails_even_with_valid_final_receipt_hash(self) -> None:
+        for observation in (None, "", "0" * 64, 123):
+            with self.subTest(observation=observation):
+                self.write_receipt({**self.healthy, "observation_sha256": observation})
+                self.assert_failure(self.run_gate("0"))
+
+    def test_changed_measurement_cannot_reuse_observation_digest(self) -> None:
+        report = {**self.healthy, "observation_sha256": observation_digest(self.healthy)}
+        report["controller_revision"] = "d" * 40
+        self.write_receipt(report)
+        self.assert_failure(self.run_gate("0"))
 
     def test_current_recovery_does_not_erase_a_real_historical_burn_incident(self) -> None:
         self.assertTrue(all(row["current_ok"] for row in self.incident["surfaces"]))

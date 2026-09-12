@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from autonomic import slo_controller
+from autonomic.slo_evidence import load_receipt
 
 from autonomic.slo_controller import (
     ContractError,
@@ -438,6 +443,7 @@ class RenderingAndAuthorityTests(unittest.TestCase):
             "severity": None,
             "manifest_revision": "a" * 40,
             "receipt_sha256": "b" * 64,
+            "observation_sha256": "c" * 64,
             "reasons": [],
             "deadman": {"state": "FRESH"},
             "surfaces": [
@@ -485,6 +491,102 @@ class RenderingAndAuthorityTests(unittest.TestCase):
         ):
             self.assertFalse(contract["authority"][key])
         self.assertFalse(contract["secret_values_recorded"])
+
+
+class LiveReceiptBindingTests(unittest.TestCase):
+    def test_incident_lifecycle_binds_to_immutable_observation(self) -> None:
+        policy = validate_policy(policy_payload())
+        manifest = validate_manifest(manifest_payload(), policy=policy)
+
+        class FakeGitHub:
+            def __init__(self, action: str) -> None:
+                self.action = action
+                self.writes: list[dict] = []
+                self.previous = empty_state()
+                self.previous["healthy_cycles"] = 2 if action == "closed" else 0
+
+            def verified_tip(self, *args):
+                return "a" * 40
+
+            def find_open_issue(self, title):
+                if title == policy["state_issue"]["title"]:
+                    return {
+                        "number": 44,
+                        "body": issue_state_body(self.previous, {}),
+                    }
+                return None if self.action == "created" else {"number": 93}
+
+            def workflow_deadman(self, *args, **kwargs):
+                return {"ok": True, "state": "FRESH"}
+
+            def ensure_label(self, *args):
+                pass
+
+            def create_issue(self, **kwargs):
+                self.writes.append({"number": 93, "state": "open", **kwargs})
+                return {"number": 93}
+
+            def update_issue(self, issue, **kwargs):
+                self.writes.append({"number": issue["number"], **kwargs})
+
+        for action in ("created", "refreshed", "closed"):
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as temporary:
+                github = FakeGitHub(action)
+
+                def probe(surface, *, policy):
+                    ok = action == "closed" or surface["id"] != "a11oy"
+                    return slo_controller.SurfaceProbe(
+                        surface_id=surface["id"],
+                        hf_repository=surface["hf_repository"],
+                        base_url=surface["base_url"],
+                        ok=ok,
+                        maximum_latency_ms=100 if ok else 8000,
+                        provider_blocker=None,
+                        paths=(path_probe(200 if ok else 503),),
+                    )
+
+                output = Path(temporary) / "receipt.json"
+                with (
+                    patch.object(slo_controller, "GitHubApi", return_value=github),
+                    patch.object(slo_controller, "load_signed_manifest", return_value=(
+                        manifest, "b" * 40, "c" * 64
+                    )),
+                    patch.object(slo_controller, "probe_surface", side_effect=probe),
+                    patch.dict(os.environ, {
+                        "GITHUB_REPOSITORY": policy["controller_repository"],
+                        "GITHUB_SHA": "a" * 40,
+                        "GITHUB_TOKEN": "test-value-never-sent",
+                    }),
+                ):
+                    result = slo_controller.run_live(
+                        policy=policy, policy_sha256="d" * 64, output=output
+                    )
+
+                self.assertEqual(result, 0 if action == "closed" else 2)
+                report = load_receipt(output, str(result))
+                self.assertEqual(report["incident"], {"action": action, "number": 93})
+                measurement = {
+                    key: value for key, value in report.items()
+                    if key not in {"incident", "receipt_sha256", "observation_sha256"}
+                }
+                expected = slo_controller.sha256_hex(slo_controller.canonical_json(measurement))
+                self.assertEqual(report["observation_sha256"], expected)
+                incident_write = next(item for item in github.writes if item["number"] == 93)
+                body = incident_write["body"]
+                self.assertIn(f"- Observation SHA-256: `{expected}`", body)
+                self.assertNotIn("- Receipt:", body)
+                self.assertNotEqual(report["receipt_sha256"], expected)
+                if action == "closed":
+                    self.assertEqual(incident_write["state"], "closed")
+                    self.assertIn("- Verdict: `RECOVERED`", body)
+                    self.assertIn("recorded HEALTHY measurement", body)
+                    self.assertEqual(report["verdict"], "HEALTHY")
+                    self.assertEqual(report["reasons"], [])
+                    self.assertEqual(report["healthy_cycles"], 3)
+                else:
+                    self.assertEqual(incident_write["state"], "open")
+                    self.assertEqual(report["verdict"], "INCIDENT")
+                    self.assertEqual(report["healthy_cycles"], 0)
 
 
 if __name__ == "__main__":
