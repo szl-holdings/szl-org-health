@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from typing import Any, Sequence
 
-from autonomic.slo_controller import RECEIPT_SCHEMA, canonical_json, sha256_hex
+from autonomic.slo_controller import RECEIPT_SCHEMA, canonical_json, observation_digest, sha256_hex
 
 
 def evidence_text(value: Any) -> str:
@@ -28,6 +28,9 @@ def load_receipt(path: Path, exit_code: str) -> dict[str, Any]:
         raise ValueError("invalid receipt digest")
     if path.with_suffix(path.suffix + ".sha256").read_text(encoding="ascii").strip() != digest:
         raise ValueError("invalid receipt sidecar")
+    # Historical v1 receipts predate the observation digest and remain replayable.
+    if "observation_sha256" in report and report["observation_sha256"] != observation_digest(report):
+        raise ValueError("invalid observation digest")
     verdict = report.get("verdict")
     if (exit_code, verdict) not in {("0", "HEALTHY"), ("2", "INCIDENT")}:
         raise ValueError("controller result and receipt disagree or failed")

@@ -156,6 +156,15 @@ def sha256_hex(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def observation_digest(report: Mapping[str, Any]) -> str:
+    """Bind the measured result independently of subsequent incident mutations."""
+    return sha256_hex(canonical_json({
+        key: value
+        for key, value in report.items()
+        if key not in {"incident", "receipt_sha256", "observation_sha256"}
+    }))
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ContractError(message)
@@ -1042,7 +1051,10 @@ def incident_body(report: Mapping[str, Any]) -> str:
         f"- Verdict: `{report.get('verdict')}`",
         f"- Deadman: `{(report.get('deadman') or {}).get('state', 'UNKNOWN')}`",
         f"- Manifest: `{report.get('manifest_revision')}`",
-        f"- Receipt: `{report.get('receipt_sha256')}`",
+        f"- Observation SHA-256: `{report.get('observation_sha256')}`",
+        "",
+        "The observation hash binds to the measured result in the workflow receipt, before incident lifecycle updates. "
+        "A RECOVERED closure describes the lifecycle transition; its observation remains the recorded HEALTHY measurement.",
         "",
         "## Reasons",
         "",
@@ -1289,7 +1301,7 @@ def run_live(
         },
         "secret_values_recorded": False,
     }
-    report["receipt_sha256"] = sha256_hex(canonical_json(report))
+    report["observation_sha256"] = observation_digest(report)
 
     github.ensure_label(policy["incident"]["label"])
     incident = github.find_open_issue(policy["incident"]["title"])
