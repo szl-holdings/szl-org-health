@@ -170,6 +170,7 @@ jobs:
             tests.test_file_audit \
             tests.test_repository_file_audit_runner \
             tests.test_validated_github_reader \
+            tests.test_file_audit_failure_finalizer \
             tests.test_repository_hygiene \
             -v
 
@@ -203,6 +204,15 @@ jobs:
               --max-text-bytes 2097152 \
               --max-archive-bytes 536870912 \
               --max-repository-bytes 4294967296
+
+      - name: Retain incomplete evidence when collection emitted no receipt
+        if: always() && steps.collect.outcome != 'success'
+        env:
+          COLLECT_OUTCOME: ${{ steps.collect.outcome }}
+        run: |
+          mkdir -p artifacts
+          python -B -m tools.ensure_repository_file_audit_receipt \
+            --directory artifacts --collect-outcome "$COLLECT_OUTCOME"
 
       - name: Publish sanitized file-audit summary
         if: always()
