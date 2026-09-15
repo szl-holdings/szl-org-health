@@ -1,0 +1,126 @@
+name: Public GitHub quality observation
+"on":
+  push:
+    branches: [audit/github-quality-20260915]
+    paths: [.github/workflows/github-quality-observation.yml]
+permissions:
+  contents: read
+concurrency:
+  group: public-github-quality-observation
+  cancel-in-progress: false
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
+        with:
+          egress-policy: audit
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Read public repository quality metadata only
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import concurrent.futures as cf, datetime as dt, hashlib, json, os, pathlib, re, time, urllib.request as u, urllib.error as e, urllib.parse as p
+          OUT=pathlib.Path('public-quality'); OUT.mkdir()
+          START=time.monotonic()
+          class NoRedirect(u.HTTPRedirectHandler):
+              def redirect_request(self,*args,**kwargs): raise ValueError('redirect refused')
+          def get(path):
+              if time.monotonic()-START>720: return {'state':'UNKNOWN','reason':'DEADLINE'}
+              if not path.startswith(('/repos/szl-holdings/','/orgs/szl-holdings/repos?')): raise ValueError('outside scope')
+              req=u.Request('https://api.github.com'+path,headers={'Authorization':'Bearer '+os.environ['GITHUB_TOKEN'],'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'SZL-public-quality'},method='GET')
+              try:
+                  with u.build_opener(u.ProxyHandler({}),NoRedirect()).open(req,timeout=15) as response:
+                      raw=response.read(12*1024*1024+1)
+                      if len(raw)>12*1024*1024: raise ValueError('body bound')
+                      return {'state':'OBSERVED','data':json.loads(raw),'next':'rel="next"' in response.headers.get('Link',''),'sha256':hashlib.sha256(raw).hexdigest()}
+              except e.HTTPError as exc: return {'state':'UNKNOWN','http_status':exc.code}
+              except Exception as exc: return {'state':'UNKNOWN','error_type':type(exc).__name__}
+          def pages(path,key=None):
+              result=[]
+              for page in range(1,21):
+                  r=get(path+('&' if '?' in path else '?')+f'per_page=100&page={page}')
+                  if r['state']!='OBSERVED': return {'state':'INCOMPLETE','items':result,'failure':r}
+                  batch=r['data'] if key is None else r['data'].get(key)
+                  if not isinstance(batch,list): return {'state':'INCOMPLETE','items':result,'reason':'SCHEMA'}
+                  result+=batch
+                  if not r['next']: return {'state':'COMPLETE','items':result}
+              return {'state':'INCOMPLETE','items':result,'reason':'PAGE_BOUND'}
+          def save(path,data):
+              path.parent.mkdir(parents=True,exist_ok=True)
+              path.write_text(json.dumps(data,indent=2,sort_keys=True,allow_nan=False)+'\n')
+          def compact(row,keys): return {k:row.get(k) for k in keys.split()}
+          def checks(prefix,sha):
+              rows=pages(prefix+'/commits/'+sha+'/check-runs','check_runs')
+              rows['items']=[compact(x,'id name head_sha status conclusion started_at completed_at details_url')|{'app_id':x.get('app',{}).get('id')} for x in rows['items']]
+              return rows
+          def inspect(meta):
+              name=meta['name']; prefix='/repos/szl-holdings/'+name
+              if not re.fullmatch(r'[A-Za-z0-9_.-]+',name) or meta.get('private') is not False: raise ValueError('public identity required')
+              row=compact(meta,'name full_name private archived default_branch pushed_at'); row['started_at']=dt.datetime.now(dt.timezone.utc).isoformat()
+              branch=p.quote(meta['default_branch'],safe='')
+              ref=get(prefix+'/git/ref/heads/'+branch); sha=ref.get('data',{}).get('object',{}).get('sha')
+              row['sha']=sha
+              if not isinstance(sha,str) or not re.fullmatch('[0-9a-f]{40}',sha): row['state']='UNOBSERVED_REF'; return row
+              row['checks']=checks(prefix,sha)
+              tree=get(prefix+'/git/trees/'+sha+'?recursive=1')
+              if tree['state']=='OBSERVED':
+                  body=tree['data']; entries=body.get('tree',[])
+                  row['tree']={'state':'COMPLETE' if body.get('truncated') is False else 'INCOMPLETE','files':sum(x.get('type')=='blob' for x in entries),'response_sha256':tree['sha256']}
+                  save(OUT/'trees'/(name+'.json'),body)
+              else: row['tree']=tree
+              issues=pages(prefix+'/issues?state=open&filter=all')
+              row['issues']={'state':issues['state'],'items':[compact(x,'number title html_url updated_at')|{'is_pr':'pull_request' in x,'labels':[z['name'] for z in x.get('labels',[])],'hold_mentioned':bool(re.search(r'\bHOLD\b|do not merge',x.get('body') or '',re.I))} for x in issues['items']]}
+              row['pull_requests']=[]
+              for issue in issues['items']:
+                  if 'pull_request' not in issue: continue
+                  q=get(prefix+'/pulls/'+str(issue['number'])); data=q.get('data')
+                  if not isinstance(data,dict): row['pull_requests'].append({'number':issue['number'],'state':'UNKNOWN'}); continue
+                  pr=compact(data,'number title html_url state draft mergeable mergeable_state changed_files additions deletions')
+                  pr.update(head_sha=data['head']['sha'],base_sha=data['base']['sha'],head_ref=data['head']['ref'],base_ref=data['base']['ref'])
+                  pr['checks']=checks(prefix,pr['head_sha'])
+                  reviews=pages(prefix+'/pulls/'+str(issue['number'])+'/reviews')
+                  pr['reviews']={'state':reviews['state'],'items':[compact(x,'id state commit_id submitted_at') for x in reviews['items']]}
+                  row['pull_requests'].append(pr)
+              rules=pages(prefix+'/rulesets?includes_parents=true'); row['rulesets']={'state':rules['state'],'items':[get(prefix+'/rulesets/'+str(x['id'])) for x in rules['items']]}
+              row['classic_protection']=get(prefix+'/branches/'+branch+'/protection')
+              wf=pages(prefix+'/actions/workflows','workflows'); row['workflows']={'state':wf['state'],'items':[]}
+              for w in wf['items']:
+                  item=compact(w,'id name path state'); latest=get(prefix+'/actions/workflows/'+str(w['id'])+'/runs?branch='+branch+'&per_page=1')
+                  item['observation_state']=latest['state']; item['runs']=[compact(x,'id name path event head_sha head_branch status conclusion run_attempt created_at updated_at html_url') for x in latest.get('data',{}).get('workflow_runs',[])]
+                  row['workflows']['items'].append(item)
+              row['security']={}
+              for kind in ('dependabot','code-scanning','secret-scanning'):
+                  found=pages(prefix+'/'+kind+'/alerts?state=open')
+                  report={'state':found['state'],'count':len(found['items']) if found['state']=='COMPLETE' else None}
+                  if 'failure' in found: report['failure']=found['failure']
+                  if kind=='dependabot': report['items']=[{'number':x.get('number'),'advisory':compact(x.get('security_advisory',{}),'ghsa_id severity'),'dependency':x.get('dependency'),'vulnerability':x.get('security_vulnerability')} for x in found['items']]
+                  row['security'][kind]=report
+              end=get(prefix+'/git/ref/heads/'+branch); row['end_sha']=end.get('data',{}).get('object',{}).get('sha'); row['head_stable']=row['end_sha']==sha
+              verify=get(prefix)
+              if verify.get('data',{}).get('private') is not False:
+                  (OUT/'trees'/(name+'.json')).unlink(missing_ok=True)
+                  return {'state':'WITHHELD_VISIBILITY_NOT_RECONFIRMED'}
+              row['completed_at']=dt.datetime.now(dt.timezone.utc).isoformat(); save(OUT/'repositories'/(name+'.json'),row); return row
+          inventory=pages('/orgs/szl-holdings/repos?type=public&sort=full_name&direction=asc')
+          if inventory['state']!='COMPLETE':
+              save(OUT/'failure.json',{'state':'INCOMPLETE','cause':inventory.get('failure')}); raise SystemExit(2)
+          with cf.ThreadPoolExecutor(max_workers=4) as pool: rows=list(pool.map(inspect,inventory['items']))
+          end=pages('/orgs/szl-holdings/repos?type=public&sort=full_name&direction=asc')
+          stable=end['state']=='COMPLETE' and {x['id'] for x in end['items']}=={x['id'] for x in inventory['items']}
+          report={'schema':'szl.public-github-quality-observation/v1','scope':'PUBLIC_ONLY','source_revision':os.environ['GITHUB_SHA'],'run_id':os.environ['GITHUB_RUN_ID'],'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],'completed_at':dt.datetime.now(dt.timezone.utc).isoformat(),'inventory_complete_and_stable':stable,'repository_count':len(rows),'repositories':rows,'semantic_source_audit_complete':False,'private_repositories':'NOT_OBSERVED','production_admitted':False,'all_green':False}
+          save(OUT/'report.json',report); save(OUT/'SHA256SUMS.json',{str(x.relative_to(OUT)):hashlib.sha256(x.read_bytes()).hexdigest() for x in sorted(OUT.rglob('*.json'))})
+          print(json.dumps({'public_repositories':len(rows),'inventory_stable':stable,'all_green':False}))
+      - name: Preserve public-only diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: public-quality-${{ github.run_id }}-${{ github.run_attempt }}
+          path: public-quality/
+          if-no-files-found: error
+          retention-days: 14
