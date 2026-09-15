@@ -1,0 +1,63 @@
+name: IMMUNE exact manifest lockfile repair
+"on":
+  push:
+    branches: [audit/github-quality-20260915]
+    paths: [.github/workflows/immune-lockfile-repair.yml]
+permissions:
+  contents: read
+jobs:
+  derive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: szl-holdings/immune
+          ref: b0cd5ce262b9daca895a135ad4782cb68e21128f
+          path: source
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 11.9.0
+          run_install: false
+          package_json_file: source/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Derive lock only; no dependency lifecycle scripts or provider credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          test "$(git -C source rev-parse HEAD)" = b0cd5ce262b9daca895a135ad4782cb68e21128f
+          test "$(pnpm --version)" = 11.9.0
+          pnpm --version > evidence/pnpm-version.txt
+          node --version > evidence/node-version.txt
+          git -C source ls-tree -r HEAD > evidence/source-tree.txt
+          cp source/pnpm-lock.yaml evidence/pnpm-lock.before.yaml
+          sha256sum source/package.json source/frontend/package.json source/pnpm-workspace.yaml > evidence/manifest-hashes.before.txt
+          (cd source && pnpm install --lockfile-only --ignore-scripts --no-frozen-lockfile) 2>&1 | tee evidence/generation.log
+          git -C source diff --exit-code -- package.json frontend/package.json pnpm-workspace.yaml
+          test "$(git -C source diff --name-only)" = pnpm-lock.yaml
+          sha256sum source/package.json source/frontend/package.json source/pnpm-workspace.yaml > evidence/manifest-hashes.after.txt
+          cmp evidence/manifest-hashes.before.txt evidence/manifest-hashes.after.txt
+          (cd source && pnpm install --lockfile-only --ignore-scripts --frozen-lockfile) 2>&1 | tee evidence/frozen-lock-validation.log
+          cp source/pnpm-lock.yaml evidence/pnpm-lock.yaml
+          git -C source diff -- pnpm-lock.yaml > evidence/lockfile.patch
+          python - <<'PY'
+          import hashlib,json,os,pathlib
+          root=pathlib.Path('evidence')
+          data={'schema':'szl.immune-lockfile-derivation/v1','source_repository':'szl-holdings/immune','source_revision':'b0cd5ce262b9daca895a135ad4782cb68e21128f','workflow_revision':os.environ['GITHUB_SHA'],'run_id':os.environ['GITHUB_RUN_ID'],'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],'pnpm':'11.9.0','manifest_changed':False,'lifecycle_scripts_executed':False,'source_tests_executed':False,'source_mutation_committed':False,'deployment_performed':False,'files':{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.iterdir()) if p.is_file()}}
+          (root/'receipt.json').write_text(json.dumps(data,indent=2,sort_keys=True)+'\n')
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: immune-lockfile-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
