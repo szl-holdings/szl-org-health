@@ -1,0 +1,85 @@
+name: Exact source quality readback
+"on":
+  push:
+    branches: [audit/github-quality-20260915]
+    paths: [.github/workflows/quality-postmerge-readback.yml]
+permissions:
+  contents: read
+jobs:
+  observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
+        with:
+          egress-policy: audit
+      - name: Read public merge, exact-source checks and issue metadata
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import concurrent.futures as cf,datetime as dt,hashlib,json,os,pathlib,time,urllib.request as u,urllib.error as e
+          ROOT=pathlib.Path('quality-readback'); ROOT.mkdir()
+          START=time.monotonic()
+          class NoRedirect(u.HTTPRedirectHandler):
+              def redirect_request(self,*args,**kwargs): raise ValueError('redirect refused')
+          def get(path):
+              if not path.startswith(('/repos/szl-holdings/','/orgs/szl-holdings/repos?')): raise ValueError('outside fixed scope')
+              if time.monotonic()-START>390: return {'state':'UNKNOWN','reason':'DEADLINE'}
+              req=u.Request('https://api.github.com'+path,headers={'Authorization':'Bearer '+os.environ['GITHUB_TOKEN'],'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'SZL-quality-readback'},method='GET')
+              try:
+                  with u.build_opener(u.ProxyHandler({}),NoRedirect()).open(req,timeout=15) as r:
+                      raw=r.read(8*1024*1024+1)
+                      if len(raw)>8*1024*1024:raise ValueError('oversize')
+                      return {'state':'OBSERVED','data':json.loads(raw),'next':'rel="next"' in r.headers.get('Link',''),'sha256':hashlib.sha256(raw).hexdigest()}
+              except e.HTTPError as exc:return {'state':'UNKNOWN','http_status':exc.code}
+              except Exception as exc:return {'state':'UNKNOWN','error_type':type(exc).__name__}
+          def pages(path,key=None):
+              rows=[]
+              for page in range(1,21):
+                  r=get(path+('&' if '?' in path else '?')+f'per_page=100&page={page}')
+                  if r['state']!='OBSERVED':return {'state':'INCOMPLETE','items':rows,'failure':r}
+                  batch=r['data'] if key is None else r['data'].get(key)
+                  if not isinstance(batch,list):return {'state':'INCOMPLETE','items':rows,'reason':'SCHEMA'}
+                  rows+=batch
+                  if not r['next']:return {'state':'COMPLETE','items':rows}
+              return {'state':'INCOMPLETE','items':rows,'reason':'PAGE_BOUND'}
+          def compact(row,keys):return {k:row.get(k) for k in keys.split()}
+          def stamp():return dt.datetime.now(dt.timezone.utc).isoformat()
+          def exact(repo,number):
+              pre='/repos/szl-holdings/'+repo; raw=get(pre+f'/pulls/{number}')
+              r={'repo':repo,'number':number,'observed_at':stamp(),'state':raw['state']}
+              if raw['state']!='OBSERVED':return r
+              pr=raw['data']; r.update(compact(pr,'html_url state merged merged_at draft mergeable_state merge_commit_sha'))
+              r['head_sha']=pr['head']['sha']; r['base_sha']=pr['base']['sha']
+              sha=pr.get('merge_commit_sha') if pr.get('merged') else pr['head']['sha']; r['qualified_revision']=sha
+              c=get(pre+'/commits/'+sha); cd=c.get('data',{}).get('commit',{})
+              r['commit_identity']={'state':c['state'],'sha':c.get('data',{}).get('sha'),'tree':cd.get('tree',{}).get('sha'),'signature_verified':cd.get('verification',{}).get('verified'),'signature_reason':cd.get('verification',{}).get('reason')}
+              checks=pages(pre+'/commits/'+sha+'/check-runs','check_runs')
+              r['checks']={'state':checks['state'],'items':[compact(x,'id name head_sha status conclusion started_at completed_at details_url') for x in checks['items']]}
+              statuses=pages(pre+'/commits/'+sha+'/statuses')
+              r['statuses']={'state':statuses['state'],'items':[compact(x,'id context state created_at target_url') for x in statuses['items']]}
+              runs=pages(pre+'/actions/runs?head_sha='+sha,'workflow_runs')
+              r['runs']={'state':runs['state'],'items':[compact(x,'id name path head_sha head_branch event status conclusion run_attempt created_at updated_at html_url') for x in runs['items']]}
+              r['current_main']=get(pre+'/git/ref/heads/main').get('data',{}).get('object',{}).get('sha')
+              end=get(pre+f'/pulls/{number}').get('data',{});r['pr_state_stable']=end.get('head',{}).get('sha')==r['head_sha'] and end.get('merged')==pr.get('merged') and end.get('merge_commit_sha')==pr.get('merge_commit_sha')
+              return r
+          targets=[('szl-doctrine',64),('platform',782),('uds-bundles',56),('immune',136),('hatun-mcp',114),('platform',784),('platform',785)]
+          with cf.ThreadPoolExecutor(max_workers=4) as pool:observations=list(pool.map(lambda a:exact(*a),targets))
+          inventory=pages('/orgs/szl-holdings/repos?type=public&sort=full_name&direction=asc')
+          def issues(repo):
+              r=pages('/repos/szl-holdings/'+repo['name']+'/issues?state=open&filter=all')
+              rows=[compact(x,'number title html_url updated_at')|{'is_pr':'pull_request' in x,'draft':x.get('draft'),'labels':[a['name'] for a in x.get('labels',[])]} for x in r['items']]
+              return {'repo':repo['name'],'state':r['state'],'items':rows}
+          with cf.ThreadPoolExecutor(max_workers=4) as pool:rows=list(pool.map(issues,inventory['items']))
+          final=pages('/orgs/szl-holdings/repos?type=public&sort=full_name&direction=asc')
+          report={'schema':'szl.quality-postmerge-observation/v1','started_after_source':os.environ['GITHUB_SHA'],'run_id':os.environ['GITHUB_RUN_ID'],'scope':'PUBLIC_ONLY','completed_at':stamp(),'merge_observations':observations,'repository_count':len(rows),'membership_complete_and_stable':inventory['state']==final['state']=='COMPLETE' and {x['id'] for x in inventory['items']}=={x['id'] for x in final['items']},'issue_collections':rows,'open_prs':sum(x['is_pr'] for r in rows for x in r['items']),'open_non_pr_issues':sum(not x['is_pr'] for r in rows for x in r['items']),'security_alert_coverage':'NOT_RECHECKED_PREVIOUS_ENDPOINTS_403','all_green':False,'provider_mutations':0}
+          raw=(json.dumps(report,indent=2,sort_keys=True,allow_nan=False)+'\n').encode();(ROOT/'report.json').write_bytes(raw);(ROOT/'SHA256SUMS.txt').write_text(hashlib.sha256(raw).hexdigest()+'  report.json\n')
+          print(json.dumps({'repos':len(rows),'open_prs':report['open_prs'],'open_issues':report['open_non_pr_issues'],'merges':[{'repo':x['repo'],'number':x['number'],'merged':x.get('merged')} for x in observations]}))
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: quality-postmerge-${{ github.run_id }}-${{ github.run_attempt }}
+          path: quality-readback/
+          if-no-files-found: error
+          retention-days: 30
