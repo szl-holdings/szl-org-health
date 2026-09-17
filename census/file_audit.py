@@ -888,8 +888,10 @@ def public_projection(report: Mapping[str, Any]) -> dict[str, Any]:
             "names_paths_hashes_and_findings_disclosed": False,
         },
         "claim_boundary": (
-            "Every accessible default-branch Git tree entry was enumerated and every tracked blob byte was "
-            "verified against its Git object digest. UTF-8 source inspection remains separately labelled; "
+            "Coverage is described by inventory_reconciliation, summary, and per-repository evidence; "
+            "this projection does not establish complete enumeration or byte verification. "
+            "Missing authoritative inventory or an INCOMPLETE result cannot establish an organization-complete audit. "
+            "UTF-8 source inspection remains separately labelled; "
             "submodule targets are external commit pointers and are not recursively trusted."
         ),
     }
