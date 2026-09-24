@@ -1252,6 +1252,17 @@ def run_live(
         reasons.append(f"autonomic recovery deadman: {deadman['reason']}")
         global_severity = "SEV1"
 
+    if global_severity is None:
+        sparse = [
+            f"{row['id']}/{window['name']}"
+            for row in surface_rows
+            for window in row["windows"]
+            if not window["sufficient_coverage"]
+        ]
+        if sparse:
+            reasons.append("insufficient sample coverage to establish health: " + ", ".join(sparse))
+            global_severity = "SEV3"
+
     verdict = "HEALTHY" if global_severity is None else "INCIDENT"
     previous_healthy_cycles = int(state.get("healthy_cycles") or 0)
     healthy_cycles = previous_healthy_cycles + 1 if verdict == "HEALTHY" else 0

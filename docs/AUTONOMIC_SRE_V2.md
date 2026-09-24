@@ -32,13 +32,13 @@ For a 99.9% objective, the allowed error fraction is 0.1%. Error-budget burn is:
 observed error fraction / allowed error fraction
 ```
 
-The controller requires minimum sample coverage before making a burn-rate claim. Sparse evidence is `UNKNOWN`, not healthy.
+The controller requires minimum sample coverage before making a burn-rate claim. Sparse evidence cannot establish health or advance the three-cycle incident-closure counter; it records an observability `SEV3` incident until all windows have sufficient coverage.
 
 Severity is deterministic:
 
 - **SEV1** — fast and medium windows exceed their configured burn thresholds, or the recovery heartbeat is stale;
 - **SEV2** — medium and slow windows exceed their thresholds, a provider blocker is observed, or recovery exceeds 20 minutes;
-- **SEV3** — slow-window burn, sustained latency breach, or a current outage without enough history for a stronger claim.
+- **SEV3** — slow-window burn, sustained latency breach, a current outage without enough history for a stronger claim, or insufficient sample coverage to establish health.
 
 ## Evidence and privacy boundary
 
