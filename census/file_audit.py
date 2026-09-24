@@ -4,8 +4,10 @@ The audit proves two distinct things without conflating them:
 
 * inventory completeness: every repository visible to the organization reader and
   every entry in each default-branch Git tree is enumerated; and
-* byte integrity: every tracked blob is read from GitHub's immutable commit archive,
-  checked against its Git blob SHA-1, and committed into a SHA-256 evidence receipt.
+* byte integrity: every tracked blob is recovered from GitHub's immutable commit
+  archive, checked against its Git blob SHA-1, and committed into a SHA-256 evidence
+  receipt. CRLF exports are inverted only when the recovered bytes exactly match
+  the declared Git object; the original archive member hashes remain recorded.
 
 High-signal UTF-8 source files are additionally inspected for supply-chain and
 unfinished-work patterns. Binary and oversized text blobs are still fully hashed;
@@ -348,29 +350,54 @@ def _git_blob_sha1(size: int, chunks: Iterable[bytes]) -> tuple[str, str, bytes 
     return git_hash.hexdigest(), sha256.hexdigest(), b"".join(collected)
 
 
-def _stream_member(
-    stream: Any,
-    *,
-    size: int,
-    collect: bool,
-) -> tuple[str, str, bytes | None]:
-    git_hash = hashlib.sha1(usedforsecurity=False)
-    sha256 = hashlib.sha256()
-    git_hash.update(f"blob {size}\0".encode("ascii"))
-    collected = bytearray() if collect else None
+def _member_chunks(stream: Any, size: int, *, normalize_crlf: bool) -> Iterable[bytes]:
     remaining = size
+    pending = b""
     while remaining:
         chunk = stream.read(min(1024 * 1024, remaining))
         if not chunk:
             raise AuditError("archive member ended before its declared size")
         remaining -= len(chunk)
+        if normalize_crlf:
+            chunk = pending + chunk
+            # Preserve a CR at the chunk boundary until its following byte arrives.
+            pending = b"\r" if chunk.endswith(b"\r") else b""
+            if pending:
+                chunk = chunk[:-1]
+            chunk = chunk.replace(b"\r\n", b"\n")
+        yield chunk
+    if stream.read(1):
+        raise AuditError("archive member exceeds its declared size")
+    if pending:
+        yield pending
+
+
+def _stream_member(
+    stream: Any,
+    *,
+    size: int,
+    collect: bool,
+    archive_size: int | None = None,
+) -> tuple[str, str, bytes | None]:
+    git_hash = hashlib.sha1(usedforsecurity=False)
+    sha256 = hashlib.sha256()
+    git_hash.update(f"blob {size}\0".encode("ascii"))
+    collected = bytearray() if collect else None
+    total = 0
+    for chunk in _member_chunks(
+        stream,
+        size if archive_size is None else archive_size,
+        normalize_crlf=archive_size is not None,
+    ):
+        total += len(chunk)
+        if total > size:
+            raise AuditError("archive member exceeds its declared Git blob size")
         git_hash.update(chunk)
         sha256.update(chunk)
         if collected is not None:
             collected.extend(chunk)
-    extra = stream.read(1)
-    if extra:
-        raise AuditError("archive member exceeds its declared size")
+    if total != size:
+        raise AuditError("archive member does not match its declared Git blob size")
     return git_hash.hexdigest(), sha256.hexdigest(), bytes(collected) if collected is not None else None
 
 
@@ -615,6 +642,7 @@ def _archive_file_records(
 
             expected_size = int(expected["size"])
             collect = is_text_candidate(relative, expected_size, max_text_bytes)
+            export_evidence: dict[str, Any] = {}
             if member.issym():
                 raw = member.linkname.encode("utf-8", errors="surrogateescape")
                 if expected.get("mode") != "120000":
@@ -628,16 +656,32 @@ def _archive_file_records(
             else:
                 if expected.get("mode") == "120000":
                     raise AuditError(f"{repository}: symlink materialized as a regular file: {relative}")
-                if member.size != expected_size:
+                if member.size < expected_size or member.size > 2 * expected_size:
                     raise AuditError(f"{repository}: archive size mismatch for {relative}")
                 stream = bundle.extractfile(member)
                 if stream is None:
                     raise AuditError(f"{repository}: archive content unavailable for {relative}")
                 git_sha1, content_sha256, collected = _stream_member(
                     stream,
-                    size=expected_size,
-                    collect=collect,
+                    size=member.size,
+                    collect=collect and member.size == expected_size,
                 )
+                if member.size != expected_size:
+                    export_evidence = {
+                        "archive_transform": "crlf-to-lf",
+                        "archive_size": member.size,
+                        "archive_git_blob_sha1": git_sha1,
+                        "archive_content_sha256": content_sha256,
+                    }
+                    stream = bundle.extractfile(member)
+                    if stream is None:
+                        raise AuditError(f"{repository}: archive content unavailable for {relative}")
+                    git_sha1, content_sha256, collected = _stream_member(
+                        stream,
+                        size=expected_size,
+                        collect=collect,
+                        archive_size=member.size,
+                    )
 
             if git_sha1 != expected.get("sha"):
                 raise AuditError(f"{repository}: Git blob digest mismatch for {relative}")
@@ -685,6 +729,7 @@ def _archive_file_records(
                     "git_blob_sha1": git_sha1,
                     "content_sha256": content_sha256,
                     "inspection": inspection,
+                    **export_evidence,
                 }
             )
             if len(findings) > MAX_FINDINGS_PER_REPOSITORY:
