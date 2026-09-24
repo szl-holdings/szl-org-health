@@ -503,7 +503,19 @@ class LiveReceiptBindingTests(unittest.TestCase):
                 self.action = action
                 self.writes: list[dict] = []
                 self.previous = empty_state()
-                self.previous["healthy_cycles"] = 2 if action == "closed" else 0
+                self.previous["healthy_cycles"] = 2 if action in ("closed", "sparse") else 0
+                if action in ("closed", "sparse"):
+                    now_epoch = int(dt.datetime.now(dt.timezone.utc).timestamp())
+                    rows = complete_buckets(
+                        now_epoch=now_epoch - now_epoch % 300,
+                        minutes=1440 if action == "closed" else 360,
+                        cadence=5,
+                        failures={20, 30} if action == "sparse" else None,
+                    )
+                    self.previous["surface_history"] = {
+                        surface["id"]: {"buckets": rows}
+                        for surface in manifest["surfaces"]
+                    }
 
             def verified_tip(self, *args):
                 return "a" * 40
@@ -529,12 +541,12 @@ class LiveReceiptBindingTests(unittest.TestCase):
             def update_issue(self, issue, **kwargs):
                 self.writes.append({"number": issue["number"], **kwargs})
 
-        for action in ("created", "refreshed", "closed"):
+        for action in ("created", "refreshed", "closed", "sparse"):
             with self.subTest(action=action), tempfile.TemporaryDirectory() as temporary:
                 github = FakeGitHub(action)
 
                 def probe(surface, *, policy):
-                    ok = action == "closed" or surface["id"] != "a11oy"
+                    ok = action in ("closed", "sparse") or surface["id"] != "a11oy"
                     return slo_controller.SurfaceProbe(
                         surface_id=surface["id"],
                         hf_repository=surface["hf_repository"],
@@ -564,7 +576,8 @@ class LiveReceiptBindingTests(unittest.TestCase):
 
                 self.assertEqual(result, 0 if action == "closed" else 2)
                 report = load_receipt(output, str(result))
-                self.assertEqual(report["incident"], {"action": action, "number": 93})
+                expected_action = "refreshed" if action == "sparse" else action
+                self.assertEqual(report["incident"], {"action": expected_action, "number": 93})
                 measurement = {
                     key: value for key, value in report.items()
                     if key not in {"incident", "receipt_sha256", "observation_sha256"}
@@ -587,6 +600,22 @@ class LiveReceiptBindingTests(unittest.TestCase):
                     self.assertEqual(incident_write["state"], "open")
                     self.assertEqual(report["verdict"], "INCIDENT")
                     self.assertEqual(report["healthy_cycles"], 0)
+                    if action == "sparse":
+                        self.assertEqual(report["severity"], "SEV3")
+                        self.assertTrue(
+                            any(
+                                "insufficient sample coverage to establish health: " in reason
+                                and "/slow" in reason
+                                for reason in report["reasons"]
+                            )
+                        )
+                        a11oy = next(row for row in report["surfaces"] if row["id"] == "a11oy")
+                        windows = {row["name"]: row for row in a11oy["windows"]}
+                        self.assertGreater(windows["medium"]["error_budget_burn"], 6.0)
+                        self.assertFalse(windows["slow"]["sufficient_coverage"])
+                        state_write = next(item for item in github.writes if item["number"] == 44)
+                        retained = extract_state(state_write["body"])["surface_history"]["a11oy"]["buckets"]
+                        self.assertEqual(sum(bucket[2] for bucket in retained), 2)
 
 
 if __name__ == "__main__":
