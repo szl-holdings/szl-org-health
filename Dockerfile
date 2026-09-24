@@ -7,6 +7,7 @@ COPY app.py /app/app.py
 COPY census/__init__.py /app/census/__init__.py
 COPY census/common.py /app/census/common.py
 COPY census/github.py /app/census/github.py
+COPY census/github_inventory.py /app/census/github_inventory.py
 COPY census/governance.py /app/census/governance.py
 COPY census/huggingface.py /app/census/huggingface.py
 COPY census/report.py /app/census/report.py
