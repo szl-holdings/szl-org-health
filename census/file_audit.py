@@ -29,7 +29,8 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .common import paginate_json, request_bytes, request_json, token_header
+from .common import request_bytes, request_json, token_header
+from .github_inventory import discover_repositories
 
 SCHEMA = "szl.repository-file-audit/v2"
 PUBLIC_SCHEMA = "szl.repository-file-audit-public/v2"
@@ -150,9 +151,8 @@ def _visibility(repo: Mapping[str, Any]) -> str:
 
 
 def list_repositories(org: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    encoded = urllib.parse.quote(org, safe="")
-    values, error = paginate_json(
-        f"{GITHUB_API}/orgs/{encoded}/repos?type=all&sort=full_name&direction=asc&per_page=100",
+    values, org_value, error = discover_repositories(
+        org,
         headers=github_headers(),
         timeout=30.0,
         retries=2,
@@ -169,7 +169,6 @@ def list_repositories(org: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if len(identities) != len(set(identities)):
         raise AuditError("repository inventory contains duplicate identities")
 
-    org_value, org_error = _request_json(f"/orgs/{encoded}")
     reconciliation: dict[str, Any] = {
         "observed_repository_count": len(repositories),
         "observed_public_count": sum(_visibility(row) == "public" for row in repositories),
@@ -179,7 +178,7 @@ def list_repositories(org: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         "authoritative_count_available": False,
         "authoritative_expected_count": None,
         "matched": None,
-        "error": org_error,
+        "error": None,
     }
     if isinstance(org_value, dict):
         public_count = org_value.get("public_repos")

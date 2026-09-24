@@ -8,6 +8,7 @@ import urllib.parse
 from typing import Any
 
 from .common import paginate_json, request_json, token_header
+from .github_inventory import discover_repositories
 
 ORG = "szl-holdings"
 GH = "https://api.github.com"
@@ -771,10 +772,9 @@ def collect_github(
     retries: int = 2,
     include_branch_protection: bool = True,
 ) -> dict[str, Any]:
-    discovered, discovery_error = gh_paginate(
-        f"/orgs/{ORG}/repos?type=all&sort=full_name&direction=asc&per_page=100",
-        request_timeout,
-        retries,
+    discovered, _, discovery_error = discover_repositories(
+        ORG, headers=github_headers(), timeout=request_timeout, retries=retries,
+        max_pages=MAX_PAGES,
     )
     discovery_complete = discovered is not None
     if discovered is None:
