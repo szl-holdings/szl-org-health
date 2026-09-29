@@ -8,7 +8,7 @@ SZL public-estate reliability is split into two independent control planes so a 
 
 ## Plane B — SLO and deadman
 
-`autonomic-slo.yml` runs on an offset five-minute cadence. It has no service-restart, workflow-dispatch, source-write, DNS, hardware, deletion, or product-action authority. It independently:
+`autonomic-slo.yml` requests an offset five-minute schedule. GitHub can delay or drop schedule events, so each admitted single-writer job makes three real observations, waiting the policy cadence after each completed observation. This bounded batch reduces dependence on a separate scheduler start for every sample. Missed time is never backfilled, and a repeated cadence slot cannot advance recovery. The controller has no service-restart, workflow-dispatch, source-write, DNS, hardware, deletion, or product-action authority. It independently:
 
 - validates the exact signed manifest tip;
 - probes every required route from a fixed HTTPS origin with redirects rejected;
@@ -21,6 +21,15 @@ SZL public-estate reliability is split into two independent control planes so a 
 - maintains one compressed machine-state issue and one deduplicated reliability incident;
 - requires three consecutive healthy cycles before closing an incident;
 - emits an immutable JSON receipt and SHA-256 digest every cycle.
+
+Each batch retains all three receipts, their exit codes, and a completion record.
+Each controller process has a sixty-second deadline, and collection has a
+780-second total budget, leaving two minutes of the fifteen-minute job limit
+for setup and evidence upload. A timeout retains any partial evidence and fails
+the batch; it cannot synthesize a receipt or trigger a catch-up observation.
+The final workflow gate independently validates every receipt and fails if any
+cycle reports an incident or any expected evidence is missing or invalid. A later
+healthy cycle cannot hide an earlier incident within the same run.
 
 A recent failed recovery run still proves that the scheduler is alive; the SLO plane evaluates recovery success separately through route availability and error-budget consumption. This prevents a false deadman alarm from concealing a real service incident.
 
@@ -42,7 +51,11 @@ Severity is deterministic:
 
 ## Evidence and privacy boundary
 
-The durable state contains public route outcomes, timing aggregates, manifest revisions, and incident counters. It is compressed and size-bounded before being embedded in a machine-managed issue. Response bodies, credentials, authorization headers, private addresses, arbitrary commands, and product data are never persisted.
+The durable state contains public route outcomes, timing aggregates, manifest revisions, and incident counters. It is compressed and size-bounded before being embedded in a machine-managed issue. Tagged XZ writes preserve the complete fourteen-day history within the existing issue-body limit; legacy zlib state remains readable. Both decoders bound input and decoded bytes, XZ also bounds decoder memory, and malformed persisted state fails closed instead of resetting history. Response bodies, credentials, authorization headers, private addresses, arbitrary commands, and product data are never persisted.
+
+After the first `xz:` state write, any rollback must retain the tagged decoder.
+An older controller that only understands zlib must not read the migrated issue.
+Do not clear or trim history to fit the issue-body limit or facilitate rollback.
 
 ## Failure-domain boundary
 

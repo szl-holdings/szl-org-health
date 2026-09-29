@@ -291,13 +291,13 @@ class WorkflowEvidenceTests(unittest.TestCase):
         final_step = workflow.split(name, 1)[1].split("\n      - name:", 1)[0]
         self.assertIn("if: always()", final_step)
         self.assertNotIn("continue-on-error", final_step)
-        self.assertIn("python -m autonomic.slo_evidence", final_step)
-        self.assertIn("--report reports/autonomic-slo.json", final_step)
+        self.assertIn("python -m autonomic.slo_sampling --verify-only", final_step)
+        self.assertIn("--output-dir reports/autonomic-slo-samples", final_step)
         self.assertIn('--exit-code "$SLO_EXIT_CODE"', final_step)
         self.assertNotRegex(final_step, r"\|\|\s*(?:true|:)\b|exit\s+0\b")
         run_block = final_step.split("run: |", 1)[1]
         # Exercise the command that gates hosted success, not a helper disconnected from CI.
-        self.assertRegex(run_block, r"set -euo pipefail\s+python -m autonomic\.slo_evidence")
+        self.assertRegex(run_block, r"set -euo pipefail\s+python -m autonomic\.slo_sampling --verify-only")
         self.assertIn("tests.test_slo_workflow_evidence", workflow)
 
 

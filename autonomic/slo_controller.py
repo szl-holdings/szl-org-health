@@ -17,6 +17,7 @@ import dataclasses
 import datetime as dt
 import hashlib
 import json
+import lzma
 import math
 import os
 import re
@@ -45,6 +46,8 @@ USER_AGENT = "SZLHOLDINGS-AutonomicSLO/1.0"
 MAX_GITHUB_BYTES = 2_097_152
 MAX_STATE_BYTES = 1_572_864
 MAX_ISSUE_BODY_BYTES = 60_000
+STATE_XZ_PREFIX = "xz:"
+MAX_STATE_DECODE_MEMORY = 32 * 1024 * 1024
 BUCKET_MINUTES = 15
 ACTIVE_RUN_STATES = {"queued", "in_progress", "waiting", "requested", "pending"}
 
@@ -810,34 +813,49 @@ def empty_state() -> dict[str, Any]:
 def encode_state(state: Mapping[str, Any]) -> str:
     raw = canonical_json(state)
     require(len(raw) <= MAX_STATE_BYTES, "SLO state exceeded the decompressed byte limit")
-    compressed = zlib.compress(raw, level=9)
-    return base64.b64encode(compressed).decode("ascii")
+    # A complete fourteen-day history outgrows zlib's compression window and
+    # the issue-body cap. Preserve every sample with a lossless tagged codec.
+    compressed = lzma.compress(raw, format=lzma.FORMAT_XZ, preset=6)
+    return STATE_XZ_PREFIX + base64.b64encode(compressed).decode("ascii")
 
 
 def decode_state(encoded: str) -> dict[str, Any]:
     try:
-        compressed = base64.b64decode(encoded, validate=True)
-        decompressor = zlib.decompressobj()
-        raw = decompressor.decompress(compressed, MAX_STATE_BYTES + 1)
-        raw += decompressor.flush()
+        require(len(encoded) <= MAX_ISSUE_BODY_BYTES, "encoded SLO state exceeded the issue-body limit")
+        if encoded.startswith(STATE_XZ_PREFIX):
+            compressed = base64.b64decode(encoded[len(STATE_XZ_PREFIX):], validate=True)
+            decompressor = lzma.LZMADecompressor(
+                format=lzma.FORMAT_XZ, memlimit=MAX_STATE_DECODE_MEMORY,
+            )
+            raw = decompressor.decompress(compressed, max_length=MAX_STATE_BYTES + 1)
+        else:
+            # Read the existing issue losslessly before its first tagged write.
+            compressed = base64.b64decode(encoded, validate=True)
+            decompressor = zlib.decompressobj()
+            raw = decompressor.decompress(compressed, MAX_STATE_BYTES + 1)
         require(len(raw) <= MAX_STATE_BYTES, "SLO state exceeded the decompressed byte limit")
+        require(decompressor.eof and not decompressor.unused_data, "SLO state is truncated or has trailing data")
         value = json.loads(raw.decode("utf-8"))
-    except Exception:
-        return empty_state()
-    if not isinstance(value, dict) or value.get("schema") != STATE_SCHEMA:
-        return empty_state()
-    if not isinstance(value.get("surface_history"), dict):
-        value["surface_history"] = {}
+    except Exception as exc:
+        raise ContractError("persisted SLO state is invalid") from exc
+    require(isinstance(value, dict) and value.get("schema") == STATE_SCHEMA, "SLO state has an invalid schema")
+    require(isinstance(value.get("surface_history"), dict), "SLO state has invalid history")
+    for identifier, history in value["surface_history"].items():
+        require(isinstance(identifier, str) and bool(SURFACE_ID.fullmatch(identifier)), "SLO history has an invalid surface")
+        require(isinstance(history, dict), "SLO surface history is invalid")
+        buckets = history.get("buckets")
+        require(isinstance(buckets, list) and buckets == normalize_buckets(buckets), "SLO history contains invalid buckets")
+        require(len({row[0] for row in buckets}) == len(buckets), "SLO history contains duplicate buckets")
     return value
 
 
 def extract_state(body: Any) -> dict[str, Any]:
-    if not isinstance(body, str):
+    if body is None:
         return empty_state()
+    require(isinstance(body, str), "SLO state issue body is invalid")
     start = body.find(STATE_BEGIN)
     end = body.find(STATE_END)
-    if start < 0 or end < 0 or end <= start:
-        return empty_state()
+    require(start >= 0 and end > start, "SLO state markers are missing or invalid")
     return decode_state(body[start + len(STATE_BEGIN) : end].strip())
 
 
@@ -1109,6 +1127,20 @@ def offline_contract(policy: Mapping[str, Any], policy_sha256: str) -> dict[str,
     }
 
 
+def healthy_cycle_count(state: Mapping[str, Any], *, healthy: bool, sample_epoch: int, cadence_minutes: int) -> int:
+    """Only a new observation slot can advance recovery; any incident resets it."""
+    if not healthy:
+        return 0
+    previous = int(state.get("healthy_cycles") or 0)
+    updated = parse_time(state.get("updated_at"))
+    if updated is not None:
+        interval = cadence_minutes * 60
+        previous_slot = int(updated.timestamp()) // interval * interval
+        if sample_epoch <= previous_slot:
+            return previous
+    return previous + 1
+
+
 def run_live(
     *,
     policy: Mapping[str, Any],
@@ -1136,8 +1168,16 @@ def run_live(
     sample_epoch = now_epoch - (now_epoch % (policy["cadence_minutes"] * 60))
 
     state_issue = github.find_open_issue(policy["state_issue"]["title"])
-    state = extract_state(state_issue.get("body") if state_issue else None)
-    history = state.get("surface_history") if isinstance(state.get("surface_history"), dict) else {}
+    if state_issue is not None:
+        require(isinstance(state_issue.get("body"), str), "existing SLO state issue has no body")
+        state = extract_state(state_issue["body"])
+        require(
+            set(state["surface_history"]) == {surface["id"] for surface in manifest["surfaces"]},
+            "persisted SLO history does not cover the declared surfaces",
+        )
+    else:
+        state = empty_state()
+    history = state["surface_history"]
 
     probes: dict[str, SurfaceProbe] = {}
     with concurrent.futures.ThreadPoolExecutor(
@@ -1264,8 +1304,10 @@ def run_live(
             global_severity = "SEV3"
 
     verdict = "HEALTHY" if global_severity is None else "INCIDENT"
-    previous_healthy_cycles = int(state.get("healthy_cycles") or 0)
-    healthy_cycles = previous_healthy_cycles + 1 if verdict == "HEALTHY" else 0
+    healthy_cycles = healthy_cycle_count(
+        state, healthy=verdict == "HEALTHY", sample_epoch=sample_epoch,
+        cadence_minutes=policy["cadence_minutes"],
+    )
     next_state = {
         "schema": STATE_SCHEMA,
         "updated_at": now_text,
