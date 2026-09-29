@@ -143,7 +143,7 @@ def complete_buckets(
     rows: list[list[int]] = []
     failures = failures or set()
     latency_breaches = latency_breaches or set()
-    for index in range(minutes // cadence):
+    for index in reversed(range(minutes // cadence)):
         sample = now_epoch - index * cadence * 60
         rows = append_sample(
             rows,
@@ -233,8 +233,11 @@ class StateTests(unittest.TestCase):
         self.assertEqual(decode_state(encoded), state)
 
     def test_malformed_or_oversized_state_fails_closed(self) -> None:
-        self.assertEqual(decode_state("not-base64")["surface_history"], {})
-        self.assertEqual(extract_state("no markers")["surface_history"], {})
+        with self.assertRaises(ContractError):
+            decode_state("not-base64")
+        with self.assertRaises(ContractError):
+            extract_state("no markers")
+        self.assertEqual(extract_state(None)["surface_history"], {})
 
     def test_duplicate_sample_in_same_slot_is_not_counted_twice(self) -> None:
         rows = append_sample(
@@ -504,6 +507,14 @@ class LiveReceiptBindingTests(unittest.TestCase):
                 self.writes: list[dict] = []
                 self.previous = empty_state()
                 self.previous["healthy_cycles"] = 2 if action in ("closed", "sparse") else 0
+                now_epoch = int(dt.datetime.now(dt.timezone.utc).timestamp())
+                rows = complete_buckets(
+                    now_epoch=now_epoch - now_epoch % 300 - 300,
+                    minutes=5, cadence=5,
+                )
+                self.previous["surface_history"] = {
+                    surface["id"]: {"buckets": rows} for surface in manifest["surfaces"]
+                }
                 if action in ("closed", "sparse"):
                     now_epoch = int(dt.datetime.now(dt.timezone.utc).timestamp())
                     rows = complete_buckets(
