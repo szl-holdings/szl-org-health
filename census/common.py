@@ -25,6 +25,7 @@ _SENSITIVE_REDIRECT_HEADERS = frozenset(
 )
 _MAX_PAGE_URL_BYTES = 4096
 _MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+_RESPONSE_READ_CHUNK_BYTES = 1024 * 1024
 _MAX_JSON_DEPTH = 128
 _MAX_JSON_NODES = 1_000_000
 
@@ -221,10 +222,21 @@ def request_bytes(
                         return None, response_headers, "invalid-content-length"
                     if declared_length < 0 or declared_length > max_bytes:
                         return None, response_headers, "response-body-limit-exceeded"
-                body = response.read(max_bytes + 1)
-                if len(body) > max_bytes:
-                    return None, response_headers, "response-body-limit-exceeded"
-                return body, response_headers, None
+                chunks: list[bytes] = []
+                total = 0
+                while True:
+                    # Buffered HTTP readers may allocate the requested size even
+                    # for a tiny response. Bound each allocation independently of
+                    # the archive ceiling, including one byte to detect overflow.
+                    chunk = response.read(
+                        min(_RESPONSE_READ_CHUNK_BYTES, max_bytes - total + 1)
+                    )
+                    if not chunk:
+                        return b"".join(chunks), response_headers, None
+                    total += len(chunk)
+                    if total > max_bytes:
+                        return None, response_headers, "response-body-limit-exceeded"
+                    chunks.append(chunk)
         except urllib.error.HTTPError as exc:
             response_headers = _response_header_map(exc.headers or {})
             return None, response_headers, f"http{exc.code}"
