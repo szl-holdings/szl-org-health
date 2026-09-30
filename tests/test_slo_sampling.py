@@ -238,13 +238,30 @@ class SamplingTests(unittest.TestCase):
         self.write_receipt(second, report)
         self.assertEqual(verify(self.directory, POLICY)[0], 1)
 
-    def test_source_revision_or_manifest_cannot_change_between_observations(self):
+    def test_unchanged_manifest_bytes_allow_distinct_valid_manifest_revisions(self):
+        self.assertEqual(self.collect((2, 2, 2)), 2)
+        third = self.directory / "sample-3.json"
+        report = json.loads(third.read_text())
+        report["manifest_revision"] = "d" * 40
+        self.write_receipt(third, report)
+        before = {path.name: path.read_bytes() for path in self.directory.iterdir()}
+
+        result, summary = verify(self.directory, POLICY, exit_code="2")
+
+        self.assertEqual(result, 2)
+        self.assertEqual(summary.count("## Observation "), 3)
+        self.assertEqual(before, {path.name: path.read_bytes() for path in self.directory.iterdir()})
+        self.assertEqual(json.loads(third.read_text())["manifest_revision"], "d" * 40)
+
+    def test_controller_or_manifest_bytes_cannot_change_between_observations(self):
         self.collect()
         second = self.directory / "sample-2.json"
         original = json.loads(second.read_text())
         for field, value in (
             ("controller_revision", "b" * 40), ("controller_revision", None),
-            ("manifest_revision", "d" * 40), ("manifest_sha256", "e" * 64),
+            ("manifest_revision", None), ("manifest_revision", "d" * 39),
+            ("manifest_revision", "D" * 40), ("manifest_revision", "g" * 40),
+            ("manifest_sha256", "e" * 64), ("policy_sha256", "f" * 64),
             ("controller_repository", "szl-holdings/other"),
             ("manifest_repository", "szl-holdings/other"),
         ):

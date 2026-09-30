@@ -30,6 +30,9 @@ the batch; it cannot synthesize a receipt or trigger a catch-up observation.
 The final workflow gate independently validates every receipt and fails if any
 cycle reports an incident or any expected evidence is missing or invalid. A later
 healthy cycle cannot hide an earlier incident within the same run.
+Every observation validates and retains its signed manifest revision; revisions
+may advance within a batch only when the manifest bytes, controller revision,
+policy, and declared repositories remain unchanged.
 
 A recent failed recovery run still proves that the scheduler is alive; the SLO plane evaluates recovery success separately through route availability and error-budget consumption. This prevents a false deadman alarm from concealing a real service incident.
 
