@@ -51,6 +51,11 @@ jobs:
           owner: szl-holdings
           permission-contents: read
           permission-organization-administration: read
+          permission-actions: read
+          permission-administration: read
+          permission-security-events: read
+          permission-secret-scanning-alerts: read
+          permission-vulnerability-alerts: read
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

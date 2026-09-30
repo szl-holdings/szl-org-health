@@ -29,6 +29,20 @@ def _uses_actions_secrets(source: str) -> bool:
     return bool(SECRET_EXPR.search(source) or SECRET_INHERIT.search(source))
 
 
+def _reader_permission_pairs(source: str, job: str) -> list[tuple[str, str]]:
+    """Inspect one mint step independently, without conflating the two jobs."""
+    job_tail = source.split(f"\n  {job}:\n", 1)[1]
+    job_source = re.split(r"(?m)^  [A-Za-z][A-Za-z0-9_-]*:\s*$", job_tail, 1)[0]
+    step = re.search(
+        r"(?ms)^      - name: Mint short-lived organization reader\n"
+        r"(.*?)(?=^      - name:|\Z)",
+        job_source,
+    )
+    if step is None:
+        raise AssertionError(f"{job}: organization reader mint step missing")
+    return re.findall(r"(?m)^          (permission-[a-z-]+):\s*(\S+)\s*$", step[1])
+
+
 def _canonical_triggers(
     source: str, name: str
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -84,6 +98,35 @@ def _canonical_triggers(
 
 
 class SecretWorkflowBoundaryTests(unittest.TestCase):
+    def test_census_reader_has_exact_read_only_observation_permissions(self) -> None:
+        workflow = (WORKFLOWS / "scheduled-estate-census.yml").read_text(
+            encoding="utf-8"
+        )
+        pairs = _reader_permission_pairs(workflow, "census")
+        expected = {
+            "permission-contents": "read",
+            "permission-organization-administration": "read",
+            "permission-actions": "read",
+            "permission-administration": "read",
+            "permission-security-events": "read",
+            "permission-secret-scanning-alerts": "read",
+            "permission-vulnerability-alerts": "read",
+        }
+        self.assertEqual(dict(pairs), expected)
+        self.assertEqual(len(pairs), len(expected), "duplicate permission input")
+
+    def test_file_audit_reader_retains_exact_inventory_only_permissions(self) -> None:
+        workflow = (WORKFLOWS / "scheduled-estate-census.yml").read_text(
+            encoding="utf-8"
+        )
+        pairs = _reader_permission_pairs(workflow, "file-audit")
+        expected = {
+            "permission-contents": "read",
+            "permission-organization-administration": "read",
+        }
+        self.assertEqual(dict(pairs), expected)
+        self.assertEqual(len(pairs), len(expected), "duplicate permission input")
+
     def test_retired_one_shot_executor_is_absent(self) -> None:
         self.assertFalse((WORKFLOWS / "zz-org-convergence-20260828.yml").exists())
         self.assertFalse((REPO_ROOT / "tools" / "org_converge_20260828.py").exists())
