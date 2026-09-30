@@ -187,7 +187,9 @@ def verify(
             manifest_digest = report.get("manifest_sha256")
             receipt_digest = report.get("receipt_sha256")
             observation_digest = report.get("observation_sha256")
-            observed_source = (revision, manifest_revision, manifest_digest)
+            # Each controller validates its signed manifest tip. Unrelated commits
+            # may advance that tip while the governed manifest bytes stay identical.
+            observed_source = (revision, manifest_digest)
             if (not isinstance(cycle_id, str) or not cycle_id or cycle_id in seen_ids
                     or observed_at is None
                     or policy_digest is None or cadence is None
