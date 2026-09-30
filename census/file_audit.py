@@ -55,7 +55,7 @@ PINNED_ACTION_REF = re.compile(r"^[^/@\s]+/[^@\s]+@[0-9a-fA-F]{40}$")
 CODE_EXTENSIONS = {
     ".c", ".cc", ".cpp", ".cs", ".css", ".go", ".h", ".hpp", ".html",
     ".java", ".js", ".jsx", ".kt", ".kts", ".lean", ".lua", ".mjs",
-    ".php", ".py", ".rb", ".rs", ".scala", ".sh", ".sql", ".swift",
+    ".php", ".ps1", ".psm1", ".psd1", ".py", ".rb", ".rs", ".scala", ".sh", ".sql", ".swift",
     ".toml", ".ts", ".tsx", ".vue", ".xml", ".yaml", ".yml",
 }
 TEXT_EXTENSIONS = CODE_EXTENSIONS | {
