@@ -1,0 +1,73 @@
+name: PyPI release-path audit
+
+# Verifies, against live GitHub and PyPI state, that every package in
+# governance/pypi/pypi-packages.v1.json sits on the canonical Trusted-Publishing
+# release path: canonical workflow + gate bytes, no token secrets, tag-only `pypi`
+# environment, tag ruleset, PEP 740 provenance from publish-pypi.yml, verified
+# GitHub source URL, and a release tag at the PyPI-attested source commit.
+# UNKNOWN is never PASS; the job fails on any FAIL or UNKNOWN.
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "governance/pypi/**"
+      - "tools/pypi_release_path_audit.py"
+      - ".github/workflows/pypi-release-path-audit.yml"
+  push:
+    branches: [main]
+    paths:
+      - "governance/pypi/**"
+      - "tools/pypi_release_path_audit.py"
+      - ".github/workflows/pypi-release-path-audit.yml"
+
+permissions: {}
+
+concurrency:
+  group: pypi-release-path-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: audit / fail-closed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Canonical files are self-consistent
+        run: |
+          set -euo pipefail
+          python governance/pypi/canonical/gen_publish_workflow.py "PACKAGE=.:pypi" | diff -u governance/pypi/canonical/publish-pypi.yml -
+          python -m py_compile governance/pypi/canonical/szl_pypi_release_gate.py tools/pypi_release_path_audit.py
+          python -c "import json; json.load(open('governance/pypi/pypi-packages.v1.json'))"
+
+      - name: Audit live GitHub + PyPI state
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python tools/pypi_release_path_audit.py --report pypi-release-path-report.json --summary pypi-release-path-summary.md
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pypi-release-path-report
+          path: |
+            pypi-release-path-report.json
+            pypi-release-path-summary.md
+          if-no-files-found: error
