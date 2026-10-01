@@ -25,6 +25,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tomllib
 import urllib.error
@@ -48,6 +50,14 @@ class Http:
         self.token = token
 
     def get(self, url: str, accept: str | None = None, raw: bool = False):
+        if url.startswith(GH_API) and not self.token and shutil.which("gh"):
+            # local operator fallback: let the gh CLI supply credentials (never printed here)
+            cmd = ["gh", "api", url] + (["-H", f"Accept: {accept}"] if accept else [])
+            p = subprocess.run(cmd, capture_output=True, text=True)
+            if p.returncode != 0:
+                m = re.search(r"HTTP (\d{3})", p.stderr)
+                return (int(m.group(1)) if m else -1), None
+            return 200, json.loads(p.stdout or "null")
         headers = {"User-Agent": "szl-pypi-release-path-audit/1"}
         if accept:
             headers["Accept"] = accept
@@ -122,10 +132,10 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
             check(results, pkg, f"canonical:{key}", "FAIL" if st == 404 else "UNKNOWN", f"{rel} HTTP {st}")
             continue
         if key == "workflow":
-            # only SZL_PACKAGES differs between repositories; compare with that line masked
-            masked = re.sub(r'SZL_PACKAGES: "[^"]*"', 'SZL_PACKAGES: "<masked>"', body.decode("utf-8", "replace"))
-            ok = sha256(masked.encode()) == canon["workflow_masked_sha256"]
-            spec = re.search(r'SZL_PACKAGES: "([^"]*)"', body.decode("utf-8", "replace"))
+            # the canonical generator must reproduce the repository's file byte-for-byte from its own SZL_PACKAGES line
+            text = body.decode("utf-8", "replace")
+            spec = re.search(r'SZL_PACKAGES: "([^"]*)"', text)
+            ok = bool(spec) and canon["render"](spec.group(1)) == text
             declared = [s.split("=")[0] for s in spec.group(1).split(";")] if spec else []
             if norm(pkg) not in [norm(d) for d in declared]:
                 check(results, pkg, "canonical:workflow-declares-package", "FAIL", f"SZL_PACKAGES={declared}")
@@ -227,15 +237,24 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
     digest = digests.pop()
     tag = f"v{version}" if m.get("tag_pattern", "v<version>") == "v<version>" else f"{norm(pkg)}-v{version}"
     st, ref = http.get(f"{GH_API}/repos/{org}/{repo}/git/ref/tags/{tag}")
-    if st != 200:
+    if st == 404:
         check(results, pkg, "github:release-tag", "FAIL", f"tag {tag} missing (attested source {digest[:12]})")
+        return
+    if st != 200 or not isinstance(ref, dict):
+        check(results, pkg, "github:release-tag", "UNKNOWN", f"tag lookup HTTP {st}")
         return
     obj = ref["object"]
     commit = obj["sha"]
     if obj["type"] == "tag":
         st, tobj = http.get(f"{GH_API}/repos/{org}/{repo}/git/tags/{obj['sha']}")
         commit = (tobj or {}).get("object", {}).get("sha", commit)
-    check(results, pkg, "github:release-tag", "PASS" if commit == digest else "FAIL", f"{tag} -> {commit[:12]} vs attested {digest[:12]}")
+    exc = m.get("tag_exception") or {}
+    if commit == digest:
+        check(results, pkg, "github:release-tag", "PASS", f"{tag} -> {commit[:12]} == attested")
+    elif exc.get("tag") == tag and exc.get("tag_commit") == commit and exc.get("attested_commit") == digest:
+        check(results, pkg, "github:release-tag", "PASS", f"{tag} -> {commit[:12]} (recorded exception: {exc.get('reason', '')[:80]})")
+    else:
+        check(results, pkg, "github:release-tag", "FAIL", f"{tag} -> {commit[:12]} vs attested {digest[:12]}")
 
 
 def audit_private_marker(http: Http, org: str, m: dict, results: list) -> None:
@@ -267,9 +286,15 @@ def main() -> int:
     manifest = json.loads(Path(args.manifest).read_text())
     org = manifest["owner"]["github_org"]
     canon_dir = Path(args.canonical_dir)
-    wf_text = (canon_dir / "publish-pypi.yml").read_text()
+    sys.path.insert(0, str(canon_dir))
+    from gen_publish_workflow import render  # canonical generator shipped next to the canonical copies
+
+    if render("PACKAGE=.:pypi") != (canon_dir / "publish-pypi.yml").read_text():
+        print("::error::canonical publish-pypi.yml does not match its generator; regenerate before auditing")
+        return 1
     canon = {
-        "workflow_masked_sha256": sha256(re.sub(r'SZL_PACKAGES: "[^"]*"', 'SZL_PACKAGES: "<masked>"', wf_text).encode()),
+        "render": render,
+        "generator_sha256": sha256((canon_dir / "gen_publish_workflow.py").read_bytes()),
         "gate_sha256": sha256((canon_dir / "szl_pypi_release_gate.py").read_bytes()),
     }
     http = Http(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"))
@@ -288,7 +313,7 @@ def main() -> int:
     counts = {s: sum(1 for r in results if r["status"] == s) for s in ("PASS", "FAIL", "UNKNOWN")}
     verdict = "PASS" if counts["FAIL"] == 0 and counts["UNKNOWN"] == 0 else "FAIL"
     report = {"schema": "szl.pypi-release-path-audit.v1", "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-              "manifest_generated_at": manifest.get("generated_at"), "canonical": canon, "counts": counts, "verdict": verdict, "results": results}
+              "manifest_generated_at": manifest.get("generated_at"), "canonical": {k: v for k, v in canon.items() if k != "render"}, "counts": counts, "verdict": verdict, "results": results}
     Path(args.report).write_text(json.dumps(report, indent=1))
     lines = [f"# PyPI release-path audit — {verdict}", "", f"Generated {report['generated_at']} · PASS {counts['PASS']} · FAIL {counts['FAIL']} · UNKNOWN {counts['UNKNOWN']}", ""]
     bad = [r for r in results if r["status"] != "PASS"]
