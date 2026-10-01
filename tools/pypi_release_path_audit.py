@@ -257,7 +257,8 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
         check(results, pkg, "github:release-tag", "FAIL", f"{tag} -> {commit[:12]} vs attested {digest[:12]}")
 
 
-def audit_private_marker(http: Http, org: str, m: dict, results: list) -> None:
+def audit_private_marker(http: Http, org: str, m: dict, results: list, published_names: dict[str, str] | None = None) -> None:
+    published_names = published_names or {}
     st, body = http.get(f"{RAW}/{org}/{m['repo']}/HEAD/{m['path']}", raw=True)
     if st != 200:
         check(results, m.get("name") or m["path"], "private-classifier", "UNKNOWN", f"{m['path']} HTTP {st}")
@@ -271,7 +272,11 @@ def audit_private_marker(http: Http, org: str, m: dict, results: list) -> None:
     check(results, m.get("name") or m["path"], "private-classifier", "PASS" if PRIVATE in cls else "FAIL", m["path"])
     st, meta = http.get(f"https://pypi.org/pypi/{norm(m.get('name') or '')}/json") if m.get("name") else (404, None)
     if st == 200 and m["status"] in ("internal", "never"):
-        check(results, m["name"], "pypi:unexpected-project", "FAIL", "internal/never package exists on PyPI")
+        if norm(m["name"]) in published_names:
+            check(results, m["name"], "pypi:unexpected-project", "PASS",
+                  f"name is published from {published_names[norm(m['name'])]}; this copy ({m['repo']}/{m['path']}) stays private")
+        else:
+            check(results, m["name"], "pypi:unexpected-project", "FAIL", "internal/never package exists on PyPI")
 
 
 def main() -> int:
@@ -300,13 +305,14 @@ def main() -> int:
     http = Http(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"))
     results: list[dict] = []
     repo_cache: dict = {}
+    published_names = {norm(m["name"]): m["repo"] for m in manifest["packages"] if m.get("status") == "published" and m.get("name")}
     for m in manifest["packages"]:
         if args.only and m.get("name") not in args.only:
             continue
         if m["status"] in ("published", "queued"):
             audit_release_repo(http, org, m, canon, results, repo_cache)
         elif m["status"] in ("internal", "never"):
-            audit_private_marker(http, org, m, results)
+            audit_private_marker(http, org, m, results, published_names)
         else:  # hold / third-party: informational only
             check(results, m.get("name") or m["path"], "manifest:hold", "PASS", m.get("reason", ""))
 
