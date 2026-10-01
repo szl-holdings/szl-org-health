@@ -856,7 +856,13 @@
    "import_names": [
     "szl_openshell_receipts"
    ],
-   "source": "https://github.com/szl-holdings/szl-openshell-receipts"
+   "source": "https://github.com/szl-holdings/szl-openshell-receipts",
+   "tag_exception": {
+    "tag": "v0.3.0",
+    "tag_commit": "31cef01f95cbdb862372be354818915b27c34fe4",
+    "attested_commit": "2ef765d575d81572b3774a0bc0a79cd7c43576a9",
+    "reason": "v0.3.0 was tagged on the version-bump commit before the publish workflow existed; PyPI 0.3.0 was published from the child commit whose only change is .github/workflows/publish-pypi.yml (package tree identical). Existing tag retained rather than moved."
+   }
   },
   {
    "name": "szl-pin",

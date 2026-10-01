@@ -5,13 +5,27 @@ Usage: gen_workflow.py "name=dir[:env];name2=dir2[:env]"  -> prints YAML
 """
 import sys
 
+# SHA pins. The version is written on the comment line ABOVE each `uses:` so that
+# estate verifiers which require `uses:` lines to end at the 40-hex SHA still pass.
 PINS = {
-    "checkout": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
-    "setup_python": "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0",
-    "upload": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
-    "download": "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
-    "publish": "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2",
+    "checkout": ("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "v7.0.1"),
+    "setup_python": ("actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97", "v7.0.0"),
+    "upload": ("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "v7.0.1"),
+    "download": ("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "v8.0.1"),
+    "publish": ("pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33", "v1.14.2"),
 }
+
+
+def use(key: str, indent: int, name: str | None = None) -> str:
+    ref, ver = PINS[key]
+    pad = " " * indent
+    lines = [f"{pad}# {ref.split('@')[0]} {ver}"]
+    if name:
+        lines.append(f"{pad}- name: {name}")
+        lines.append(f"{pad}  uses: {ref}")
+    else:
+        lines.append(f"{pad}- uses: {ref}")
+    return "\n".join(lines)
 
 
 def parse(spec):
@@ -90,10 +104,10 @@ jobs:
       version: ${{{{ steps.gate.outputs.version }}}}
       environment: ${{{{ steps.gate.outputs.environment }}}}
     steps:
-      - uses: {PINS['checkout']}
+{use('checkout', 6)}
         with:
           persist-credentials: false
-      - uses: {PINS['setup_python']}
+{use('setup_python', 6)}
         with:
           python-version: "3.12"
       - name: Install build tooling
@@ -108,15 +122,15 @@ jobs:
           --ref-type "${{{{ github.ref_type }}}}"
           --ref-name "${{{{ github.ref_name }}}}"
           --outdir dist
-      - name: Upload release-gate receipt
-        uses: {PINS['upload']}
+{use('upload', 6, 'Upload release-gate receipt')}
         with:
           name: release-gate-receipt
           path: release-gate.json
           if-no-files-found: error
+      # actions/upload-artifact v7.0.1
       - name: Upload distributions (release only)
         if: github.event_name == 'release'
-        uses: {PINS['upload']}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: pypi-dists
           path: |
@@ -144,13 +158,11 @@ jobs:
       id-token: write   # OIDC token for PyPI Trusted Publishing — the only credential
       contents: read
     steps:
-      - name: Download gated distributions
-        uses: {PINS['download']}
+{use('download', 6, 'Download gated distributions')}
         with:
           name: pypi-dists
           path: dist/
-      - name: Publish to PyPI
-        uses: {PINS['publish']}
+{use('publish', 6, 'Publish to PyPI')}
         with:
           packages-dir: dist/
           attestations: true     # PEP 740 provenance, signed via Sigstore
