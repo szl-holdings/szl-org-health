@@ -21,6 +21,15 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("space.healthz===200", html)
         self.assertNotIn("running_spaces===s.spaces?'ok'", html)
 
+    def test_space_readiness_and_production_hold_are_distinct_chips(self):
+        html = Path("static/index.html").read_text(encoding="utf-8")
+
+        self.assertIn("space.readiness_state||'NOT_EVALUATED'", html)
+        self.assertIn("production hold (declared)", html)
+        self.assertIn("source drift (declared)", html)
+        self.assertIn("return'info';if(value==='RUNTIME_HEALTHY_UNBOUND'", html)
+        self.assertNotIn("value==='STATIC_REACHABLE')return'ok'", html)
+
     def test_first_class_kernels_and_bucket_contracts_are_visible(self):
         html = Path("static/index.html").read_text(encoding="utf-8")
 

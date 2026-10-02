@@ -11,6 +11,7 @@ import urllib.parse
 from typing import Any
 
 from .common import http_probe, paginate_json, request_bytes, request_json, token_header
+from .space_readiness import collect_space_readiness
 
 HF_ORG = "SZLHOLDINGS"
 HF = "https://huggingface.co"
@@ -1481,6 +1482,7 @@ def normalize_space(item: dict[str, Any]) -> dict[str, Any]:
     )
     source_revision = source_binding.get("source_revision")
     source_binding_state = source_binding["source_binding_state"]
+    readiness = collect_space_readiness(item, root_url, source_binding)
     stage = runtime.get("stage") or "unknown"
     reachable = 200 <= int(root_probe.get("http") or 0) < 400
     if stage != "RUNNING" or not reachable:
@@ -1529,6 +1531,8 @@ def normalize_space(item: dict[str, Any]) -> dict[str, Any]:
         "source_artifact_sha256": source_binding.get("source_artifact_sha256"),
         "source_binding_state": source_binding_state,
         "operational_state": operational_state,
+        "runtime_revision": runtime.get("sha"),
+        **readiness,
         "card_present": (
             "README.md" in repo_siblings
             if item.get("siblings") is not None
