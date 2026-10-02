@@ -366,9 +366,13 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
             else:
                 tag_pattern = family.removeprefix("refs/tags/")
                 tag_only = bool(dbp.get("custom_branch_policies")) and bool(pols) and all(t == "tag" for _, t in pols)
-                covers_releases = any(t == "tag" and name in (tag_pattern, family) for name, t in pols)
-                check(results, pkg, "github:environment-tag-only", "PASS" if tag_only and covers_releases else "FAIL",
-                      f"policies={pols}; required release tags={tag_pattern}")
+                bare_match = any(t == "tag" and name == tag_pattern for name, t in pols)
+                full_ref_match = any(t == "tag" and name == family for name, t in pols)
+                status = "PASS" if tag_only and bare_match else "UNKNOWN" if tag_only and full_ref_match else "FAIL"
+                detail = f"policies={pols}; required release tags={tag_pattern}"
+                if status == "UNKNOWN":
+                    detail += f"; full-ref tag policy {family!r} coverage is unverified"
+                check(results, pkg, "github:environment-tag-only", status, detail)
     if rc["tag_rulesets_status"] != 200:
         check(results, pkg, "github:tag-ruleset", "UNKNOWN",
               f"tag ruleset inventory HTTP {rc['tag_rulesets_status']}; access or existence unverified")
