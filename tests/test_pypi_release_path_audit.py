@@ -426,6 +426,29 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
                 self.assertEqual(results["github:environment-tag-only"]["status"], "FAIL")
                 self.assertIn("v*", results["github:environment-tag-only"]["detail"])
 
+    def test_full_ref_environment_tag_policy_coverage_is_unknown(self):
+        responses = fixture()
+        responses[f"{GITHUB}/environments/pypi/deployment-branch-policies"] = (
+            200,
+            {"total_count": 1, "branch_policies": [{"name": "refs/tags/v*", "type": "tag"}]},
+        )
+        results, _ = audit(responses)
+
+        self.assertEqual(results["github:environment-tag-only"]["status"], "UNKNOWN")
+        self.assertIn("coverage is unverified", results["github:environment-tag-only"]["detail"])
+
+    def test_bare_environment_tag_policy_covers_release_family_with_full_ref_policy_present(self):
+        responses = fixture()
+        responses[f"{GITHUB}/environments/pypi/deployment-branch-policies"] = (
+            200,
+            {"total_count": 2, "branch_policies": [
+                {"name": "refs/tags/v*", "type": "tag"}, {"name": "v*", "type": "tag"},
+            ]},
+        )
+        results, _ = audit(responses)
+
+        self.assertEqual(results["github:environment-tag-only"]["status"], "PASS")
+
     def test_hidden_or_missing_release_tag_is_unknown(self):
         responses = fixture()
         responses[f"{GITHUB}/git/ref/tags/v{VERSION}"] = (404, None)
