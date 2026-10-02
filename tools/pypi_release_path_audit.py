@@ -342,19 +342,23 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
                 check(results, pkg, "github:environment-tag-only", "UNKNOWN", "release tag pattern unrecognized")
             else:
                 tag_pattern = family.removeprefix("refs/tags/")
-                tag_only = bool(dbp.get("custom_branch_policies")) and bool(pols) and all(t == "tag" for _, t in pols)
+                custom_policies = dbp.get("custom_branch_policies")
+                tag_only = bool(pols) and all(t == "tag" for _, t in pols)
                 bare_match = any(t == "tag" and name == tag_pattern for name, t in pols)
                 full_ref_match = any(t == "tag" and name == family for name, t in pols)
                 unrelated = [name for name, t in pols if t == "tag" and name not in (tag_pattern, family)]
                 status = (
-                    "FAIL" if not tag_only or unrelated else
+                    "UNKNOWN" if type(custom_policies) is not bool else
+                    "FAIL" if not custom_policies or not tag_only or unrelated else
                     "UNKNOWN" if full_ref_match else
                     "PASS" if bare_match else "FAIL"
                 )
                 detail = f"policies={pols}; required release tags={tag_pattern}"
+                if type(custom_policies) is not bool:
+                    detail += f"; custom_branch_policies={custom_policies!r} malformed or unavailable"
                 if unrelated:
                     detail += f"; unrelated tag policies={unrelated}"
-                if status == "UNKNOWN":
+                if full_ref_match:
                     detail += f"; full-ref tag policy {family!r} coverage is unverified"
                 check(results, pkg, "github:environment-tag-only", status, detail)
     if rc["tag_rulesets_status"] != 200:

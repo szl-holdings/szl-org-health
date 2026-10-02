@@ -464,6 +464,19 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
         self.assertEqual(results["github:environment-tag-only"]["status"], "FAIL")
         self.assertIn("archive-*", results["github:environment-tag-only"]["detail"])
 
+    def test_environment_custom_policy_flag_must_be_a_boolean_true(self):
+        for flag, expected in ((False, "FAIL"), ("false", "UNKNOWN"), (1, "UNKNOWN"), (None, "UNKNOWN")):
+            with self.subTest(flag=flag):
+                responses = fixture()
+                env = responses[f"{GITHUB}/environments"][1]["environments"][0]
+                env["deployment_branch_policy"]["custom_branch_policies"] = flag
+
+                results, _ = audit(responses)
+
+                self.assertEqual(results["github:environment-tag-only"]["status"], expected)
+                if expected == "UNKNOWN":
+                    self.assertIn("malformed", results["github:environment-tag-only"]["detail"])
+
     def test_full_ref_environment_tag_policy_coverage_is_unknown(self):
         responses = fixture()
         responses[f"{GITHUB}/environments/pypi/deployment-branch-policies"] = (
