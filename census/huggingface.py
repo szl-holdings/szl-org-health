@@ -1842,18 +1842,18 @@ def collect_huggingface() -> dict[str, Any]:
             collection_bucket_ids.update(bucket_ids)
 
     buckets: list[dict[str, Any]] | None = None
+    collection_bucket_references = sorted(collection_bucket_ids)
     if buckets_raw is not None:
         with cf.ThreadPoolExecutor(max_workers=4) as executor:
             buckets = sorted(
                 executor.map(_full_bucket, buckets_raw),
                 key=lambda value: str(value["id"]),
             )
-    elif collection_bucket_ids:
-        buckets = [
-            {"id": value, "discovered_via": "collection"}
-            for value in sorted(collection_bucket_ids)
-        ]
-        buckets_error = f"direct bucket listing unavailable ({buckets_error}); collection-only scope"
+    elif collection_bucket_references:
+        buckets_error = (
+            f"direct bucket listing unavailable ({buckets_error}); "
+            "collection references preserved separately"
+        )
 
     assets = {
         "models": asset_result(models, models_error),
@@ -1902,6 +1902,7 @@ def collect_huggingface() -> dict[str, Any]:
 
     return {
         "organization": HF_ORG,
+        "collection_bucket_references": collection_bucket_references,
         "authentication": authentication,
         "assets": assets,
         "collection_coverage": collection_coverage,

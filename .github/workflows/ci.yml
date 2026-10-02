@@ -23,10 +23,63 @@ jobs:
           python-version: "3.12"
       - name: Install locked dependencies
         run: python -m pip install --require-hashes -r requirements.txt
-      - name: Compile collectors and autonomic controller
-        run: python -m py_compile app.py refresh_snapshot.py census/*.py autonomic/*.py
+      - name: Compile collectors, autonomic controller, and diligence compiler
+        run: python -m compileall -q app.py refresh_snapshot.py build_series_a_diligence.py census autonomic scripts
+      - name: Check diligence policy and schema document JSON syntax
+        run: |
+          python -m json.tool diligence/policy.json >/dev/null
+          python -m json.tool schemas/series-a-diligence.schema.json >/dev/null
       - name: Run fail-closed census and recovery contracts
         run: python -m unittest discover -s tests -v
+      - name: Compile a source-bound packet and reproduce its historical bytes
+        run: |
+          python -I -B build_series_a_diligence.py \
+            --input static/data.json \
+            --source-revision "$(git rev-parse HEAD)" \
+            --output /tmp/series-a-diligence.json \
+            --markdown /tmp/SERIES_A_DILIGENCE.generated.md \
+            --require-source-bound
+          python - <<'PY'
+          import subprocess
+          from pathlib import Path
+
+          from census.diligence import strict_load_json, validate_artifact
+
+          artifact = strict_load_json(Path('/tmp/series-a-diligence.json'))
+          head = subprocess.check_output(
+              ['git', 'rev-parse', 'HEAD'], text=True
+          ).strip()
+          binding = artifact['source_binding']
+          assert binding['compiler_revision'] == head, binding
+          assert binding['compiler_revision_verified'] is True, binding
+          assert binding['state'] == 'MEASURED', binding
+          source = artifact['requirements']['compiler_source']
+          assert source['state'] == 'MEASURED', source
+          # static/data.json has no matching sanitized receipt in this repo.
+          # Preserve the gap; never manufacture a public-byte binding in CI.
+          public_binding = artifact['public_snapshot_binding']
+          assert public_binding['state'] == 'UNAVAILABLE', public_binding
+          receipt_requirement = artifact['requirements']['public_snapshot_receipt']
+          assert receipt_requirement['state'] == 'UNAVAILABLE', receipt_requirement
+          assert any(
+              gap['requirement'] == 'public_snapshot_receipt'
+              for gap in artifact['gaps']
+          ), artifact['gaps']
+          errors = validate_artifact(artifact)
+          assert errors == [], errors
+          PY
+          python -I -B build_series_a_diligence.py \
+            --input static/data.json \
+            --source-revision "$(git rev-parse HEAD)" \
+            --output /tmp/series-a-diligence.json \
+            --markdown /tmp/SERIES_A_DILIGENCE.generated.md \
+            --check --historical-check \
+            --require-source-bound
+      - name: Execute public Draft 2020-12 diligence schema contract
+        run: |
+          python -I -B scripts/verify_series_a_schema_contract.py \
+            --schema schemas/series-a-diligence.schema.json \
+            --artifact /tmp/series-a-diligence.json
       - name: Validate dashboard JavaScript syntax
         run: |
           python - <<'PY'

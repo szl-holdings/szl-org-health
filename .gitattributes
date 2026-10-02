@@ -1,0 +1,6 @@
+/.gitattributes text eol=lf
+/build_series_a_diligence.py text eol=lf
+/census/__init__.py text eol=lf
+/census/diligence.py text eol=lf
+/diligence/policy.json text eol=lf
+/schemas/series-a-diligence.schema.json text eol=lf

@@ -110,6 +110,11 @@ def _safe_governance_status(value: Any) -> str | None:
     return value if value in GOVERNANCE_STATUSES else None
 
 
+def _governance_status_label(value: Any) -> str:
+    """Describe a status without reflecting untrusted snapshot content."""
+    return _safe_governance_status(value) or ("MISSING" if value is None else "INVALID")
+
+
 def _safe_governance_summary(value: Any) -> dict[str, int | None] | None:
     if not isinstance(value, dict):
         return None
@@ -510,12 +515,13 @@ def build_receipt(
         errors.append("embedded governance does not match source-data recomputation")
     if governance_status != "PASS":
         errors.append(
-            f"embedded governance overall_status is not PASS: {governance_status or 'MISSING'}"
+            "embedded governance overall_status is not PASS: "
+            f"{_governance_status_label(governance_status)}"
         )
     if recomputed_governance_status != "PASS":
         errors.append(
             "recomputed governance overall_status is not PASS: "
-            f"{recomputed_governance_status or 'MISSING'}"
+            f"{_governance_status_label(recomputed_governance_status)}"
         )
     if not governance_binding_matches:
         errors.append("governance evaluation is not bound to snapshot generated_at")
