@@ -32,6 +32,8 @@ PYPI = f"https://pypi.org/pypi/{PACKAGE}/json"
 SIMPLE = f"https://pypi.org/simple/{PACKAGE}/"
 RULESETS = f"{GITHUB}/rulesets?includes_parents=true&targets=tag&per_page=100"
 RULESET_DETAIL = f"{GITHUB}/rulesets/42?includes_parents=true"
+RULESET_DETAIL_43 = f"{GITHUB}/rulesets/43?includes_parents=true"
+RULESET_DETAIL_44 = f"{GITHUB}/rulesets/44?includes_parents=true"
 PROVENANCE = {
     WHEEL: f"https://pypi.org/integrity/{PACKAGE}/{WHEEL}/provenance",
     SDIST: f"https://pypi.org/integrity/{PACKAGE}/{SDIST}/provenance",
@@ -104,7 +106,7 @@ def fixture() -> dict[str, tuple[int, object]]:
         ),
         f"{GITHUB}/environments/pypi/deployment-branch-policies": (
             200,
-            {"branch_policies": [{"name": "v*", "type": "tag"}]},
+            {"total_count": 1, "branch_policies": [{"name": "v*", "type": "tag"}]},
         ),
         RULESETS: (
             200,
@@ -196,6 +198,88 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
                 self.assertEqual(results["github:tag-ruleset"]["status"], "FAIL")
                 self.assertIn(omitted, results["github:tag-ruleset"]["detail"])
 
+    def test_safe_rulesets_layer_to_cover_all_release_tag_protections(self):
+        responses = fixture()
+        responses[RULESETS][1].append(
+            {"id": 43, "name": "release tag mutations", "target": "tag", "enforcement": "active"}
+        )
+        creation = ruleset_detail()
+        creation["rules"] = [{"type": "creation"}]
+        responses[RULESET_DETAIL] = (200, creation)
+        mutations = ruleset_detail()
+        mutations["id"] = 43
+        mutations["name"] = "release tag mutations"
+        mutations["rules"] = [{"type": "update"}, {"type": "deletion"}]
+        responses[RULESET_DETAIL_43] = (200, mutations)
+
+        results, http = audit(responses)
+
+        self.assertEqual(results["github:tag-ruleset"]["status"], "PASS")
+        self.assertIn(RULESET_DETAIL_43, http.calls)
+
+    def test_permissive_unrelated_ruleset_does_not_undo_safe_layering(self):
+        responses = fixture()
+        responses[RULESETS][1].extend((
+            {"id": 43, "name": "release tag mutations", "target": "tag", "enforcement": "active"},
+            {"id": 44, "name": "archive tags", "target": "tag", "enforcement": "active"},
+        ))
+        creation = ruleset_detail()
+        creation["rules"] = [{"type": "creation"}]
+        responses[RULESET_DETAIL] = (200, creation)
+        mutations = ruleset_detail()
+        mutations["id"] = 43
+        mutations["rules"] = [{"type": "update"}, {"type": "deletion"}]
+        responses[RULESET_DETAIL_43] = (200, mutations)
+        unrelated = ruleset_detail(include=["refs/tags/archive-*"])
+        unrelated["id"] = 44
+        unrelated["bypass_actors"] = [
+            {"actor_id": 12, "actor_type": "Team", "bypass_mode": "always"}
+        ]
+        responses[RULESET_DETAIL_44] = (200, unrelated)
+
+        results, _ = audit(responses)
+
+        self.assertEqual(results["github:tag-ruleset"]["status"], "PASS")
+
+    def test_non_admin_bypass_layer_does_not_supply_missing_protections(self):
+        responses = fixture()
+        responses[RULESETS][1].append(
+            {"id": 43, "name": "release tag mutations", "target": "tag", "enforcement": "active"}
+        )
+        creation = ruleset_detail()
+        creation["rules"] = [{"type": "creation"}]
+        responses[RULESET_DETAIL] = (200, creation)
+        mutations = ruleset_detail()
+        mutations["id"] = 43
+        mutations["rules"] = [{"type": "update"}, {"type": "deletion"}]
+        mutations["bypass_actors"] = [
+            {"actor_id": 12, "actor_type": "Team", "bypass_mode": "always"}
+        ]
+        responses[RULESET_DETAIL_43] = (200, mutations)
+
+        results, _ = audit(responses)
+
+        self.assertNotEqual(results["github:tag-ruleset"]["status"], "PASS")
+
+    def test_opaque_bypass_layer_could_supply_missing_protections(self):
+        responses = fixture()
+        responses[RULESETS][1].append(
+            {"id": 43, "name": "release tag mutations", "target": "tag", "enforcement": "active"}
+        )
+        creation = ruleset_detail()
+        creation["rules"] = [{"type": "creation"}]
+        responses[RULESET_DETAIL] = (200, creation)
+        mutations = ruleset_detail()
+        mutations["id"] = 43
+        mutations["rules"] = [{"type": "update"}, {"type": "deletion"}]
+        del mutations["bypass_actors"]
+        responses[RULESET_DETAIL_43] = (200, mutations)
+
+        results, _ = audit(responses)
+
+        self.assertEqual(results["github:tag-ruleset"]["status"], "UNKNOWN")
+        self.assertIn("bypass", results["github:tag-ruleset"]["detail"].lower())
+
     def test_non_admin_bypass_actor_fails(self):
         responses = fixture()
         detail = ruleset_detail()
@@ -219,11 +303,13 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
             with self.subTest(include=include):
                 responses = fixture()
                 responses[RULESET_DETAIL] = (200, ruleset_detail(include=include))
+                responses[f"{GITHUB}/environments/pypi/deployment-branch-policies"][1]["branch_policies"][0]["name"] = f"{PACKAGE}-v*"
                 responses[expected_ref] = responses.pop(f"{GITHUB}/git/ref/tags/v{VERSION}")
 
                 results, http = audit(responses, tag_pattern=tag_pattern)
 
                 self.assertEqual(results["github:tag-ruleset"]["status"], expected)
+                self.assertEqual(results["github:environment-tag-only"]["status"], "PASS")
                 self.assertEqual(results["github:release-tag"]["status"], "PASS")
                 self.assertIn(expected_ref, http.calls)
 
@@ -244,6 +330,16 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
 
         self.assertEqual(results["github:tag-ruleset"]["status"], "UNKNOWN")
         self.assertIn("more pages", results["github:tag-ruleset"]["detail"])
+
+    def test_malformed_successful_ruleset_inventory_is_unknown(self):
+        for payload in ({}, {"rulesets": None}, [{"id": 42, "target": "tag"}]):
+            with self.subTest(payload=payload):
+                responses = fixture()
+                responses[RULESETS] = (200, payload)
+
+                results, _ = audit(responses)
+
+                self.assertEqual(results["github:tag-ruleset"]["status"], "UNKNOWN")
 
     def test_inaccessible_ruleset_detail_is_unknown_with_evidence(self):
         responses = fixture()
@@ -304,6 +400,32 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
         self.assertEqual(results["github:environment-tag-only"]["status"], "UNKNOWN")
         self.assertIn("403", results["github:environment-tag-only"]["detail"])
 
+    def test_incomplete_environment_policy_page_is_unknown(self):
+        responses = fixture()
+        responses[f"{GITHUB}/environments/pypi/deployment-branch-policies"] = (
+            200,
+            {"total_count": 31, "branch_policies": [{"name": f"v{n}*", "type": "tag"} for n in range(30)]},
+        )
+
+        results, _ = audit(responses)
+
+        self.assertEqual(results["github:environment-tag-only"]["status"], "UNKNOWN")
+        self.assertIn("31", results["github:environment-tag-only"]["detail"])
+
+    def test_environment_tag_policy_must_cover_release_family(self):
+        for pattern in ("archive-*", "*"):
+            with self.subTest(pattern=pattern):
+                responses = fixture()
+                responses[f"{GITHUB}/environments/pypi/deployment-branch-policies"] = (
+                    200,
+                    {"total_count": 1, "branch_policies": [{"name": pattern, "type": "tag"}]},
+                )
+
+                results, _ = audit(responses)
+
+                self.assertEqual(results["github:environment-tag-only"]["status"], "FAIL")
+                self.assertIn("v*", results["github:environment-tag-only"]["detail"])
+
     def test_hidden_or_missing_release_tag_is_unknown(self):
         responses = fixture()
         responses[f"{GITHUB}/git/ref/tags/v{VERSION}"] = (404, None)
@@ -312,6 +434,16 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
 
         self.assertEqual(results["github:release-tag"]["status"], "UNKNOWN")
         self.assertIn("404", results["github:release-tag"]["detail"])
+
+    def test_malformed_successful_release_tag_response_is_unknown(self):
+        for payload in ({}, {"object": None}):
+            with self.subTest(payload=payload):
+                responses = fixture()
+                responses[f"{GITHUB}/git/ref/tags/v{VERSION}"] = (200, payload)
+
+                results, _ = audit(responses)
+
+                self.assertEqual(results["github:release-tag"]["status"], "UNKNOWN")
 
     def test_missing_latest_sdist_cannot_count_as_complete_provenance(self):
         responses = fixture()
