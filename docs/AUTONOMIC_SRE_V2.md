@@ -8,7 +8,7 @@ SZL public-estate reliability is split into two independent control planes so a 
 
 ## Plane B — SLO and deadman
 
-`autonomic-slo.yml` requests an offset five-minute schedule. GitHub can delay or drop schedule events, so each admitted single-writer job makes three real observations, waiting the policy cadence after each completed observation. This bounded batch reduces dependence on a separate scheduler start for every sample. Missed time is never backfilled, and a repeated cadence slot cannot advance recovery. The controller has no service-restart, workflow-dispatch, source-write, DNS, hardware, deletion, or product-action authority. It independently:
+`autonomic-slo.yml` requests an offset fifteen-minute launch schedule (`2-59/15 * * * *`, at minutes 2, 17, 32, and 47 UTC). Each admitted single-writer job makes three real observations, waiting the 300-second policy cadence after each of the first two completed observations. The provider launch cadence is therefore separate from the within-batch sampling interval; a ten-minute period without a new workflow launch is not by itself a dropped event. Scheduling one bounded batch every fifteen minutes avoids routinely requesting another batch before the prior batch can finish. GitHub can still delay or drop schedule events, so coverage must be evaluated from retained observation timestamps rather than assumed from the cron expression. Missed time is never backfilled, and a repeated cadence slot cannot advance recovery. The controller has no service-restart, workflow-dispatch, source-write, DNS, hardware, deletion, or product-action authority. It independently:
 
 - validates the exact signed manifest tip;
 - probes every required route from a fixed HTTPS origin with redirects rejected;
