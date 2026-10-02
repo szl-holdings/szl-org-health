@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import copy
 import io
+import json
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
@@ -35,9 +36,10 @@ RULESET_DETAIL = f"{GITHUB}/rulesets/42?includes_parents=true"
 RULESET_DETAIL_43 = f"{GITHUB}/rulesets/43?includes_parents=true"
 RULESET_DETAIL_44 = f"{GITHUB}/rulesets/44?includes_parents=true"
 PROVENANCE = {
-    WHEEL: f"https://pypi.org/integrity/{PACKAGE}/{WHEEL}/provenance",
-    SDIST: f"https://pypi.org/integrity/{PACKAGE}/{SDIST}/provenance",
+    WHEEL: f"https://pypi.org/integrity/{PACKAGE}/{VERSION}/{WHEEL}/provenance",
+    SDIST: f"https://pypi.org/integrity/{PACKAGE}/{VERSION}/{SDIST}/provenance",
 }
+FILE_SHA256 = {WHEEL: "1" * 64, SDIST: "2" * 64}
 
 
 def certificate_with_source_digest(digest: str = DIGEST) -> str:
@@ -49,17 +51,33 @@ def certificate_with_source_digest(digest: str = DIGEST) -> str:
     return base64.b64encode(oid + bytes((0x04, len(inner))) + inner).decode("ascii")
 
 
-def attestation() -> dict:
+def attestation(filename: str) -> dict:
+    # PyPI's DSSE envelope carries a base64-encoded in-toto statement. This
+    # fixture has structurally realistic metadata but no verified signature.
+    statement = {
+        "_type": "https://in-toto.io/Statement/v1",
+        "subject": [{"name": filename, "digest": {"sha256": FILE_SHA256[filename]}}],
+        "predicateType": "https://docs.pypi.org/attestations/publish/v1",
+        "predicate": None,
+    }
     return {
+        "version": 1,
         "attestation_bundles": [
             {
                 "publisher": {
                     "kind": "GitHub",
                     "repository": f"{ORG}/{REPO}",
                     "workflow": "publish-pypi.yml",
+                    "environment": "pypi",
                 },
                 "attestations": [
-                    {"verification_material": {"certificate": certificate_with_source_digest()}}
+                    {
+                        "envelope": {
+                            "signature": base64.b64encode(b"test-signature-unverified").decode("ascii"),
+                            "statement": base64.b64encode(json.dumps(statement).encode("utf-8")).decode("ascii"),
+                        },
+                        "verification_material": {"certificate": certificate_with_source_digest()},
+                    }
                 ],
             }
         ]
@@ -102,7 +120,9 @@ def fixture() -> dict[str, tuple[int, object]]:
         ),
         f"{GITHUB}/environments": (
             200,
-            {"environments": [{"name": "pypi", "deployment_branch_policy": {"custom_branch_policies": True}}]},
+            {"environments": [{"name": "pypi", "deployment_branch_policy": {
+                "custom_branch_policies": True, "protected_branches": False,
+            }}]},
         ),
         f"{GITHUB}/environments/pypi/deployment-branch-policies": (
             200,
@@ -120,14 +140,16 @@ def fixture() -> dict[str, tuple[int, object]]:
                     "version": VERSION,
                     "project_urls": {"Source": f"https://github.com/{ORG}/{REPO}"},
                 },
-                "urls": [{"filename": WHEEL}, {"filename": SDIST}],
+                "urls": [{"filename": name, "digests": {"sha256": FILE_SHA256[name]}}
+                         for name in (WHEEL, SDIST)],
             },
         ),
         SIMPLE: (
             200,
-            {"files": [{"filename": name, "provenance": url} for name, url in PROVENANCE.items()]},
+            {"files": [{"filename": name, "hashes": {"sha256": FILE_SHA256[name]},
+                        "provenance": url} for name, url in PROVENANCE.items()]},
         ),
-        **{url: (200, attestation()) for url in PROVENANCE.values()},
+        **{url: (200, attestation(name)) for name, url in PROVENANCE.items()},
         f"{GITHUB}/git/ref/tags/v{VERSION}": (
             200,
             {"object": {"type": "commit", "sha": DIGEST}},
@@ -143,7 +165,7 @@ def audit(responses: dict[str, tuple[int, object]], *, tag_pattern: str = "v<ver
             http,
             ORG,
             {"name": PACKAGE, "repo": REPO, "status": "published", "tag_pattern": tag_pattern},
-            {"render": lambda _spec: WORKFLOW.decode("utf-8"), "gate_sha256": sha256(GATE)},
+            {"render": lambda spec: f'SZL_PACKAGES: "{spec}"\n', "gate_sha256": sha256(GATE)},
             results,
             {},
         )
@@ -151,15 +173,171 @@ def audit(responses: dict[str, tuple[int, object]], *, tag_pattern: str = "v<ver
 
 
 class PyPIReleasePathAuditTests(unittest.TestCase):
-    def test_complete_release_evidence_passes(self):
+    def test_complete_release_metadata_is_bound_but_signatures_unverified(self):
         results, http = audit(fixture())
 
-        self.assertEqual({name: row["status"] for name, row in results.items()},
-                         {name: "PASS" for name in results})
+        self.assertEqual(results["pypi:distribution-metadata"]["status"], "PASS")
+        for name in ("pypi:provenance", "pypi:publisher-identity", "github:release-tag"):
+            self.assertEqual(results[name]["status"], "UNKNOWN")
+        self.assertEqual(results["canonical:workflow-environment"]["status"], "PASS")
+        for name, row in results.items():
+            if name not in ("pypi:provenance", "pypi:publisher-identity", "github:release-tag"):
+                self.assertEqual(row["status"], "PASS", name)
         self.assertIn(RULESETS, http.calls)
         self.assertIn(RULESET_DETAIL, http.calls)
         self.assertIn(PROVENANCE[WHEEL], http.calls)
         self.assertIn(PROVENANCE[SDIST], http.calls)
+
+    def test_workflow_and_publisher_must_bind_manifest_environment(self):
+        responses = fixture()
+        workflow_url = f"{RAW}/{ORG}/{REPO}/HEAD/.github/workflows/publish-pypi.yml"
+        responses[workflow_url] = (200, b'SZL_PACKAGES: "release-example=.:unprotected"\n')
+        for url in PROVENANCE.values():
+            responses[url][1]["attestation_bundles"][0]["publisher"]["environment"] = "unprotected"
+
+        results, _ = audit(responses)
+
+        self.assertEqual(results["canonical:workflow"]["status"], "PASS")
+        self.assertEqual(results["canonical:workflow-environment"]["status"], "FAIL")
+        self.assertEqual(results["pypi:publisher-identity"]["status"], "FAIL")
+        self.assertEqual(results["pypi:distribution-metadata"]["status"], "PASS")
+
+    def test_workflow_default_environment_is_pypi(self):
+        responses = fixture()
+        workflow_url = f"{RAW}/{ORG}/{REPO}/HEAD/.github/workflows/publish-pypi.yml"
+        responses[workflow_url] = (200, b'SZL_PACKAGES: "release-example=."\n')
+
+        results, _ = audit(responses)
+
+        self.assertEqual(results["canonical:workflow-environment"]["status"], "PASS")
+
+    def test_unreadable_workflow_leaves_environment_unknown(self):
+        responses = fixture()
+        workflow_url = f"{RAW}/{ORG}/{REPO}/HEAD/.github/workflows/publish-pypi.yml"
+        responses[workflow_url] = (403, None)
+
+        results, _ = audit(responses)
+
+        self.assertEqual(results["canonical:workflow-environment"]["status"], "UNKNOWN")
+        self.assertIn("403", results["canonical:workflow-environment"]["detail"])
+
+    def test_extra_environment_cannot_replace_manifest_environment(self):
+        responses = fixture()
+        responses[f"{GITHUB}/environments"][1]["environments"].append({
+            "name": "unprotected",
+            "deployment_branch_policy": {"custom_branch_policies": True, "protected_branches": False},
+        })
+        responses[f"{GITHUB}/environments/pypi/deployment-branch-policies"][1]["branch_policies"][0]["name"] = "archive-*"
+        responses[f"{GITHUB}/environments/unprotected/deployment-branch-policies"] = (
+            200, {"total_count": 1, "branch_policies": [{"name": "v*", "type": "tag"}]},
+        )
+
+        results, _ = audit(responses)
+
+        self.assertEqual(results["github:environment-tag-only"]["status"], "FAIL")
+        self.assertIn("archive-*", results["github:environment-tag-only"]["detail"])
+        self.assertEqual(results["pypi:publisher-identity"]["status"], "UNKNOWN")
+
+    def test_missing_publisher_environment_is_unknown(self):
+        responses = fixture()
+        for url in PROVENANCE.values():
+            del responses[url][1]["attestation_bundles"][0]["publisher"]["environment"]
+        results, _ = audit(responses)
+
+        self.assertEqual(results["pypi:publisher-identity"]["status"], "UNKNOWN")
+        self.assertIn("environment missing", results["pypi:publisher-identity"]["detail"])
+        self.assertEqual(results["pypi:distribution-metadata"]["status"], "PASS")
+
+    def test_publisher_environment_mismatch_fails_with_canonical_workflow(self):
+        responses = fixture()
+        for url in PROVENANCE.values():
+            responses[url][1]["attestation_bundles"][0]["publisher"]["environment"] = "unprotected"
+
+        results, _ = audit(responses)
+
+        self.assertEqual(results["canonical:workflow-environment"]["status"], "PASS")
+        self.assertEqual(results["pypi:publisher-identity"]["status"], "FAIL")
+        self.assertIn("unprotected", results["pypi:publisher-identity"]["detail"])
+        self.assertIn("pypi", results["pypi:publisher-identity"]["detail"])
+
+    def test_reused_wheel_provenance_cannot_cover_sdist(self):
+        responses = fixture()
+        responses[SIMPLE][1]["files"][1]["provenance"] = PROVENANCE[WHEEL]
+
+        results, http = audit(responses)
+
+        self.assertNotEqual(results["pypi:provenance"]["status"], "PASS")
+        self.assertNotEqual(results["pypi:publisher-identity"]["status"], "PASS")
+        self.assertNotEqual(results["github:release-tag"]["status"], "PASS")
+        self.assertEqual(results["pypi:distribution-metadata"]["status"], "FAIL")
+        self.assertIn(PROVENANCE[WHEEL], http.calls)
+
+    def test_provenance_url_must_name_the_exact_release_version(self):
+        responses = fixture()
+        wrong_url = f"https://pypi.org/integrity/{PACKAGE}/9.9.9/{SDIST}/provenance"
+        responses[SIMPLE][1]["files"][1]["provenance"] = wrong_url
+
+        results, http = audit(responses)
+
+        self.assertEqual(results["pypi:distribution-metadata"]["status"], "FAIL")
+        self.assertNotEqual(results["pypi:provenance"]["status"], "PASS")
+        self.assertNotIn(wrong_url, http.calls)
+
+    def test_json_and_simple_file_digests_must_agree(self):
+        responses = fixture()
+        responses[SIMPLE][1]["files"][1]["hashes"]["sha256"] = "3" * 64
+
+        results, _ = audit(responses)
+
+        self.assertEqual(results["pypi:distribution-metadata"]["status"], "FAIL")
+        self.assertNotEqual(results["pypi:provenance"]["status"], "PASS")
+
+    def test_each_attestation_subject_must_name_its_own_file(self):
+        responses = fixture()
+        envelope = responses[PROVENANCE[SDIST]][1]["attestation_bundles"][0]["attestations"][0]["envelope"]
+        statement = json.loads(base64.b64decode(envelope["statement"]))
+        statement["subject"][0]["name"] = WHEEL
+        envelope["statement"] = base64.b64encode(json.dumps(statement).encode()).decode()
+
+        results, _ = audit(responses)
+
+        self.assertEqual(results["pypi:distribution-metadata"]["status"], "FAIL")
+        self.assertNotEqual(results["pypi:provenance"]["status"], "PASS")
+
+    def test_each_attestation_subject_digest_must_match_file(self):
+        responses = fixture()
+        envelope = responses[PROVENANCE[SDIST]][1]["attestation_bundles"][0]["attestations"][0]["envelope"]
+        statement = json.loads(base64.b64decode(envelope["statement"]))
+        statement["subject"][0]["digest"]["sha256"] = FILE_SHA256[WHEEL]
+        envelope["statement"] = base64.b64encode(json.dumps(statement).encode()).decode()
+
+        results, _ = audit(responses)
+
+        self.assertEqual(results["pypi:distribution-metadata"]["status"], "FAIL")
+        self.assertNotEqual(results["pypi:provenance"]["status"], "PASS")
+
+    def test_publish_statement_predicate_must_be_empty(self):
+        responses = fixture()
+        envelope = responses[PROVENANCE[SDIST]][1]["attestation_bundles"][0]["attestations"][0]["envelope"]
+        statement = json.loads(base64.b64decode(envelope["statement"]))
+        statement["predicate"] = {"arbitrary": True}
+        envelope["statement"] = base64.b64encode(json.dumps(statement).encode()).decode()
+
+        results, _ = audit(responses)
+
+        self.assertEqual(results["pypi:distribution-metadata"]["status"], "UNKNOWN")
+        self.assertIn("statement", results["pypi:distribution-metadata"]["detail"])
+
+    def test_missing_attestation_signature_is_unknown(self):
+        responses = fixture()
+        envelope = responses[PROVENANCE[SDIST]][1]["attestation_bundles"][0]["attestations"][0]["envelope"]
+        del envelope["signature"]
+
+        results, _ = audit(responses)
+
+        self.assertEqual(results["pypi:distribution-metadata"]["status"], "UNKNOWN")
+        self.assertEqual(results["pypi:provenance"]["status"], "UNKNOWN")
+        self.assertNotEqual(results["pypi:publisher-identity"]["status"], "PASS")
 
     def test_source_url_requires_exact_github_host_owner_and_repo(self):
         urls_and_statuses = (
@@ -310,7 +488,7 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
 
                 self.assertEqual(results["github:tag-ruleset"]["status"], expected)
                 self.assertEqual(results["github:environment-tag-only"]["status"], "PASS")
-                self.assertEqual(results["github:release-tag"]["status"], "PASS")
+                self.assertEqual(results["github:release-tag"]["status"], "UNKNOWN")
                 self.assertIn(expected_ref, http.calls)
 
     def test_custom_manifest_tag_pattern_selects_the_attested_release_tag(self):
@@ -327,7 +505,7 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
 
         self.assertEqual(results["github:tag-ruleset"]["status"], "PASS")
         self.assertEqual(results["github:environment-tag-only"]["status"], "PASS")
-        self.assertEqual(results["github:release-tag"]["status"], "PASS")
+        self.assertEqual(results["github:release-tag"]["status"], "UNKNOWN")
         self.assertIn(expected_ref, http.calls)
         self.assertNotIn(wrong_ref, http.calls)
 
@@ -476,6 +654,20 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
                 self.assertEqual(results["github:environment-tag-only"]["status"], expected)
                 if expected == "UNKNOWN":
                     self.assertIn("malformed", results["github:environment-tag-only"]["detail"])
+
+    def test_protected_branch_policy_must_be_explicitly_disabled(self):
+        for flag, expected in ((True, "FAIL"), (None, "UNKNOWN"), ("false", "UNKNOWN"), (0, "UNKNOWN")):
+            with self.subTest(flag=flag):
+                responses = fixture()
+                policy = responses[f"{GITHUB}/environments"][1]["environments"][0]["deployment_branch_policy"]
+                if flag is not None:
+                    policy["protected_branches"] = flag
+                else:
+                    del policy["protected_branches"]
+
+                results, _ = audit(responses)
+
+                self.assertEqual(results["github:environment-tag-only"]["status"], expected)
 
     def test_full_ref_environment_tag_policy_coverage_is_unknown(self):
         responses = fixture()

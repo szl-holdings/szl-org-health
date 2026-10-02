@@ -122,7 +122,7 @@ class PyPISourceUrlTests(unittest.TestCase):
             "token_hits": [], "workflow_errors": [],
             "environments_status": 200, "environments_total_count": 1,
             "environments": {"pypi": {
-                "deployment_branch_policy": {"custom_branch_policies": True},
+                "deployment_branch_policy": {"custom_branch_policies": True, "protected_branches": False},
                 "_policies": [("v*", "tag")],
                 "_policies_status": 200, "_policies_total_count": 1,
             }},

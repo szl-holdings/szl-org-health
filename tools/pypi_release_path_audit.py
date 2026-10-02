@@ -7,13 +7,16 @@ For every package in governance/pypi/pypi-packages.v1.json this checks, from liv
           * no workflow in the repository references a PyPI API token secret
           * the `pypi` (or declared) environment exists and is restricted to release tags
           * a tag ruleset protects refs/tags/v* (creation/update/deletion)
-          * for the latest PyPI version a git tag exists at the PyPI-attested source commit
+          * for the latest PyPI version a git tag is compared with the reported certificate source commit
   PyPI    * the project exists (published) or does not (queued/hold/internal/never)
-          * the latest release carries PEP 740 provenance for every file
-          * the provenance publisher is GitHub Actions, repo szl-holdings/<repo>, workflow publish-pypi.yml
+          * every latest-release file has a matching PyPI Integrity URL, hash, and statement subject
+          * reported publisher metadata names the declared GitHub repo, workflow, and environment
           * project URLs point at the GitHub source (what PyPI verifies against the Trusted Publisher)
   Internal/never pyproject files carry the `Private :: Do Not Upload` classifier.
 
+Attestation fields are inspected for consistency, but signatures, certificate chains, and
+transparency proofs are not cryptographically verified. Provenance, publisher identity,
+and certificate-derived tag identity therefore remain UNKNOWN even when metadata agrees.
 Outcomes are PASS | FAIL | UNKNOWN per check; UNKNOWN is never PASS. Exit code 1 if any
 FAIL or UNKNOWN remains. Writes a JSON report and a Markdown summary.
 """
@@ -209,21 +212,23 @@ def der_string(value: bytes) -> str:
 
 
 def source_digest_from_cert(cert_b64: str) -> str | None:
-    """Extract the Sigstore 'Source Repository Digest' extension without non-stdlib ASN.1 libs.
+    """Read an unverified source-digest extension for metadata comparison only.
 
     The OID is encoded as 06 0a 2b 06 01 04 01 83 bf 30 01 0d; the value follows as an
     OCTET STRING wrapping a UTF8String. We locate the OID bytes and parse forward.
     """
-    der = base64.b64decode(cert_b64)
+    der = base64.b64decode(cert_b64, validate=True)
     oid = bytes.fromhex("060a2b0601040183bf30010d")  # DER of OID 1.3.6.1.4.1.57264.1.13
     i = der.find(oid)
     if i < 0:
         return None
     j = i + len(oid)
+    if j >= len(der):
+        return None
     # optional BOOLEAN critical flag
     if der[j] == 0x01:
         j += 3
-    if der[j] != 0x04:
+    if j + 1 >= len(der) or der[j] != 0x04:
         return None
     length = der[j + 1]
     if length < 0x80:
@@ -235,6 +240,38 @@ def source_digest_from_cert(cert_b64: str) -> str | None:
     return der_string(inner)
 
 
+def valid_sha256(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{64}", value) is not None
+
+
+def provenance_url(pkg: str, version: str, filename: str) -> str:
+    return (f"https://pypi.org/integrity/{norm(pkg)}/"
+            f"{urllib.parse.quote(version, safe='')}/{urllib.parse.quote(filename, safe='')}/provenance")
+
+
+def attested_subject(statement_b64: object) -> tuple[str, dict] | None:
+    """Decode the published statement; this does not verify its DSSE signature."""
+    if not isinstance(statement_b64, str):
+        return None
+    try:
+        statement = json.loads(base64.b64decode(statement_b64, validate=True))
+    except (ValueError, binascii.Error, TypeError):
+        return None
+    if not isinstance(statement, dict):
+        return None
+    if statement.get("_type") != "https://in-toto.io/Statement/v1" or statement.get("predicateType") != "https://docs.pypi.org/attestations/publish/v1":
+        return None
+    if statement.get("predicate") not in ({}, None):
+        return None
+    subjects = statement.get("subject")
+    if not isinstance(subjects, list) or len(subjects) != 1 or not isinstance(subjects[0], dict):
+        return None
+    subject = subjects[0]
+    if not isinstance(subject.get("name"), str) or not isinstance(subject.get("digest"), dict):
+        return None
+    return subject["name"], subject["digest"]
+
+
 def check(results: list, pkg: str, name: str, status: str, detail: str = "") -> None:
     results.append({"package": pkg, "check": name, "status": status, "detail": detail})
     print(f"[{status:7}] {pkg:28} {name:40} {detail}", flush=True)
@@ -242,12 +279,15 @@ def check(results: list, pkg: str, name: str, status: str, detail: str = "") -> 
 
 def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], results: list, repo_cache: dict) -> None:
     pkg, repo = m["name"], m["repo"]
+    env_name = m.get("github_environment", "pypi")
     # --- canonical workflow + gate bytes
     for rel, key in ((".github/workflows/publish-pypi.yml", "workflow"), (".github/scripts/szl_pypi_release_gate.py", "gate")):
         st, body = http.get(f"{RAW}/{org}/{repo}/HEAD/{rel}", raw=True)
         if st != 200:
             check(results, pkg, f"canonical:{key}", "UNKNOWN",
                   f"{rel} HTTP {st}; unauthenticated raw URL cannot verify repository content")
+            if key == "workflow":
+                check(results, pkg, "canonical:workflow-environment", "UNKNOWN", f"{rel} HTTP {st}")
             continue
         if key == "workflow":
             # the canonical generator must reproduce the repository's file byte-for-byte from its own SZL_PACKAGES line
@@ -259,6 +299,22 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
                 check(results, pkg, "canonical:workflow-declares-package", "FAIL", f"SZL_PACKAGES={declared}")
             else:
                 check(results, pkg, "canonical:workflow-declares-package", "PASS", str(declared))
+            entries = []
+            if spec:
+                for item in (part.strip() for part in spec.group(1).split(";")):
+                    if not item:
+                        continue
+                    name, separator, rest = item.partition("=")
+                    _, _, environment = rest.partition(":")
+                    if separator and name.strip():
+                        entries.append((name.strip(), (environment or "pypi").strip()))
+            matches = [environment for name, environment in entries if norm(name) == norm(pkg)]
+            if not isinstance(env_name, str) or not env_name or len(matches) != 1 or not matches[0]:
+                check(results, pkg, "canonical:workflow-environment", "UNKNOWN",
+                      f"package environment ambiguous or unavailable: manifest={env_name!r}; SZL_PACKAGES={spec.group(1) if spec else None!r}")
+            else:
+                check(results, pkg, "canonical:workflow-environment", "PASS" if matches[0] == env_name else "FAIL",
+                      f"workflow={matches[0]!r}; manifest={env_name!r}")
         else:
             ok = sha256(body) == canon["gate_sha256"]
         check(results, pkg, f"canonical:{key}", "PASS" if ok else "FAIL", "byte-identical" if ok else "drift from canonical")
@@ -295,8 +351,8 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
             and all(isinstance(e, dict) and isinstance(e.get("name"), str) for e in env_rows)
             and len({e["name"] for e in env_rows}) == len(env_rows)
         ) else None
-        for env_name, e in (repo_cache[repo]["environments"] or {}).items():
-            st3, pol = http.get(f"{GH_API}/repos/{org}/{repo}/environments/{env_name}/deployment-branch-policies")
+        for listed_env_name, e in (repo_cache[repo]["environments"] or {}).items():
+            st3, pol = http.get(f"{GH_API}/repos/{org}/{repo}/environments/{listed_env_name}/deployment-branch-policies")
             e["_policies_status"] = st3
             pol_rows = pol.get("branch_policies") if isinstance(pol, dict) else None
             e["_policies_total_count"] = pol.get("total_count") if isinstance(pol, dict) else None
@@ -315,7 +371,6 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
         status = "FAIL" if rc["token_hits"] else "UNKNOWN" if rc["workflow_errors"] else "PASS"
         detail = ",".join(rc["token_hits"]) or "; ".join(rc["workflow_errors"]) or "no PyPI token references"
         check(results, pkg, "github:no-token-secrets", status, detail)
-    env_name = m.get("github_environment", "pypi")
     if rc["environments"] is None:
         check(results, pkg, "github:environment", "UNKNOWN",
               f"environments list HTTP {rc['environments_status']}; access or existence unverified")
@@ -343,19 +398,22 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
             else:
                 tag_pattern = family.removeprefix("refs/tags/")
                 custom_policies = dbp.get("custom_branch_policies")
+                protected_branches = dbp.get("protected_branches")
                 tag_only = bool(pols) and all(t == "tag" for _, t in pols)
                 bare_match = any(t == "tag" and name == tag_pattern for name, t in pols)
                 full_ref_match = any(t == "tag" and name == family for name, t in pols)
                 unrelated = [name for name, t in pols if t == "tag" and name not in (tag_pattern, family)]
                 status = (
-                    "UNKNOWN" if type(custom_policies) is not bool else
-                    "FAIL" if not custom_policies or not tag_only or unrelated else
+                    "UNKNOWN" if type(custom_policies) is not bool or type(protected_branches) is not bool else
+                    "FAIL" if not custom_policies or protected_branches or not tag_only or unrelated else
                     "UNKNOWN" if full_ref_match else
                     "PASS" if bare_match else "FAIL"
                 )
                 detail = f"policies={pols}; required release tags={tag_pattern}"
                 if type(custom_policies) is not bool:
                     detail += f"; custom_branch_policies={custom_policies!r} malformed or unavailable"
+                if type(protected_branches) is not bool:
+                    detail += f"; protected_branches={protected_branches!r} malformed or unavailable"
                 if unrelated:
                     detail += f"; unrelated tag policies={unrelated}"
                 if full_ref_match:
@@ -396,7 +454,8 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
           f"observed={src!r}; expected={expected}")
     st, simple = http.get(f"https://pypi.org/simple/{norm(pkg)}/", accept="application/vnd.pypi.simple.v1+json")
     if st != 200:
-        check(results, pkg, "pypi:provenance", "UNKNOWN", f"simple API HTTP {st}")
+        for name in ("pypi:distribution-metadata", "pypi:provenance", "pypi:publisher-identity", "github:release-tag"):
+            check(results, pkg, name, "UNKNOWN", f"Simple API HTTP {st}; distribution evidence unavailable")
         return
     meta_files = meta.get("urls")
     simple_entries = simple.get("files") if isinstance(simple, dict) else None
@@ -406,72 +465,107 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
         or len({row["filename"] for row in rows}) != len(rows)
         for rows in (meta_files, simple_entries)
     ):
+        check(results, pkg, "pypi:distribution-metadata", "UNKNOWN", "release metadata or Simple API filenames malformed")
         check(results, pkg, "pypi:provenance", "UNKNOWN", "release metadata or Simple API filenames malformed")
         check(results, pkg, "pypi:publisher-identity", "UNKNOWN", "distribution set unverified")
         check(results, pkg, "github:release-tag", "UNKNOWN", "distribution set unverified")
         return
     latest = {u["filename"] for u in meta_files}
+    release_files = {u["filename"]: u for u in meta_files}
     simple_files = {f["filename"]: f for f in simple_entries}
     missing_files = sorted(latest - simple_files.keys())
     missing_links = sorted(name for name in latest & simple_files.keys()
-                           if not exact_https_host(simple_files[name].get("provenance"), "pypi.org"))
+                           if simple_files[name].get("provenance") != provenance_url(pkg, version, name))
     has_wheel = any(name.endswith(".whl") for name in latest)
     has_sdist = any(name.endswith((".tar.gz", ".zip")) for name in latest)
-    incomplete = not latest or not has_wheel or not has_sdist or bool(missing_files or missing_links)
-    digests, publishers = set(), set()
-    fetch_errors, incomplete_attestations = [], []
-    expected_publisher = ("GitHub", f"{org}/{repo}", "publish-pypi.yml")
+    digests = set()
+    failures, unknowns, publisher_failures, publisher_unknowns = [], [], [], []
+    if not latest or not has_wheel or not has_sdist:
+        failures.append(f"release metadata wheel={has_wheel} sdist={has_sdist}")
+    if missing_files:
+        failures.append(f"missing from Simple API={missing_files}")
+    if missing_links:
+        failures.append(f"missing or noncanonical per-file PyPI provenance link={missing_links}")
+    expected_publisher = ("GitHub", f"{org}/{repo}", "publish-pypi.yml", env_name)
     for name in sorted(latest - set(missing_files) - set(missing_links)):
+        json_hash = release_files[name].get("digests")
+        json_hash = json_hash.get("sha256") if isinstance(json_hash, dict) else None
+        simple_hash = simple_files[name].get("hashes")
+        simple_hash = simple_hash.get("sha256") if isinstance(simple_hash, dict) else None
+        file_hash = None
+        if not valid_sha256(json_hash) or not valid_sha256(simple_hash):
+            unknowns.append(f"{name}: JSON or Simple SHA-256 missing or malformed")
+        elif json_hash.lower() != simple_hash.lower():
+            failures.append(f"{name}: JSON SHA-256 differs from Simple SHA-256")
+        else:
+            file_hash = json_hash.lower()
         st, prov = http.get(simple_files[name]["provenance"])
         if st != 200:
-            fetch_errors.append(f"{name}: provenance HTTP {st}")
+            unknowns.append(f"{name}: provenance HTTP {st}; missing or inaccessible")
             continue
         if not isinstance(prov, dict) or not isinstance(prov.get("attestation_bundles"), list) or not prov["attestation_bundles"]:
-            incomplete_attestations.append(f"{name}: no readable attestation bundles")
+            unknowns.append(f"{name}: no readable attestation bundles")
             continue
-        file_publishers, file_digests = set(), set()
         for b in prov["attestation_bundles"]:
-            if not isinstance(b, dict) or not isinstance(b.get("publisher"), dict) or not isinstance(b.get("attestations"), list):
-                incomplete_attestations.append(f"{name}: malformed attestation bundle")
+            if not isinstance(b, dict) or not isinstance(b.get("publisher"), dict):
+                unknowns.append(f"{name}: malformed attestation bundle")
                 continue
             p = b["publisher"]
-            publisher = (p.get("kind"), p.get("repository"), p.get("workflow"))
-            if not all(isinstance(value, str) for value in publisher):
-                incomplete_attestations.append(f"{name}: malformed publisher identity")
+            publisher = (p.get("kind"), p.get("repository"), p.get("workflow"), p.get("environment"))
+            if not all(isinstance(value, str) and value for value in publisher):
+                publisher_unknowns.append(f"{name}: publisher kind/repository/workflow/environment missing or malformed")
+            elif publisher != expected_publisher:
+                publisher_failures.append(f"{name}: publisher={publisher!r}; expected={expected_publisher!r}")
+            attestations = b.get("attestations")
+            if not isinstance(attestations, list) or not attestations:
+                unknowns.append(f"{name}: attestations missing or malformed")
                 continue
-            file_publishers.add(publisher)
-            for a in b["attestations"]:
+            for a in attestations:
+                if not isinstance(a, dict) or not isinstance(a.get("envelope"), dict):
+                    unknowns.append(f"{name}: DSSE envelope missing or malformed")
+                    continue
+                envelope = a["envelope"]
+                try:
+                    signature = base64.b64decode(envelope.get("signature"), validate=True)
+                    if not signature:
+                        raise ValueError("empty signature")
+                except (KeyError, TypeError, ValueError, IndexError, binascii.Error):
+                    unknowns.append(f"{name}: DSSE signature missing or malformed")
+                subject = attested_subject(envelope.get("statement"))
+                if subject is None:
+                    unknowns.append(f"{name}: publish statement or subject missing or malformed")
+                elif subject[0] != name or not valid_sha256(subject[1].get("sha256")):
+                    if subject[0] != name:
+                        failures.append(f"{name}: statement subject filename={subject[0]!r} differs")
+                    else:
+                        unknowns.append(f"{name}: statement subject SHA-256 missing or malformed")
+                elif file_hash is not None and subject[1]["sha256"].lower() != file_hash:
+                    failures.append(f"{name}: statement subject SHA-256 differs from distribution")
                 try:
                     d = source_digest_from_cert(a["verification_material"]["certificate"])
                 except (KeyError, TypeError, ValueError, IndexError, binascii.Error):
                     d = None
-                if d:
-                    file_digests.add(d)
-        if not file_publishers or not file_digests:
-            incomplete_attestations.append(f"{name}: publisher or source digest missing")
-        publishers.update(file_publishers)
-        digests.update(file_digests)
-    evidence = []
-    if not has_wheel or not has_sdist:
-        evidence.append(f"release metadata wheel={has_wheel} sdist={has_sdist}")
-    if missing_files:
-        evidence.append(f"missing from Simple API={missing_files}")
-    if missing_links:
-        evidence.append(f"missing or invalid PyPI provenance link={missing_links}")
-    evidence.extend(fetch_errors)
-    evidence.extend(incomplete_attestations)
-    provenance_status = "FAIL" if incomplete else "UNKNOWN" if fetch_errors or incomplete_attestations else "PASS"
-    check(results, pkg, "pypi:provenance", provenance_status,
-          "; ".join(evidence) or f"{len(latest)}/{len(latest)} wheel/sdist files attested")
-    if provenance_status != "PASS":
-        reason = "; ".join(evidence)
-        check(results, pkg, "pypi:publisher-identity", "UNKNOWN", f"per-file identity unverified: {reason}")
-        check(results, pkg, "github:release-tag", "UNKNOWN", f"per-file source digest unverified: {reason}")
+                if isinstance(d, str) and re.fullmatch(r"[0-9a-fA-F]{40}", d):
+                    digests.add(d.lower())
+                else:
+                    unknowns.append(f"{name}: certificate source digest missing or malformed")
+    evidence = "; ".join(failures + unknowns)
+    metadata_status = "FAIL" if failures else "UNKNOWN" if unknowns else "PASS"
+    check(results, pkg, "pypi:distribution-metadata", metadata_status,
+          evidence or f"{len(latest)}/{len(latest)} release files have matching URLs, hashes, and statement subjects (unverified metadata)")
+    check(results, pkg, "pypi:provenance", "FAIL" if failures else "UNKNOWN",
+          evidence or "metadata is consistent; DSSE signatures, certificates, and transparency not cryptographically verified")
+    if publisher_failures:
+        check(results, pkg, "pypi:publisher-identity", "FAIL", "; ".join(publisher_failures))
+    else:
+        reason = "; ".join(publisher_unknowns + unknowns + failures)
+        check(results, pkg, "pypi:publisher-identity", "UNKNOWN",
+              reason or f"reported publisher={expected_publisher!r}; cryptographic identity not verified")
+    if metadata_status != "PASS":
+        check(results, pkg, "github:release-tag", "UNKNOWN", f"per-file source digest unverified: {evidence}")
         return
-    pub_ok = publishers == {expected_publisher}
-    check(results, pkg, "pypi:publisher-identity", "PASS" if pub_ok else "FAIL", str(sorted(publishers, key=str)))
     if len(digests) != 1:
-        check(results, pkg, "github:release-tag", "UNKNOWN", f"attested digests {sorted(digests)}")
+        check(results, pkg, "github:release-tag", "UNKNOWN", f"unverified certificate source digests {sorted(digests)}")
         return
     digest = digests.pop()
     if release_tag_family(m) is None:
@@ -501,11 +595,11 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
         commit = target["sha"]
     exc = m.get("tag_exception") or {}
     if commit == digest:
-        check(results, pkg, "github:release-tag", "PASS", f"{tag} -> {commit[:12]} == attested")
+        check(results, pkg, "github:release-tag", "UNKNOWN", f"{tag} -> {commit[:12]} matches unverified certificate metadata; signature and certificate chain unverified")
     elif exc.get("tag") == tag and exc.get("tag_commit") == commit and exc.get("attested_commit") == digest:
-        check(results, pkg, "github:release-tag", "PASS", f"{tag} -> {commit[:12]} (recorded exception: {exc.get('reason', '')[:80]})")
+        check(results, pkg, "github:release-tag", "UNKNOWN", f"{tag} -> {commit[:12]} matches recorded exception, but certificate metadata is unverified: {exc.get('reason', '')[:80]}")
     else:
-        check(results, pkg, "github:release-tag", "FAIL", f"{tag} -> {commit[:12]} vs attested {digest[:12]}")
+        check(results, pkg, "github:release-tag", "FAIL", f"{tag} -> {commit[:12]} contradicts reported certificate source digest {digest[:12]} (unverified)")
 
 
 def audit_private_marker(http: Http, org: str, m: dict, results: list, published_names: dict[str, str] | None = None) -> None:
