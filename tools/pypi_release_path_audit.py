@@ -67,7 +67,7 @@ def release_tag_family(m: dict) -> str | None:
     if not isinstance(pattern, str) or pattern.count("<version>") != 1:
         return None
     prefix, suffix = pattern.split("<version>")
-    if not prefix or suffix or "/" in prefix or "*" in prefix:
+    if suffix or not re.fullmatch(r"[A-Za-z0-9_-]+", prefix):
         return None
     return f"refs/tags/{prefix}*"
 
@@ -345,8 +345,15 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
                 tag_only = bool(dbp.get("custom_branch_policies")) and bool(pols) and all(t == "tag" for _, t in pols)
                 bare_match = any(t == "tag" and name == tag_pattern for name, t in pols)
                 full_ref_match = any(t == "tag" and name == family for name, t in pols)
-                status = "PASS" if tag_only and bare_match else "UNKNOWN" if tag_only and full_ref_match else "FAIL"
+                unrelated = [name for name, t in pols if t == "tag" and name not in (tag_pattern, family)]
+                status = (
+                    "FAIL" if not tag_only or unrelated else
+                    "UNKNOWN" if full_ref_match else
+                    "PASS" if bare_match else "FAIL"
+                )
                 detail = f"policies={pols}; required release tags={tag_pattern}"
+                if unrelated:
+                    detail += f"; unrelated tag policies={unrelated}"
                 if status == "UNKNOWN":
                     detail += f"; full-ref tag policy {family!r} coverage is unverified"
                 check(results, pkg, "github:environment-tag-only", status, detail)
@@ -463,8 +470,12 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
         check(results, pkg, "github:release-tag", "UNKNOWN", f"attested digests {sorted(digests)}")
         return
     digest = digests.pop()
-    tag = f"v{version}" if m.get("tag_pattern", "v<version>") == "v<version>" else f"{norm(pkg)}-v{version}"
-    st, ref = http.get(f"{GH_API}/repos/{org}/{repo}/git/ref/tags/{tag}")
+    if release_tag_family(m) is None:
+        check(results, pkg, "github:release-tag", "UNKNOWN",
+              f"unsupported manifest tag_pattern={m.get('tag_pattern')!r}")
+        return
+    tag = m.get("tag_pattern", "v<version>").replace("<version>", version)
+    st, ref = http.get(f"{GH_API}/repos/{org}/{repo}/git/ref/tags/{urllib.parse.quote(tag, safe='')}")
     if st == 404:
         check(results, pkg, "github:release-tag", "UNKNOWN",
               f"tag {tag} lookup HTTP 404; missing or inaccessible (attested source {digest[:12]})")

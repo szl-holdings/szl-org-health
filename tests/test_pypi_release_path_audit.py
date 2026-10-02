@@ -313,6 +313,31 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
                 self.assertEqual(results["github:release-tag"]["status"], "PASS")
                 self.assertIn(expected_ref, http.calls)
 
+    def test_custom_manifest_tag_pattern_selects_the_attested_release_tag(self):
+        responses = fixture()
+        tag_pattern = "release-v<version>"
+        expected_ref = f"{GITHUB}/git/ref/tags/release-v{VERSION}"
+        wrong_ref = f"{GITHUB}/git/ref/tags/{PACKAGE}-v{VERSION}"
+        responses[RULESET_DETAIL] = (200, ruleset_detail(include=["refs/tags/release-v*"]))
+        responses[f"{GITHUB}/environments/pypi/deployment-branch-policies"][1]["branch_policies"][0]["name"] = "release-v*"
+        responses[expected_ref] = responses.pop(f"{GITHUB}/git/ref/tags/v{VERSION}")
+        responses[wrong_ref] = (200, {"object": {"type": "commit", "sha": "b" * 40}})
+
+        results, http = audit(responses, tag_pattern=tag_pattern)
+
+        self.assertEqual(results["github:tag-ruleset"]["status"], "PASS")
+        self.assertEqual(results["github:environment-tag-only"]["status"], "PASS")
+        self.assertEqual(results["github:release-tag"]["status"], "PASS")
+        self.assertIn(expected_ref, http.calls)
+        self.assertNotIn(wrong_ref, http.calls)
+
+    def test_unsupported_manifest_tag_pattern_never_looks_up_a_fallback_tag(self):
+        results, http = audit(fixture(), tag_pattern="release/?<version>")
+
+        self.assertEqual(results["github:release-tag"]["status"], "UNKNOWN")
+        self.assertIn("unsupported manifest", results["github:release-tag"]["detail"])
+        self.assertFalse(any("/git/ref/tags/" in url for url in http.calls))
+
     def test_absent_tag_ruleset_is_reported_as_missing(self):
         responses = fixture()
         responses[RULESETS] = (200, [])
@@ -426,6 +451,19 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
                 self.assertEqual(results["github:environment-tag-only"]["status"], "FAIL")
                 self.assertIn("v*", results["github:environment-tag-only"]["detail"])
 
+    def test_unrelated_extra_environment_tag_policy_fails(self):
+        responses = fixture()
+        responses[f"{GITHUB}/environments/pypi/deployment-branch-policies"] = (
+            200,
+            {"total_count": 2, "branch_policies": [
+                {"name": "v*", "type": "tag"}, {"name": "archive-*", "type": "tag"},
+            ]},
+        )
+        results, _ = audit(responses)
+
+        self.assertEqual(results["github:environment-tag-only"]["status"], "FAIL")
+        self.assertIn("archive-*", results["github:environment-tag-only"]["detail"])
+
     def test_full_ref_environment_tag_policy_coverage_is_unknown(self):
         responses = fixture()
         responses[f"{GITHUB}/environments/pypi/deployment-branch-policies"] = (
@@ -437,7 +475,7 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
         self.assertEqual(results["github:environment-tag-only"]["status"], "UNKNOWN")
         self.assertIn("coverage is unverified", results["github:environment-tag-only"]["detail"])
 
-    def test_bare_environment_tag_policy_covers_release_family_with_full_ref_policy_present(self):
+    def test_extra_full_ref_environment_policy_keeps_coverage_unknown(self):
         responses = fixture()
         responses[f"{GITHUB}/environments/pypi/deployment-branch-policies"] = (
             200,
@@ -447,7 +485,7 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
         )
         results, _ = audit(responses)
 
-        self.assertEqual(results["github:environment-tag-only"]["status"], "PASS")
+        self.assertEqual(results["github:environment-tag-only"]["status"], "UNKNOWN")
 
     def test_hidden_or_missing_release_tag_is_unknown(self):
         responses = fixture()
