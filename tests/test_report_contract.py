@@ -671,6 +671,7 @@ class ReportAssemblyContractTests(unittest.TestCase):
             self.assertIn(excluded, dockerignore)
         self.assertNotIn("COPY . /app", dockerfile)
         self.assertIn("COPY census/report.py /app/census/report.py", dockerfile)
+        self.assertIn("COPY census/space_readiness.py /app/census/space_readiness.py", dockerfile)
         self.assertIn("COPY static/data.json /app/static/data.json", dockerfile)
         self.assertIn("USER 65532:65532", dockerfile)
         ci_workflow = (root / ".github" / "workflows" / "ci.yml").read_text(

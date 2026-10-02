@@ -53,6 +53,25 @@ safe writable-storage boundary. A runtime's self-reported integrity result is
 not sufficient on its own. Private evidence still passes through the closed
 public-projection allowlist below.
 
+### Scoped Space readiness projection
+
+Four public, documented Space contracts have an additional bounded GET witness:
+`a11oy` (`/readyz` plus `/api/a11oy/v1/honest`), `immune-lattice`
+(`/readyz`), `szl-frontier` (`/api/ready` plus `/api/source`), and
+`szl-brand-campaign` (the static root page). All other Spaces say
+`NOT_EVALUATED`; private Spaces are never probed by this layer. The projection
+records a controlled state, scope, route, HTTP status, and selected declared
+flags. It never publishes raw response bodies or arbitrary provider messages.
+
+`a11oy` remains `TRANSITIONING` while the Hub head and provider runtime SHA
+disagree, even if the old runtime answers HTTP 200. A matching readiness
+response is only `SCOPED_READY_SOURCE_UNVERIFIED` unless the separate source
+binding is observed and agrees with the served Git SHA. `immune-lattice` HTTP
+503 stays `NOT_READY`; `szl-frontier` operator readiness can coexist with
+`PRODUCTION_HOLD` and a *declared* source drift; the stock static campaign is
+`PLACEHOLDER` despite HTTP 200. None of these statuses independently proves
+production authorization, source parity, or scientific quality.
+
 ## Public and internal evidence boundary
 
 The collectors may use read-only credentials to evaluate evidence that is not public. That evidence is never returned directly by `/api/health`, written to `static/data.json`, printed by `refresh_snapshot.py --stdout`, or uploaded as a workflow artifact.

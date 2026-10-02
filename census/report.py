@@ -104,6 +104,20 @@ _DNS_ENUMS = {
     },
     "overall_status": {"PASS", "FAIL", "FAIL_CLOSED", "UNKNOWN"},
 }
+_SPACE_READINESS_ENUMS = {
+    "readiness_state": {
+        "NOT_EVALUATED", "UNKNOWN", "TRANSITIONING", "NOT_READY",
+        "SOURCE_CONFLICT", "SCOPED_READY_SOURCE_BOUND",
+        "SCOPED_READY_SOURCE_UNVERIFIED", "SCOPED_READY_UNVERIFIED",
+        "PRODUCTION_HOLD", "PLACEHOLDER", "CONTENT_PRESENT_UNVERIFIED",
+    },
+    "readiness_scope": {
+        "NOT_EVALUATED", "SERVING_PROCESS", "ACTION_AUTHORITY",
+        "OPERATOR_PLANE", "STATIC_CONTENT",
+    },
+    "readiness_route": {"/", "/readyz", "/api/ready"},
+    "declared_head_match": {"MATCH", "DRIFT", "UNKNOWN", "UNAVAILABLE"},
+}
 
 
 def _error_present(value: Any) -> bool:
@@ -273,6 +287,18 @@ def _public_hf_item(value: Mapping[str, Any], kind: str) -> dict[str, Any] | Non
         hardware = _public_hardware(value.get("hardware"))
         if hardware is not None:
             projected["hardware"] = hardware
+        runtime_revision = value.get("runtime_revision")
+        if isinstance(runtime_revision, str) and re.fullmatch(r"[0-9a-f]{40}", runtime_revision):
+            projected["runtime_revision"] = runtime_revision
+        for field, allowed in _SPACE_READINESS_ENUMS.items():
+            candidate = value.get(field)
+            if isinstance(candidate, str) and candidate in allowed:
+                projected[field] = candidate
+        readiness_http = value.get("readiness_http")
+        if type(readiness_http) is int and 100 <= readiness_http <= 599:
+            projected["readiness_http"] = readiness_http
+        if type(value.get("production_ready_declared")) is bool:
+            projected["production_ready_declared"] = value["production_ready_declared"]
     return projected
 
 
