@@ -1,0 +1,1069 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://szl-holdings.example/schemas/series-a-diligence-v1.json",
+  "title": "SZL Series-A diligence artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "state", "claim_boundary", "assessed_at", "source_binding", "public_snapshot_binding",
+    "sources", "requirements", "inventory", "product_proof_roles",
+    "public_space_policy", "governed_agent_bench", "governed_mcp",
+    "model_promotion", "route_tab_inventory", "space_cost_posture",
+    "governance_evidence", "correction_ledger", "overclaim_ledger", "summary", "gaps",
+    "digest_sha256"
+  ],
+  "properties": {
+    "schema": {"const": "szl.series-a-diligence/v1"},
+    "state": {"enum": ["BLOCKED", "DIVERGENT", "STALE"]},
+    "claim_boundary": {
+      "const": "This artifact reports only the supplied census, optional public receipt, and versioned target policy; it is not a certification, deployment receipt, or investor claim of production readiness."
+    },
+    "assessed_at": {"type": "string", "format": "date-time"},
+    "source_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state", "compiler_revision", "compiler_revision_verified",
+        "census_sha256", "policy_sha256", "policy_state",
+        "census_schema_version", "census_generated_at", "census_age_seconds"
+      ],
+      "properties": {
+        "state": {"$ref": "#/$defs/inventoryState"},
+        "compiler_revision": {"$ref": "#/$defs/nullableGitSha"},
+        "compiler_revision_verified": {"type": "boolean"},
+        "census_sha256": {"$ref": "#/$defs/sha256"},
+        "policy_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "policy_state": {"$ref": "#/$defs/inventoryState"},
+        "census_schema_version": {"$ref": "#/$defs/nullableCount"},
+        "census_generated_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+        "census_age_seconds": {"$ref": "#/$defs/nullableCount"}
+      },
+      "allOf": [
+        {"oneOf": [
+          {"properties": {"state": {"const": "MEASURED"}, "compiler_revision": {"$ref": "#/$defs/gitSha"}, "compiler_revision_verified": {"const": true}}},
+          {"properties": {"state": {"const": "UNAVAILABLE"}, "compiler_revision": {"type": "null"}, "compiler_revision_verified": {"const": false}}},
+          {"properties": {"state": {"const": "UNAVAILABLE"}, "compiler_revision": {"$ref": "#/$defs/gitSha"}, "compiler_revision_verified": {"const": false}}},
+          {"properties": {"state": {"const": "DIVERGENT"}, "compiler_revision": {"type": "null"}, "compiler_revision_verified": {"const": false}}}
+        ]},
+        {"oneOf": [
+          {"properties": {"policy_state": {"const": "MEASURED"}, "policy_sha256": {"const": "156405bd6c6201eee0399d7bde4441363b6df2f03ef4e091e7454548fa8f7824"}}},
+          {"properties": {"policy_state": {"const": "UNAVAILABLE"}, "policy_sha256": {"type": "null"}}},
+          {"properties": {"policy_state": {"const": "DIVERGENT"}, "policy_sha256": {"type": "null"}}}
+        ]}
+      ]
+    },
+    "public_snapshot_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason", "raw_public_sha256", "receipt_public_sha256", "collection_id", "receipt_collection_id"],
+      "properties": {
+        "state": {"enum": ["MEASURED", "UNAVAILABLE", "DIVERGENT"]},
+        "reason": {"type": "string"},
+        "raw_public_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "receipt_public_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "collection_id": {"$ref": "#/$defs/nullableCollectionId"},
+        "receipt_collection_id": {"$ref": "#/$defs/nullableCollectionId"}
+      },
+      "oneOf": [
+        {"properties": {
+          "state": {"const": "MEASURED"},
+          "reason": {"const": "Exact supplied public census bytes match a FRESH_COLLECTION_BOUND receipt projection; internal snapshot bytes and run identity are not independently verified."},
+          "raw_public_sha256": {"$ref": "#/$defs/sha256"},
+          "receipt_public_sha256": {"$ref": "#/$defs/sha256"},
+          "collection_id": {"$ref": "#/$defs/collectionId"},
+          "receipt_collection_id": {"$ref": "#/$defs/collectionId"}
+        }},
+        {"properties": {
+          "state": {"const": "UNAVAILABLE"},
+          "reason": {"const": "No public census receipt was supplied; exact public bytes are not receipt-bound."},
+          "receipt_public_sha256": {"type": "null"},
+          "collection_id": {"type": "null"},
+          "receipt_collection_id": {"type": "null"}
+        }},
+        {"properties": {
+          "state": {"const": "DIVERGENT"},
+          "reason": {"const": "The supplied public census and receipt do not satisfy the exact-byte collection binding."}
+        }}
+      ]
+    },
+    "sources": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[A-Za-z0-9._-]{1,100}$"},
+      "additionalProperties": {"$ref": "#/$defs/sourceSummary"}
+    },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "census_schema", "compiler_source", "correction_and_overclaim_ledger",
+        "generated_api_contract", "governed_agent_bench", "governed_mcp", "github_inventory",
+        "github_release_gate", "hf_inventory", "hf_release_gate",
+        "model_promotion", "product_proof_roles", "public_space_policy", "public_snapshot_receipt",
+        "route_tab_inventory", "shared_design_system_contract", "snapshot_freshness",
+        "space_cost_posture", "space_deployment_reconciliation", "target_policy"
+      ],
+      "properties": {
+        "census_schema": {"$ref": "#/$defs/stateReason"},
+        "compiler_source": {"$ref": "#/$defs/stateReason"},
+        "correction_and_overclaim_ledger": {"$ref": "#/$defs/stateReason"},
+        "generated_api_contract": {"const": {
+          "state": "UNAVAILABLE",
+          "reason": "A generated API contract has not been collected and verified."
+        }},
+        "governed_agent_bench": {"$ref": "#/$defs/stateReason"},
+        "governed_mcp": {"const": {
+          "state": "UNAVAILABLE",
+          "reason": "The census does not verify governed MCP authorization, receipts, or endpoint availability."
+        }},
+        "github_inventory": {"$ref": "#/$defs/stateReason"},
+        "github_release_gate": {"$ref": "#/$defs/stateReason"},
+        "hf_inventory": {"$ref": "#/$defs/stateReason"},
+        "hf_release_gate": {"$ref": "#/$defs/stateReason"},
+        "model_promotion": {"const": {
+          "state": "UNAVAILABLE",
+          "reason": "Immutable revisions and licenses are inventoried, but SZL eval reproduction and production promotion are not observed."
+        }},
+        "product_proof_roles": {"const": {
+          "state": "UNAVAILABLE",
+          "reason": "The census observes site transport, not route ownership or role conformance."
+        }},
+        "public_space_policy": {"$ref": "#/$defs/stateReason"},
+        "public_snapshot_receipt": {"$ref": "#/$defs/stateReason"},
+        "route_tab_inventory": {"const": {
+          "state": "UNAVAILABLE",
+          "reason": "No current route/tab purpose, data-source, and owner collector exists."
+        }},
+        "shared_design_system_contract": {"const": {
+          "state": "UNAVAILABLE",
+          "reason": "A shared design-system contract has not been collected and verified."
+        }},
+        "snapshot_freshness": {"$ref": "#/$defs/stateReason"},
+        "space_cost_posture": {"const": {
+          "state": "UNAVAILABLE",
+          "reason": "The census does not observe billed cost, sleep policy, or capacity quotas."
+        }},
+        "space_deployment_reconciliation": {"const": {
+          "state": "UNAVAILABLE",
+          "reason": "The full GitHub SHA, Hub SHA, image digest, registered organs, and observed routes chain is unavailable until collected."
+        }},
+        "target_policy": {"$ref": "#/$defs/stateReason"}
+      }
+    },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["github", "huggingface"],
+      "properties": {
+        "github": {"$ref": "#/$defs/githubInventory"},
+        "huggingface": {"$ref": "#/$defs/hfInventory"}
+      }
+    },
+    "product_proof_roles": {"$ref": "#/$defs/roles"},
+    "public_space_policy": {"$ref": "#/$defs/publicSpacePolicy"},
+    "governed_agent_bench": {"$ref": "#/$defs/benchmark"},
+    "governed_mcp": {"const": {
+      "state": "UNAVAILABLE",
+      "observed_flagship_endpoints": null,
+      "reason": "The census does not verify governed MCP authorization, receipts, or endpoint availability."
+    }},
+    "model_promotion": {"const": {
+      "state": "UNAVAILABLE",
+      "reason": "Immutable revisions and licenses are inventoried, but SZL eval reproduction and production promotion are not observed."
+    }},
+    "route_tab_inventory": {"const": {
+      "state": "UNAVAILABLE", "routes": null, "tabs": null,
+      "reason": "No current route/tab purpose, data-source, and owner collector exists."
+    }},
+    "space_cost_posture": {"const": {
+      "state": "UNAVAILABLE", "spaces_with_cost_evidence": null,
+      "reason": "The census does not observe billed cost, sleep policy, or capacity quotas."
+    }},
+    "governance_evidence": {"$ref": "#/$defs/governanceEvidence"},
+    "correction_ledger": {"$ref": "#/$defs/ledger"},
+    "overclaim_ledger": {"$ref": "#/$defs/ledger"},
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "github_repositories", "github_active_repositories",
+        "github_ci_failures", "hf_models", "hf_datasets", "hf_spaces",
+        "hf_public_spaces", "open_corrections", "open_overclaims"
+      ],
+      "properties": {
+        "github_repositories": {"$ref": "#/$defs/nullableCount"},
+        "github_active_repositories": {"$ref": "#/$defs/nullableCount"},
+        "github_ci_failures": {"$ref": "#/$defs/nullableCount"},
+        "hf_models": {"$ref": "#/$defs/nullableCount"},
+        "hf_datasets": {"$ref": "#/$defs/nullableCount"},
+        "hf_spaces": {"$ref": "#/$defs/nullableCount"},
+        "hf_public_spaces": {"$ref": "#/$defs/nullableCount"},
+        "open_corrections": {"$ref": "#/$defs/nullableCount"},
+        "open_overclaims": {"$ref": "#/$defs/nullableCount"}
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "minItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirement", "state", "reason"],
+        "properties": {
+          "requirement": {"$ref": "#/$defs/requirementName"},
+          "state": {"$ref": "#/$defs/state"},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      },
+      "allOf": [
+        {"contains": {"const": {
+          "requirement": "generated_api_contract",
+          "state": "UNAVAILABLE",
+          "reason": "A generated API contract has not been collected and verified."
+        }}},
+        {"contains": {"const": {
+          "requirement": "governed_mcp",
+          "state": "UNAVAILABLE",
+          "reason": "The census does not verify governed MCP authorization, receipts, or endpoint availability."
+        }}},
+        {"contains": {"const": {
+          "requirement": "model_promotion",
+          "state": "UNAVAILABLE",
+          "reason": "Immutable revisions and licenses are inventoried, but SZL eval reproduction and production promotion are not observed."
+        }}},
+        {"contains": {"const": {
+          "requirement": "product_proof_roles",
+          "state": "UNAVAILABLE",
+          "reason": "The census observes site transport, not route ownership or role conformance."
+        }}},
+        {"contains": {"const": {
+          "requirement": "route_tab_inventory",
+          "state": "UNAVAILABLE",
+          "reason": "No current route/tab purpose, data-source, and owner collector exists."
+        }}},
+        {"contains": {"const": {
+          "requirement": "shared_design_system_contract",
+          "state": "UNAVAILABLE",
+          "reason": "A shared design-system contract has not been collected and verified."
+        }}},
+        {"contains": {"const": {
+          "requirement": "space_cost_posture",
+          "state": "UNAVAILABLE",
+          "reason": "The census does not observe billed cost, sleep policy, or capacity quotas."
+        }}},
+        {"contains": {"const": {
+          "requirement": "space_deployment_reconciliation",
+          "state": "UNAVAILABLE",
+          "reason": "The full GitHub SHA, Hub SHA, image digest, registered organs, and observed routes chain is unavailable until collected."
+        }}}
+      ]
+    },
+    "digest_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "inventory": {
+            "properties": {
+              "huggingface": {
+                "properties": {
+                  "subinventory_states": {
+                    "properties": {
+                      "spaces": {"enum": ["UNAVAILABLE", "DIVERGENT"]}
+                    },
+                    "required": ["spaces"]
+                  }
+                },
+                "required": ["subinventory_states"]
+              }
+            },
+            "required": ["huggingface"]
+          }
+        },
+        "required": ["inventory"]
+      },
+      "then": {
+        "properties": {
+          "summary": {
+            "properties": {"hf_public_spaces": {"type": "null"}}
+          },
+          "public_space_policy": {
+            "properties": {
+              "public_space_count": {"type": "null"},
+              "killinchu_observed": {"type": "null"}
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "summary": {
+            "properties": {
+              "hf_public_spaces": {"type": "integer", "minimum": 0}
+            }
+          },
+          "public_space_policy": {
+            "properties": {
+              "public_space_count": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "inventory": {
+            "properties": {
+              "github": {
+                "properties": {"state": {"const": "MEASURED"}},
+                "required": ["state"]
+              }
+            },
+            "required": ["github"]
+          }
+        },
+        "required": ["inventory"]
+      },
+      "then": {
+        "properties": {
+          "summary": {
+            "properties": {
+              "github_repositories": {"type": "integer", "minimum": 0},
+              "github_active_repositories": {"type": "integer", "minimum": 0},
+              "github_ci_failures": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "summary": {
+            "properties": {
+              "github_repositories": {"type": "null"},
+              "github_active_repositories": {"type": "null"},
+              "github_ci_failures": {"type": "null"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "inventory": {
+            "properties": {
+              "huggingface": {
+                "properties": {
+                  "subinventory_states": {
+                    "properties": {"models": {"const": "MEASURED"}},
+                    "required": ["models"]
+                  }
+                },
+                "required": ["subinventory_states"]
+              }
+            },
+            "required": ["huggingface"]
+          }
+        },
+        "required": ["inventory"]
+      },
+      "then": {
+        "properties": {
+          "summary": {
+            "properties": {"hf_models": {"type": "integer", "minimum": 0}}
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "summary": {"properties": {"hf_models": {"type": "null"}}}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "inventory": {
+            "properties": {
+              "huggingface": {
+                "properties": {
+                  "subinventory_states": {
+                    "properties": {"datasets": {"const": "MEASURED"}},
+                    "required": ["datasets"]
+                  }
+                },
+                "required": ["subinventory_states"]
+              }
+            },
+            "required": ["huggingface"]
+          }
+        },
+        "required": ["inventory"]
+      },
+      "then": {
+        "properties": {
+          "summary": {
+            "properties": {"hf_datasets": {"type": "integer", "minimum": 0}}
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "summary": {"properties": {"hf_datasets": {"type": "null"}}}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "inventory": {
+            "properties": {
+              "huggingface": {
+                "properties": {
+                  "subinventory_states": {
+                    "properties": {"spaces": {"const": "MEASURED"}},
+                    "required": ["spaces"]
+                  }
+                },
+                "required": ["subinventory_states"]
+              }
+            },
+            "required": ["huggingface"]
+          }
+        },
+        "required": ["inventory"]
+      },
+      "then": {
+        "properties": {
+          "summary": {
+            "properties": {"hf_spaces": {"type": "integer", "minimum": 0}}
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "summary": {"properties": {"hf_spaces": {"type": "null"}}}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "state": {"enum": ["MEASURED", "BLOCKED", "UNAVAILABLE", "DIVERGENT", "STALE"]},
+    "inventoryState": {"enum": ["MEASURED", "UNAVAILABLE", "DIVERGENT"]},
+    "subinventoryState": {"enum": ["MEASURED", "UNAVAILABLE", "DIVERGENT"]},
+    "sha256": {"type": "string", "pattern": "^(?!0{64}$)[0-9a-f]{64}$"},
+    "nullableCount": {
+      "anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]
+    },
+    "gitSha": {"type": "string", "pattern": "^(?!0{40}$)[0-9a-f]{40}$"},
+    "nullableGitSha": {"anyOf": [{"$ref": "#/$defs/gitSha"}, {"type": "null"}]},
+    "nullableSha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "collectionId": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "nullableCollectionId": {"anyOf": [{"$ref": "#/$defs/collectionId"}, {"type": "null"}]},
+    "nullableBoolean": {"type": ["boolean", "null"]},
+    "nullableString": {"type": ["string", "null"]},
+    "httpStatus": {"anyOf": [{"type": "integer", "minimum": 100, "maximum": 599}, {"type": "null"}]},
+    "requirementName": {"enum": [
+      "census_schema", "compiler_source", "correction_and_overclaim_ledger",
+      "generated_api_contract", "governed_agent_bench", "governed_mcp", "github_inventory",
+      "github_release_gate", "hf_inventory", "hf_release_gate",
+      "model_promotion", "product_proof_roles", "public_space_policy", "public_snapshot_receipt",
+      "route_tab_inventory", "shared_design_system_contract", "snapshot_freshness",
+      "space_cost_posture", "space_deployment_reconciliation", "target_policy"
+    ]},
+    "sourceSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "error"],
+      "properties": {
+        "state": {"$ref": "#/$defs/inventoryState"},
+        "error": {"type": ["string", "null"]}
+      },
+      "oneOf": [
+        {"properties": {"state": {"const": "MEASURED"}, "error": {"type": "null"}}},
+        {"properties": {"state": {"const": "UNAVAILABLE"}, "error": {"const": "Source collection failed; inspect the protected collector log."}}},
+        {"properties": {"state": {"const": "DIVERGENT"}, "error": {"enum": ["Source wrapper is malformed.", "Successful source has no object-shaped data."]}}}
+      ]
+    },
+    "stringList": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "stateReason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason"],
+      "properties": {
+        "state": {"$ref": "#/$defs/state"},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "stateReasonClosed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason"],
+      "properties": {
+        "state": {"$ref": "#/$defs/state"},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "githubInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state", "release_gate", "repository_count", "active_count",
+        "archived_count", "ci", "blocked_repositories",
+        "unprotected_repositories", "protection_unknown_repositories",
+        "unclassified_repositories", "reason"
+      ],
+      "properties": {
+        "state": {"$ref": "#/$defs/inventoryState"},
+        "release_gate": {"$ref": "#/$defs/state"},
+        "repository_count": {"$ref": "#/$defs/nullableCount"},
+        "active_count": {"$ref": "#/$defs/nullableCount"},
+        "archived_count": {"$ref": "#/$defs/nullableCount"},
+        "ci": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["success", "failure", "pending", "unknown"],
+          "properties": {
+            "success": {"$ref": "#/$defs/nullableCount"},
+            "failure": {"$ref": "#/$defs/nullableCount"},
+            "pending": {"$ref": "#/$defs/nullableCount"},
+            "unknown": {"$ref": "#/$defs/nullableCount"}
+          }
+        },
+        "blocked_repositories": {"$ref": "#/$defs/stringList"},
+        "unprotected_repositories": {"$ref": "#/$defs/stringList"},
+        "protection_unknown_repositories": {"$ref": "#/$defs/stringList"},
+        "unclassified_repositories": {"$ref": "#/$defs/stringList"},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"state": {"const": "MEASURED"}},
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "repository_count": {"type": "integer", "minimum": 0},
+              "active_count": {"type": "integer", "minimum": 0},
+              "archived_count": {"type": "integer", "minimum": 0},
+              "ci": {
+                "properties": {
+                  "success": {"type": "integer", "minimum": 0},
+                  "failure": {"type": "integer", "minimum": 0},
+                  "pending": {"type": "integer", "minimum": 0},
+                  "unknown": {"type": "integer", "minimum": 0}
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "repository_count": {"type": "null"},
+              "active_count": {"type": "null"},
+              "archived_count": {"type": "null"},
+              "ci": {
+                "properties": {
+                  "success": {"type": "null"},
+                  "failure": {"type": "null"},
+                  "pending": {"type": "null"},
+                  "unknown": {"type": "null"}
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "hfInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state", "release_gate", "counts", "subinventory_states", "public_space_count",
+        "public_space_ids", "invalid_asset_ids", "duplicate_asset_ids",
+        "invalid_revision_ids", "missing_license_ids",
+        "visibility_unknown_ids", "running_unbound_spaces",
+        "non_running_dynamic_spaces", "reason"
+      ],
+      "properties": {
+        "state": {"$ref": "#/$defs/inventoryState"},
+        "release_gate": {"$ref": "#/$defs/state"},
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["models", "datasets", "spaces", "kernels", "collections", "buckets"],
+          "properties": {
+            "models": {"$ref": "#/$defs/nullableCount"},
+            "datasets": {"$ref": "#/$defs/nullableCount"},
+            "spaces": {"$ref": "#/$defs/nullableCount"},
+            "kernels": {"$ref": "#/$defs/nullableCount"},
+            "collections": {"$ref": "#/$defs/nullableCount"},
+            "buckets": {"$ref": "#/$defs/nullableCount"}
+          }
+        },
+        "subinventory_states": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["models", "datasets", "spaces", "kernels", "collections", "buckets"],
+          "properties": {
+            "models": {"$ref": "#/$defs/subinventoryState"},
+            "datasets": {"$ref": "#/$defs/subinventoryState"},
+            "spaces": {"$ref": "#/$defs/subinventoryState"},
+            "kernels": {"$ref": "#/$defs/subinventoryState"},
+            "collections": {"$ref": "#/$defs/subinventoryState"},
+            "buckets": {"$ref": "#/$defs/subinventoryState"}
+          }
+        },
+        "public_space_count": {"$ref": "#/$defs/nullableCount"},
+        "public_space_ids": {"$ref": "#/$defs/stringList"},
+        "invalid_asset_ids": {"$ref": "#/$defs/stringList"},
+        "duplicate_asset_ids": {"$ref": "#/$defs/stringList"},
+        "invalid_revision_ids": {"$ref": "#/$defs/stringList"},
+        "missing_license_ids": {"$ref": "#/$defs/stringList"},
+        "visibility_unknown_ids": {"$ref": "#/$defs/stringList"},
+        "running_unbound_spaces": {"$ref": "#/$defs/stringList"},
+        "non_running_dynamic_spaces": {"$ref": "#/$defs/stringList"},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "subinventory_states": {
+                "properties": {"spaces": {"const": "MEASURED"}},
+                "required": ["spaces"]
+              }
+            },
+            "required": ["subinventory_states"]
+          },
+          "then": {
+            "properties": {
+              "public_space_count": {"type": "integer", "minimum": 0}
+            }
+          },
+          "else": {
+            "properties": {
+              "public_space_count": {"type": "null"},
+              "public_space_ids": {"maxItems": 0}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"subinventory_states": {
+              "properties": {"models": {"const": "MEASURED"}},
+              "required": ["models"]
+            }},
+            "required": ["subinventory_states"]
+          },
+          "then": {"properties": {"counts": {
+            "properties": {"models": {"type": "integer", "minimum": 0}}
+          }}},
+          "else": {"properties": {"counts": {
+            "properties": {"models": {"type": "null"}}
+          }}}
+        },
+        {
+          "if": {
+            "properties": {"subinventory_states": {
+              "properties": {"datasets": {"const": "MEASURED"}},
+              "required": ["datasets"]
+            }},
+            "required": ["subinventory_states"]
+          },
+          "then": {"properties": {"counts": {
+            "properties": {"datasets": {"type": "integer", "minimum": 0}}
+          }}},
+          "else": {"properties": {"counts": {
+            "properties": {"datasets": {"type": "null"}}
+          }}}
+        },
+        {
+          "if": {
+            "properties": {"subinventory_states": {
+              "properties": {"spaces": {"const": "MEASURED"}},
+              "required": ["spaces"]
+            }},
+            "required": ["subinventory_states"]
+          },
+          "then": {"properties": {"counts": {
+            "properties": {"spaces": {"type": "integer", "minimum": 0}}
+          }}},
+          "else": {"properties": {"counts": {
+            "properties": {"spaces": {"type": "null"}}
+          }}}
+        },
+        {
+          "if": {
+            "properties": {"subinventory_states": {
+              "properties": {"kernels": {"const": "MEASURED"}},
+              "required": ["kernels"]
+            }},
+            "required": ["subinventory_states"]
+          },
+          "then": {"properties": {"counts": {
+            "properties": {"kernels": {"type": "integer", "minimum": 0}}
+          }}},
+          "else": {"properties": {"counts": {
+            "properties": {"kernels": {"type": "null"}}
+          }}}
+        },
+        {
+          "if": {
+            "properties": {"subinventory_states": {
+              "properties": {"collections": {"const": "MEASURED"}},
+              "required": ["collections"]
+            }},
+            "required": ["subinventory_states"]
+          },
+          "then": {"properties": {"counts": {
+            "properties": {"collections": {"type": "integer", "minimum": 0}}
+          }}},
+          "else": {"properties": {"counts": {
+            "properties": {"collections": {"type": "null"}}
+          }}}
+        },
+        {
+          "if": {
+            "properties": {"subinventory_states": {
+              "properties": {"buckets": {"const": "MEASURED"}},
+              "required": ["buckets"]
+            }},
+            "required": ["subinventory_states"]
+          },
+          "then": {"properties": {"counts": {
+            "properties": {"buckets": {"type": "integer", "minimum": 0}}
+          }}},
+          "else": {"properties": {"counts": {
+            "properties": {"buckets": {"type": "null"}}
+          }}}
+        },
+        {
+          "if": {
+            "properties": {
+              "subinventory_states": {
+                "anyOf": [
+                  {"properties": {"models": {"const": "DIVERGENT"}}, "required": ["models"]},
+                  {"properties": {"datasets": {"const": "DIVERGENT"}}, "required": ["datasets"]},
+                  {"properties": {"spaces": {"const": "DIVERGENT"}}, "required": ["spaces"]},
+                  {"properties": {"kernels": {"const": "DIVERGENT"}}, "required": ["kernels"]},
+                  {"properties": {"collections": {"const": "DIVERGENT"}}, "required": ["collections"]},
+                  {"properties": {"buckets": {"const": "DIVERGENT"}}, "required": ["buckets"]}
+                ]
+              }
+            },
+            "required": ["subinventory_states"]
+          },
+          "then": {
+            "properties": {
+              "state": {"const": "DIVERGENT"},
+              "release_gate": {"const": "DIVERGENT"}
+            }
+          },
+          "else": {
+            "if": {
+              "properties": {
+                "subinventory_states": {
+                  "anyOf": [
+                    {"properties": {"models": {"const": "UNAVAILABLE"}}, "required": ["models"]},
+                    {"properties": {"datasets": {"const": "UNAVAILABLE"}}, "required": ["datasets"]},
+                    {"properties": {"spaces": {"const": "UNAVAILABLE"}}, "required": ["spaces"]},
+                    {"properties": {"kernels": {"const": "UNAVAILABLE"}}, "required": ["kernels"]},
+                    {"properties": {"collections": {"const": "UNAVAILABLE"}}, "required": ["collections"]},
+                    {"properties": {"buckets": {"const": "UNAVAILABLE"}}, "required": ["buckets"]}
+                  ]
+                }
+              },
+              "required": ["subinventory_states"]
+            },
+            "then": {
+              "properties": {
+                "state": {"const": "UNAVAILABLE"},
+                "release_gate": {"const": "UNAVAILABLE"}
+              }
+            },
+            "else": {
+              "properties": {"state": {"const": "MEASURED"}},
+              "allOf": [
+                {
+                  "if": {
+                    "anyOf": [
+                      {"properties": {"missing_license_ids": {"minItems": 1}}, "required": ["missing_license_ids"]},
+                      {"properties": {"running_unbound_spaces": {"minItems": 1}}, "required": ["running_unbound_spaces"]},
+                      {"properties": {"non_running_dynamic_spaces": {"minItems": 1}}, "required": ["non_running_dynamic_spaces"]}
+                    ]
+                  },
+                  "then": {"properties": {"release_gate": {"const": "BLOCKED"}}},
+                  "else": {"properties": {"release_gate": {"const": "MEASURED"}}}
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "roles": {
+      "oneOf": [
+        {"const": {"state": "UNAVAILABLE", "targets": [], "reason": "The census observes site transport, not route ownership or role conformance."}},
+        {"const": {
+          "state": "UNAVAILABLE",
+          "targets": [
+            {"domain": "a-11-oy.com", "role": "PRODUCT", "source": "SZL Four-Clone Recommended Upgrade Payload issued 2026-07-25"},
+            {"domain": "a11oy.net", "role": "PROOF", "source": "SZL Four-Clone Recommended Upgrade Payload issued 2026-07-25"}
+          ],
+          "reason": "The census observes site transport, not route ownership or role conformance."
+        }}
+      ]
+    },
+    "killinchuException": {"const": {
+      "surface": "SZLHOLDINGS/killinchu",
+      "decision": "ACCEPTED_CONDITIONAL",
+      "decision_date": "2026-07-25",
+      "review_due": "2026-10-23",
+      "source_repository": "szl-holdings/a11oy",
+      "source_path": "docs/decisions/2026-07-25-killinchu-public-space-exception.md",
+      "source_blob_oid": "02fe8afa7a6063d3f6265882fa0b0dadace1e6c7"
+    }},
+    "publicSpacePolicy": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "normal_limit", "normal_allowlist_state", "authorized_exception_count", "expired_exception_count", "authorized_maximum", "public_space_count", "killinchu_observed", "killinchu_exception", "reason"],
+          "properties": {
+            "state": {"enum": ["BLOCKED", "UNAVAILABLE", "DIVERGENT"]},
+            "normal_limit": {"const": 5},
+            "normal_allowlist_state": {"const": "UNAVAILABLE"},
+            "authorized_exception_count": {"anyOf": [
+              {"type": "integer", "minimum": 0, "maximum": 1},
+              {"type": "null"}
+            ]},
+            "expired_exception_count": {"type": "integer", "minimum": 0, "maximum": 1},
+            "authorized_maximum": {"anyOf": [
+              {"type": "integer", "minimum": 5, "maximum": 6},
+              {"type": "null"}
+            ]},
+            "public_space_count": {"$ref": "#/$defs/nullableCount"},
+            "killinchu_observed": {"$ref": "#/$defs/nullableBoolean"},
+            "killinchu_exception": {"$ref": "#/$defs/killinchuException"},
+            "reason": {"type": "string", "minLength": 1}
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {"public_space_count": {"type": "null"}},
+                "required": ["public_space_count"]
+              },
+              "then": {
+                "properties": {"killinchu_observed": {"type": "null"}}
+              },
+              "else": {
+                "properties": {"killinchu_observed": {"type": "boolean"}}
+              }
+            },
+            {
+              "oneOf": [
+                {"properties": {
+                  "authorized_exception_count": {"type": "null"},
+                  "authorized_maximum": {"type": "null"}
+                }},
+                {"properties": {
+                  "authorized_exception_count": {"const": 0},
+                  "authorized_maximum": {"const": 5}
+                }},
+                {"properties": {
+                  "authorized_exception_count": {"const": 1},
+                  "authorized_maximum": {"const": 6}
+                }}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "normal_limit", "normal_allowlist_state", "authorized_exception_count", "expired_exception_count", "authorized_maximum", "public_space_count", "killinchu_observed", "killinchu_exception", "reason"],
+          "properties": {
+            "state": {"enum": ["UNAVAILABLE", "DIVERGENT"]},
+            "normal_limit": {"type": "null"},
+            "normal_allowlist_state": {"type": "null"},
+            "authorized_exception_count": {"type": "null"},
+            "expired_exception_count": {"type": "null"},
+            "authorized_maximum": {"type": "null"},
+            "public_space_count": {"$ref": "#/$defs/nullableCount"},
+            "killinchu_observed": {"type": "null"},
+            "killinchu_exception": {"type": "null"},
+            "reason": {"const": "The five-plus-one policy cannot be evaluated without valid policy evidence."}
+          }
+        }
+      ]
+    },
+    "benchmark": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "dataset", "space", "reason"],
+      "properties": {
+        "state": {"$ref": "#/$defs/state"},
+        "dataset": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "sha", "private", "license_declared", "card_state"],
+              "properties": {
+                "id": {"const": "SZLHOLDINGS/governed-agent-bench"},
+                "sha": {"$ref": "#/$defs/gitSha"},
+                "private": {"type": "boolean"},
+                "license_declared": {"type": "boolean"},
+                "card_state": {"enum": ["COMPLETE", "INCOMPLETE", "UNKNOWN"]}
+              }
+            },
+            {"type": "null"}
+          ]
+        },
+        "space": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "sha", "private", "stage", "source_revision", "canonical_source_revision", "source_binding_state", "operational_state", "http", "healthz", "healthz_contract", "build_info_http", "leaderboard_http", "eval_dataset_revision", "eval_space_revision", "eval_output_revision", "eval_output_sha256", "eval_receipt_id", "eval_reproduction_state"],
+              "properties": {
+                "id": {"const": "SZLHOLDINGS/governed-agent-bench"},
+                "sha": {"$ref": "#/$defs/gitSha"},
+                "private": {"type": "boolean"},
+                "stage": {"type": "string", "pattern": "^(?:[A-Z][A-Z0-9_]{0,63}|unknown)$"},
+                "source_revision": {"$ref": "#/$defs/nullableGitSha"},
+                "canonical_source_revision": {"$ref": "#/$defs/nullableGitSha"},
+                "source_binding_state": {"enum": [null, "OBSERVED", "UNAVAILABLE", "NOT_APPLICABLE"]},
+                "operational_state": {"enum": [null, "DEGRADED", "STATIC_REACHABLE", "OPERATIONAL_SOURCE_BOUND", "RUNTIME_HEALTHY_UNBOUND", "REACHABLE_UNVERIFIED"]},
+                "http": {"$ref": "#/$defs/httpStatus"},
+                "healthz": {"$ref": "#/$defs/httpStatus"},
+                "healthz_contract": {"$ref": "#/$defs/nullableBoolean"},
+                "build_info_http": {"$ref": "#/$defs/httpStatus"},
+                "leaderboard_http": {"$ref": "#/$defs/httpStatus"},
+                "eval_dataset_revision": {"$ref": "#/$defs/nullableGitSha"},
+                "eval_space_revision": {"$ref": "#/$defs/nullableGitSha"},
+                "eval_output_revision": {"$ref": "#/$defs/nullableGitSha"},
+                "eval_output_sha256": {"$ref": "#/$defs/nullableSha256"},
+                "eval_receipt_id": {"anyOf": [{"type": "string", "pattern": "^(?=.*[A-Za-z0-9])[A-Za-z0-9._:/-]{1,200}$"}, {"type": "null"}]},
+                "eval_reproduction_state": {"enum": [null, "VERIFIED"]}
+              }
+            },
+            {"type": "null"}
+          ]
+        },
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"state": {"const": "MEASURED"}}, "required": ["state"]},
+          "then": {"properties": {"dataset": {"type": "object"}, "space": {"type": "object"}}}
+        }
+      ]
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "observed_flagship_endpoints", "reason"],
+      "properties": {
+        "state": {"$ref": "#/$defs/state"},
+        "observed_flagship_endpoints": {"$ref": "#/$defs/nullableCount"},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "routeInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "routes", "tabs", "reason"],
+      "properties": {
+        "state": {"$ref": "#/$defs/state"},
+        "routes": {"$ref": "#/$defs/nullableCount"},
+        "tabs": {"$ref": "#/$defs/nullableCount"},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "costPosture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "spaces_with_cost_evidence", "reason"],
+      "properties": {
+        "state": {"$ref": "#/$defs/state"},
+        "spaces_with_cost_evidence": {"$ref": "#/$defs/nullableCount"},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "governanceEvidence": {
+      "oneOf": [
+        {"const": {"state": "UNAVAILABLE", "schema": null, "certification": null, "overall_status": null, "summary": null, "controls": []}},
+        {"const": {"state": "DIVERGENT", "schema": null, "certification": null, "overall_status": null, "summary": null, "controls": []}},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "schema", "certification", "overall_status", "summary", "controls"],
+          "properties": {
+            "state": {"const": "MEASURED"},
+            "schema": {"const": "szl.estate-governance-evaluation/v1"},
+            "certification": {"const": "NOT_A_CERTIFICATION"},
+            "overall_status": {"enum": ["PASS", "FAIL", "UNKNOWN"]},
+            "summary": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["PASS", "FAIL", "UNKNOWN", "NOT_APPLICABLE"],
+              "properties": {
+                "PASS": {"type": "integer", "minimum": 0, "maximum": 15},
+                "FAIL": {"type": "integer", "minimum": 0, "maximum": 15},
+                "UNKNOWN": {"type": "integer", "minimum": 0, "maximum": 15},
+                "NOT_APPLICABLE": {"type": "integer", "minimum": 0, "maximum": 15}
+              }
+            },
+            "controls": {
+              "type": "array",
+              "minItems": 15,
+              "maxItems": 15,
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "status", "severity"],
+                "properties": {
+                  "id": {"enum": ["DNS-DMARC-REJECT", "DNS-SPF", "GH-ACTIVE-CI", "GH-BRANCH-PROTECTION", "GH-DEPENDABOT-ALERTS", "GH-HIGH-CODE-ALERTS", "GH-INVENTORY", "GH-REPOSITORY-CLASSIFICATION", "GH-SECRET-ALERTS", "HF-CARDS", "HF-DYNAMIC-SPACE-SOURCE-BINDING", "HF-IMMUTABLE-REVISIONS", "HF-INVENTORY", "HF-LICENSES", "HF-SAFE-MODEL-FORMATS"]},
+                  "status": {"enum": ["PASS", "FAIL", "UNKNOWN", "NOT_APPLICABLE"]},
+                  "severity": {"enum": ["HIGH", "CRITICAL"]}
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ledger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "entries", "reason"],
+      "properties": {
+        "state": {"$ref": "#/$defs/state"},
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "status", "severity", "summary"],
+            "properties": {
+              "id": {"type": "string", "minLength": 1},
+              "status": {"const": "OPEN"},
+              "severity": {"enum": ["HIGH", "CRITICAL"]},
+              "summary": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "reason": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

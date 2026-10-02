@@ -11,15 +11,17 @@ Every displayed value is either a reading collected during the current request o
 | GitHub (`szl-holdings`) | All repositories visible to the runtime credential, archive/visibility/default-branch metadata, preliminary role classification, latest **run per workflow** on the default branch, branch-protection readability, open PRs/issues, and organization security-alert counts |
 | Hugging Face (`SZLHOLDINGS`) | Models, datasets, Spaces, collections, and buckets; exact repository SHAs and modification dates; declared model contract shape plus observed tensor, GGUF, estimator, and embedding artifacts; revision-bound operational-payload manifest size and SHA-256 verification; Space SDK, hardware/runtime stage, live root probe, and governed `/healthz` probes for the flagships |
 | Sites and DNS | Reachability, security response headers, SPF, and DMARC posture |
+| Series-A diligence | A deterministic, network-free artifact compiled from one supplied public census, with exact compiler-source binding, the five-plus-one public-Space policy, governed-agent-bench evidence, corrections, overclaim boundaries, and explicit gaps |
 
-The GitHub collector follows pagination instead of maintaining a hand-written repository subset. The Hugging Face collector uses the public Hub APIs with bounded pagination and isolates every asset class: for example, an unreadable bucket API is shown as `UNKNOWN` while independently verified Spaces and datasets remain available.
+The GitHub collector follows pagination instead of maintaining a hand-written repository subset. The Hugging Face collector uses bounded Hub APIs and isolates every asset class: for example, an unreadable direct bucket API remains `UNKNOWN` while independently verified Spaces and datasets remain available. Models, datasets, Spaces, and Kernels require an `id` plus an exact repository SHA. Collections use a slug and explicit detail-completeness evidence. Buckets require direct-listing identity and tree-read evidence; collection-visible bucket references remain separate partial evidence in the internal collector and never become successful direct bucket inventory.
 
 ## Honesty contract
 
 - Repository CI is calculated from the latest default-branch push run **for each workflow**. A newer unrelated green workflow cannot conceal a failing guard.
 - Tensor/GGUF weights, serialized estimators, and embedding indexes are reported separately. A kernel may satisfy its declared contract without a weight file. Operational payloads satisfy their artifact expectation only when every revision-bound manifest entry is present and matches its declared byte size and SHA-256. Neither classification claims that inference or deployment was executed.
 - Space `RUNNING` state and HTTP reachability are separate readings. Neither substitutes for the other.
-- Direct bucket discovery may require an authenticated Hugging Face token. Without it, bucket count remains `UNKNOWN`; collection-visible bucket references are labeled as partial discovery.
+- Direct bucket discovery may require an authenticated Hugging Face token. Without it, bucket count remains `UNKNOWN`; collection-visible bucket references are labeled as partial discovery in the internal collector. The closed public projection currently omits those references.
+- Every Hugging Face asset class has an independent subinventory state. A collection or bucket failure cannot erase valid repository-backed evidence, and it cannot be relabeled as a complete collection or direct bucket census. Governed-agent-bench state is derived from its dataset and Space substates, not from a caller-supplied aggregate label.
 - A 403/404 from GitHub branch-protection endpoints remains `UNKNOWN` because an unprotected branch and an under-scoped credential can be indistinguishable.
 - Preliminary repository classifications are deterministic and visible. Anything not proven by the current policy is `unclassified`, not guessed.
 - No credential values are returned by the API or rendered by the interface.
@@ -118,6 +120,43 @@ python3 refresh_snapshot.py --stdout
 
 The snapshot refresh has a hard deadline, derives public output from the exact in-memory internal report, and replaces files atomically. If collection or projection cannot finish, it does not publish a partial file as a fresh complete census.
 
+## Generated Series-A diligence
+
+`build_series_a_diligence.py` transforms the allowlisted public `static/data.json` census into canonical JSON and Markdown without making network calls. It binds the census digest, locked target policy, and exact compiler Git revision only when every source-bound file is a regular tracked blob whose executing bytes match that revision. Dirty, untracked, missing, hidden-index, symlinked, hard-linked, CRLF-drifted, or caller-invented source bytes fail closed.
+
+The CLI accepts only a public-projection-shaped census and rejects explicit internal/private repository or asset entries before writing an investor artifact. This guards against accidentally passing the internal collector report; labels in a caller-supplied JSON file are not independent proof that its contents were publicly visible. Use the governed collector and sanitized receipt for provenance, and keep private inventory out of public inputs.
+
+`--receipt /path/to/census-receipt.json` optionally checks the **raw supplied public census bytes** against a sanitized receipt from the same collection. The strict, size-bounded parser requires the public projection schema, exposure, schema version, and collection ID, plus the receipt schema, `public_snapshot.state=FRESH_COLLECTION_BOUND`, exact public-byte SHA-256, and matching collection ID. A valid pair marks only `public_snapshot_receipt` as `MEASURED`; absent receipt remains an `UNAVAILABLE` gap, while a requested malformed or mismatched receipt is `DIVERGENT` and the CLI exits 6 without publishing outputs. Historical byte checks remain reproducible without a receipt. The repository does not bundle a receipt for `static/data.json`, and CI must not fabricate one.
+
+This is unsigned consistency between supplied public bytes and a supplied receipt, **not** authentication of the collecting run, independent validation of internal snapshot bytes, or a governance pass. In particular, `receipt.status=FAIL_CLOSED` can coexist with `public_snapshot.state=FRESH_COLLECTION_BOUND`; the compiler does not equate those verdicts. The public `source_snapshot_sha256` is not compared to `receipt.snapshot.sha256` because they can describe different internal serializations.
+
+```bash
+python3 -I -B build_series_a_diligence.py \
+  --input static/data.json \
+  --source-revision "$(git rev-parse HEAD)" \
+  --output generated/series-a-diligence.json \
+  --markdown generated/SERIES_A_DILIGENCE.generated.md \
+  --require-source-bound
+
+python3 -I -B build_series_a_diligence.py \
+  --input static/data.json \
+  --source-revision "$(git rev-parse HEAD)" \
+  --output generated/series-a-diligence.json \
+  --markdown generated/SERIES_A_DILIGENCE.generated.md \
+  --check --historical-check \
+  --require-source-bound
+```
+
+An explicit `--as-of` makes a build byte-reproducible. A default `--check` first verifies stored bytes and then reevaluates freshness at current UTC; stale evidence exits nonzero. Its top-level digest, state, and gap count always identify the byte-verified stored output, while the ephemeral current reassessment is reported separately under `current_*` fields and is not written. `--check --historical-check` verifies historical bytes only and reports `HISTORICAL_BYTES_VERIFIED`; it is not a current-readiness claim.
+
+The compiler-source check uses `git hash-object --no-filters` against the exact tree object. `.gitattributes` pins the six source-bound files to LF, while the verifier hashes executing working-tree bytes without normalization, so CRLF drift fails closed. The isolated loader resolves the exact local package and compiler files without adding the repository to `sys.path`, so untracked root modules cannot shadow standard-library dependencies. The JSON and Markdown outputs must also be distinct from the input and policy, including filesystem aliases.
+
+A persistent deterministic cross-process lock serializes writers for the normalized output pair. Both outputs are staged beside their destinations, flushed, and file-synced before replacement; caught publication failures restore the prior pair. Replacement remains sequential, so it is **not two-file crash-atomic**. Consumers must run `--check` before treating the pair as consistent.
+
+The artifact digest proves canonical-content consistency only. It does not prove authorship, signing identity, deployment, or runtime availability. Those claims remain at the signed-commit, protected-CI, receipt, and witnessed-runtime boundaries.
+
+The target policy records the dated conditional Killinchu exception but does not convert targets into observed state. Missing route/tab ownership, cost evidence, governed MCP authorization, reproduced model promotion, a generated API and typed-client contract, a shared design-system contract, or the complete Space deployment reconciliation chain remains explicit. More than five normal public Spaces plus the single dated exception is `DIVERGENT`, not green. An incomplete or unavailable Space census emits `null`, never a fabricated zero or false, for observation-dependent public-Space facts; during the active exception window, the observation-dependent authorized maximum remains `null` as well.
+
 ## Autonomic SRE control plane
 
 `.github/workflows/autonomic-sre.yml` runs a single-flight controller every five
@@ -180,8 +219,12 @@ gate's behavior; only a scheduled live receipt proves that cycle's SLO verdict.
 
 ```bash
 python -m unittest discover -s tests -v
-python -m py_compile app.py refresh_snapshot.py census/*.py autonomic/*.py
+python -m compileall -q app.py refresh_snapshot.py build_series_a_diligence.py census autonomic scripts
+python -m json.tool diligence/policy.json
+python -m json.tool schemas/series-a-diligence.schema.json
 ```
+
+The two `json.tool` commands verify document syntax only. Protected CI separately runs the dependency-free `validate_artifact` semantic contract and executes this repository's public Draft 2020-12 schema against the genuine source-bound artifact plus adversarial mutations. The schema executor independently recomputes the canonical artifact digest and reloads the exact local semantic validator, so redigested cross-field forgeries cannot earn a verified receipt. It also fails closed on unsupported keywords instead of silently ignoring them. This is an executable contract for the exact schema vocabulary used here, not a general-purpose implementation of every JSON Schema feature.
 
 The regression suite verifies latest-per-workflow aggregation, fail-closed asset-class errors, strict Hugging Face identity and Space-host validation, model artifact and contract evidence, revision-bound operational-payload integrity, `FAIL > UNKNOWN > PASS` precedence, receipt non-disclosure, and public-projection canaries.
 
@@ -189,7 +232,9 @@ The regression suite verifies latest-per-workflow aggregation, fail-closed asset
 
 ```text
 app.py                 schema-v2 HTTP service
+build_series_a_diligence.py  deterministic diligence JSON and Markdown compiler
 census/common.py        bounded HTTP, pagination, probes, and DNS primitives
+census/diligence.py    fail-closed diligence compiler, validator, and renderer
 census/github.py        dynamic GitHub organization census
 census/huggingface.py   models, datasets, Spaces, collections, and buckets
 census/sites.py         site headers plus SPF/DMARC evidence
@@ -199,6 +244,8 @@ refresh_snapshot.py    atomic internal/public snapshot writer
 static/index.html       responsive, searchable dashboard
 static/data.json        timestamped public fallback projection
 governance/policy.json  solo-maintainer fail-closed control policy
+diligence/policy.json  locked target roles and dated five-plus-one exception
+schemas/series-a-diligence.schema.json  public artifact structure contract
 autonomic/               fixed-origin state machine and recovery policy
 requirements-autonomic.lock hash-locked Hugging Face control closure
 tests/                  collector, governance, receipt, and leak contracts

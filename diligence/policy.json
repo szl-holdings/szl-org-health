@@ -1,0 +1,31 @@
+{
+  "schema": "szl.series-a-diligence-policy/v1",
+  "status": "TARGET",
+  "domain_roles": [
+    {
+      "domain": "a-11-oy.com",
+      "role": "PRODUCT",
+      "source": "SZL Four-Clone Recommended Upgrade Payload issued 2026-07-25"
+    },
+    {
+      "domain": "a11oy.net",
+      "role": "PROOF",
+      "source": "SZL Four-Clone Recommended Upgrade Payload issued 2026-07-25"
+    }
+  ],
+  "public_space_policy": {
+    "normal_limit": 5,
+    "normal_allowlist_state": "UNAVAILABLE",
+    "exceptions": [
+      {
+        "surface": "SZLHOLDINGS/killinchu",
+        "decision": "ACCEPTED_CONDITIONAL",
+        "decision_date": "2026-07-25",
+        "review_due": "2026-10-23",
+        "source_repository": "szl-holdings/a11oy",
+        "source_path": "docs/decisions/2026-07-25-killinchu-public-space-exception.md",
+        "source_blob_oid": "02fe8afa7a6063d3f6265882fa0b0dadace1e6c7"
+      }
+    ]
+  }
+}

@@ -445,6 +445,22 @@ class ReceiptContractTests(unittest.TestCase):
         )
         self.assertIn("receipt precondition failed", result["errors"])
 
+    def test_untrusted_governance_status_never_leaks(self) -> None:
+        canary = "PRIVATE-GOVERNANCE-STATUS-CANARY"
+        for status in (canary, {"private_value": canary}):
+            with self.subTest(status_type=type(status).__name__):
+                snapshot = json.loads(bounded_snapshot())
+                snapshot["governance"]["overall_status"] = status
+                result = receipt_for(json.dumps(snapshot).encode("utf-8"))
+
+                self.assertEqual(result["status"], "FAIL_CLOSED")
+                self.assertIn(
+                    "embedded governance overall_status is not PASS: INVALID",
+                    result["errors"],
+                )
+                self.assertIsNone(result["observations"]["governance_status"])
+                self.assertNotIn(canary, json.dumps(result, sort_keys=True))
+
     def test_json_round_trip_preserves_receipt_contract(self) -> None:
         result = receipt_for(bounded_snapshot())
         restored = json.loads(json.dumps(result, sort_keys=True))
