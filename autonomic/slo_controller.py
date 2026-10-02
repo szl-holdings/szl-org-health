@@ -219,6 +219,26 @@ def safe_error_kind(exc: BaseException) -> str:
     return type(exc).__name__.upper()[:64]
 
 
+def safe_error_origin(exc: BaseException) -> dict[str, Any] | None:
+    """Locate the controller callsite without recording messages, paths, or locals."""
+    origin = None
+    frame = exc.__traceback__
+    while frame is not None:
+        code = frame.tb_frame.f_code
+        if (
+            code.co_filename == __file__
+            and code.co_name != "require"
+            and not code.co_name.startswith("require_")
+        ):
+            origin = {
+                "module": "autonomic.slo_controller",
+                "function": code.co_name,
+                "line": frame.tb_lineno,
+            }
+        frame = frame.tb_next
+    return origin
+
+
 def write_json_atomic(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -1448,6 +1468,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "generated_at": utc_now(),
             "verdict": "FAILED",
             "error_kind": safe_error_kind(exc),
+            "error_origin": safe_error_origin(exc),
             "error": "controller failed closed",
             "authority": {
                 "service_restart": False,
