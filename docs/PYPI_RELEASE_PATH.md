@@ -35,6 +35,10 @@ fails on any drift between the manifest and live GitHub + PyPI state.
 
 `pull_request` and `push` runs execute step 3 only, so release readiness is visible on every PR.
 
+The Source, Repository, or Source Code URL must be a string equal to the canonical HTTPS
+repository root. The gate and live audit accept case differences and trailing slashes, but reject
+lookalike repository suffixes, extra paths, queries, fragments, and non-string values.
+
 ## GitHub controls (per publishing repository)
 
 - Environment `pypi` (or the declared name): custom deployment policy, release tags only (`v*`).
