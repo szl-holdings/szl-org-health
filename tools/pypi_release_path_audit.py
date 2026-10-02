@@ -206,7 +206,8 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
     urls = info.get("project_urls") or {}
     src = urls.get("Source") or urls.get("Repository") or urls.get("Source Code")
     expected = f"https://github.com/{org}/{repo}"
-    check(results, pkg, "pypi:source-url", "PASS" if src and src.rstrip("/").lower().startswith(expected.lower()) else "FAIL", str(src))
+    source_ok = isinstance(src, str) and src.rstrip("/").lower() == expected.lower()
+    check(results, pkg, "pypi:source-url", "PASS" if source_ok else "FAIL", str(src))
     st, simple = http.get(f"https://pypi.org/simple/{norm(pkg)}/", accept="application/vnd.pypi.simple.v1+json")
     if st != 200:
         check(results, pkg, "pypi:provenance", "UNKNOWN", f"simple API HTTP {st}")
