@@ -73,7 +73,7 @@ def release_tag_family(m: dict) -> str | None:
 
 
 def tag_ruleset_result(http: Http, org: str, repo: str, m: dict, rulesets: object) -> tuple[str, str]:
-    """Verify an active ruleset covers the whole release-tag family and its controls."""
+    """Verify the combined active rules protect the whole release-tag family."""
     family = release_tag_family(m)
     if family is None:
         return "UNKNOWN", f"unsupported manifest tag_pattern={m.get('tag_pattern')!r}"
@@ -81,33 +81,42 @@ def tag_ruleset_result(http: Http, org: str, repo: str, m: dict, rulesets: objec
         return "UNKNOWN", "tag ruleset list response malformed"
     if any(not isinstance(r, dict) for r in rulesets):
         return "UNKNOWN", "tag ruleset list contains a malformed entry"
-    active = [r for r in rulesets if isinstance(r, dict) and r.get("enforcement") == "active"]
+    malformed_summaries = sum(r.get("enforcement") not in ("active", "disabled", "evaluate") for r in rulesets)
+    active = [r for r in rulesets if r.get("enforcement") == "active"]
     if not active:
+        if malformed_summaries:
+            return "UNKNOWN", f"{malformed_summaries} tag ruleset summaries have missing or invalid enforcement"
         if len(rulesets) >= 100:
             return "UNKNOWN", f"first 100 tag rulesets contain no active match for {family}; more pages may exist"
         return "FAIL", f"no active tag ruleset for {family} (listed={len(rulesets)})"
-    failures, unknowns = [], []
+    failures = []
+    safe_rules: set[str] = set()
+    safe_sources = []
+    # None means an unreadable set could contain any of the required protections.
+    uncertain_rules: list[tuple[str, set[str] | None]] = []
+    if malformed_summaries:
+        uncertain_rules.append((f"{malformed_summaries} tag ruleset summaries have missing or invalid enforcement", None))
     for summary in active:
         ruleset_id = summary.get("id")
         name = summary.get("name", ruleset_id)
         if summary.get("target") != "tag":
-            unknowns.append(f"{name}: tag ruleset list contains an unexpected target")
+            uncertain_rules.append((f"{name}: tag ruleset list contains an unexpected target", None))
             continue
         if not isinstance(ruleset_id, int) or ruleset_id <= 0:
-            unknowns.append(f"{name}: missing ruleset id")
+            uncertain_rules.append((f"{name}: missing ruleset id", None))
             continue
         endpoint = f"{GH_API}/repos/{org}/{repo}/rulesets/{ruleset_id}?includes_parents=true"
         st, detail = http.get(endpoint)
         if st != 200:
-            unknowns.append(f"{name} ({ruleset_id}): detail HTTP {st}; access or existence unverified")
+            uncertain_rules.append((f"{name} ({ruleset_id}): detail HTTP {st}; access or existence unverified", None))
             continue
         if not isinstance(detail, dict) or detail.get("id") != ruleset_id or detail.get("target") != "tag" or detail.get("enforcement") != "active":
-            unknowns.append(f"{name} ({ruleset_id}): detail malformed or inconsistent")
+            uncertain_rules.append((f"{name} ({ruleset_id}): detail malformed or inconsistent", None))
             continue
         conditions = detail.get("conditions")
         ref_name = conditions.get("ref_name") if isinstance(conditions, dict) else None
         if not isinstance(ref_name, dict) or not isinstance(ref_name.get("include"), list) or not isinstance(ref_name.get("exclude"), list):
-            unknowns.append(f"{name} ({ruleset_id}): ref conditions unavailable")
+            uncertain_rules.append((f"{name} ({ruleset_id}): ref conditions unavailable", None))
             continue
         includes, excludes = ref_name["include"], ref_name["exclude"]
         # These patterns demonstrably cover every release tag, including future versions.
@@ -115,19 +124,16 @@ def tag_ruleset_result(http: Http, org: str, repo: str, m: dict, rulesets: objec
             failures.append(f"{name} ({ruleset_id}): include={includes!r} does not cover {family}")
             continue
         if excludes:
-            unknowns.append(f"{name} ({ruleset_id}): exclude={excludes!r}; family coverage unverified")
+            uncertain_rules.append((f"{name} ({ruleset_id}): exclude={excludes!r}; family coverage unverified", None))
             continue
         rules = detail.get("rules")
         if not isinstance(rules, list) or not all(isinstance(r, dict) and isinstance(r.get("type"), str) for r in rules):
-            unknowns.append(f"{name} ({ruleset_id}): rules unavailable or malformed")
+            uncertain_rules.append((f"{name} ({ruleset_id}): rules unavailable or malformed", None))
             continue
-        missing = REQUIRED_TAG_RULES - {r["type"] for r in rules}
-        if missing:
-            failures.append(f"{name} ({ruleset_id}): missing rules {sorted(missing)} for {family}")
-            continue
+        rule_types = REQUIRED_TAG_RULES & {r["type"] for r in rules}
         bypass = detail.get("bypass_actors")
         if not isinstance(bypass, list):
-            unknowns.append(f"{name} ({ruleset_id}): bypass actors not visible; admin-only control unverified")
+            uncertain_rules.append((f"{name} ({ruleset_id}): bypass actors not visible; admin-only control unverified", rule_types))
             continue
         if any(
             not isinstance(actor, dict)
@@ -139,12 +145,20 @@ def tag_ruleset_result(http: Http, org: str, repo: str, m: dict, rulesets: objec
         ):
             failures.append(f"{name} ({ruleset_id}): non-admin bypass actor present")
             continue
-        return "PASS", f"{name} ({ruleset_id}) covers {family}; rules={sorted(REQUIRED_TAG_RULES)}; bypass=admin-only"
+        safe_rules.update(rule_types)
+        safe_sources.append(f"{name} ({ruleset_id}): {sorted(rule_types)}")
+    if safe_rules == REQUIRED_TAG_RULES:
+        return "PASS", f"{family} protected by admin-only rulesets: {'; '.join(safe_sources)}"
+    missing = REQUIRED_TAG_RULES - safe_rules
+    unknowns = [reason for reason, possible in uncertain_rules if possible is None or possible & missing]
+    detail = f"missing verified admin-only rules {sorted(missing)} for {family}"
+    if safe_sources:
+        detail += f"; verified={'; '.join(safe_sources)}"
     if unknowns:
-        return "UNKNOWN", "; ".join(unknowns + failures)
+        return "UNKNOWN", "; ".join([detail] + unknowns + failures)
     if len(rulesets) >= 100:
-        return "UNKNOWN", f"first 100 tag rulesets contain no verified protection for {family}; more pages may exist; " + "; ".join(failures)
-    return "FAIL", "; ".join(failures)
+        return "UNKNOWN", f"{detail}; first 100 tag rulesets may omit further pages; " + "; ".join(failures)
+    return "FAIL", "; ".join([detail] + failures)
 
 
 class Http:
@@ -275,14 +289,17 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
         st, envs = http.get(f"{GH_API}/repos/{org}/{repo}/environments")
         repo_cache[repo]["environments_status"] = st
         env_rows = envs.get("environments") if isinstance(envs, dict) else None
+        repo_cache[repo]["environments_total_count"] = envs.get("total_count") if isinstance(envs, dict) else None
         repo_cache[repo]["environments"] = {e["name"]: e for e in env_rows} if (
             st == 200 and isinstance(env_rows, list)
             and all(isinstance(e, dict) and isinstance(e.get("name"), str) for e in env_rows)
+            and len({e["name"] for e in env_rows}) == len(env_rows)
         ) else None
         for env_name, e in (repo_cache[repo]["environments"] or {}).items():
             st3, pol = http.get(f"{GH_API}/repos/{org}/{repo}/environments/{env_name}/deployment-branch-policies")
             e["_policies_status"] = st3
             pol_rows = pol.get("branch_policies") if isinstance(pol, dict) else None
+            e["_policies_total_count"] = pol.get("total_count") if isinstance(pol, dict) else None
             e["_policies"] = [(p["name"], p.get("type")) for p in pol_rows] if (
                 st3 == 200 and isinstance(pol_rows, list)
                 and all(isinstance(p, dict) and isinstance(p.get("name"), str) for p in pol_rows)
@@ -303,7 +320,11 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
         check(results, pkg, "github:environment", "UNKNOWN",
               f"environments list HTTP {rc['environments_status']}; access or existence unverified")
     elif env_name not in rc["environments"]:
-        check(results, pkg, "github:environment", "FAIL", f"environment {env_name!r} missing")
+        total = rc["environments_total_count"]
+        listed = len(rc["environments"])
+        complete = (type(total) is int and total == listed) or (total is None and listed < 30)
+        check(results, pkg, "github:environment", "FAIL" if complete else "UNKNOWN",
+              f"environment {env_name!r} not in first {listed} returned; total_count={total!r}")
     else:
         e = rc["environments"][env_name]
         dbp = e.get("deployment_branch_policy")
@@ -312,9 +333,19 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
         if pols is None:
             check(results, pkg, "github:environment-tag-only", "UNKNOWN",
                   f"{env_name} deployment policies HTTP {e.get('_policies_status')}; access or existence unverified")
+        elif type(e.get("_policies_total_count")) is not int or e["_policies_total_count"] != len(pols):
+            check(results, pkg, "github:environment-tag-only", "UNKNOWN",
+                  f"{env_name} deployment policies incomplete: returned={len(pols)} total_count={e.get('_policies_total_count')!r}")
         else:
-            tag_only = bool(dbp.get("custom_branch_policies")) and bool(pols) and all(t == "tag" for _, t in pols)
-            check(results, pkg, "github:environment-tag-only", "PASS" if tag_only else "FAIL", f"policies={pols}")
+            family = release_tag_family(m)
+            if family is None:
+                check(results, pkg, "github:environment-tag-only", "UNKNOWN", "release tag pattern unrecognized")
+            else:
+                tag_pattern = family.removeprefix("refs/tags/")
+                tag_only = bool(dbp.get("custom_branch_policies")) and bool(pols) and all(t == "tag" for _, t in pols)
+                covers_releases = any(t == "tag" and name in (tag_pattern, family) for name, t in pols)
+                check(results, pkg, "github:environment-tag-only", "PASS" if tag_only and covers_releases else "FAIL",
+                      f"policies={pols}; required release tags={tag_pattern}")
     if rc["tag_rulesets_status"] != 200:
         check(results, pkg, "github:tag-ruleset", "UNKNOWN",
               f"tag ruleset inventory HTTP {rc['tag_rulesets_status']}; access or existence unverified")
@@ -437,11 +468,18 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
     if st != 200 or not isinstance(ref, dict):
         check(results, pkg, "github:release-tag", "UNKNOWN", f"tag lookup HTTP {st}")
         return
-    obj = ref["object"]
+    obj = ref.get("object")
+    if not isinstance(obj, dict) or not isinstance(obj.get("sha"), str) or obj.get("type") not in ("commit", "tag"):
+        check(results, pkg, "github:release-tag", "UNKNOWN", f"tag {tag} lookup HTTP 200 with malformed object")
+        return
     commit = obj["sha"]
     if obj["type"] == "tag":
         st, tobj = http.get(f"{GH_API}/repos/{org}/{repo}/git/tags/{obj['sha']}")
-        commit = (tobj or {}).get("object", {}).get("sha", commit)
+        target = tobj.get("object") if isinstance(tobj, dict) else None
+        if st != 200 or not isinstance(target, dict) or target.get("type") != "commit" or not isinstance(target.get("sha"), str):
+            check(results, pkg, "github:release-tag", "UNKNOWN", f"tag {tag} target HTTP {st} with missing commit object")
+            return
+        commit = target["sha"]
     exc = m.get("tag_exception") or {}
     if commit == digest:
         check(results, pkg, "github:release-tag", "PASS", f"{tag} -> {commit[:12]} == attested")
