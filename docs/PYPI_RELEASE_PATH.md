@@ -74,6 +74,6 @@ lookalike repository suffixes, extra paths, queries, fragments, and non-string v
 
 ## Known holds (owner decisions)
 
-See `reason` fields in the manifest: `szl-forge-inference` and `szl-second-brain` (layout),
+See `reason` fields in the manifest: `szl-forge-inference` (layout),
 `szl-brand` (assets, CC-BY-4.0), `gdw-frontier` and `defensive-control-plane` (private sources),
 `nexus-dynamics` (lab binding). Each needs a decision, not a workaround.
