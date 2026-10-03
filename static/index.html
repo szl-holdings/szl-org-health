@@ -84,7 +84,7 @@
     </div>
   </header>
   <p class="subtitle">A revision-aware operating view of GitHub, Hugging Face, production sites, and DNS. Every green state is tied to an observed contract; visibility or a running process alone is not proof of operation.</p>
-  <div class="truthbar"><span class="dot ok"></span><div><strong>Evidence-first status.</strong> UNKNOWN means the source could not be verified. REACHABLE UNVERIFIED means a surface answered but did not expose both a health contract and an immutable source revision.</div></div>
+  <div class="truthbar"><span class="dot ok"></span><div><strong>Evidence-first status.</strong> Hub stage, reachability, source binding, scoped app readiness, and production authorization are separate readings. A green HTTP status alone does not authorize production. UNKNOWN means the evidence could not be verified.</div></div>
   <div id="content"><div class="loading">Collecting bounded live evidence from the estate…</div></div>
   <div class="foot">szl-org-health schema v2 | source APIs queried directly | 60-second cache | <a href="/api/health">raw JSON evidence</a></div>
 </div>
@@ -99,7 +99,8 @@ const dot=cls=>`<span class="dot ${cls}"></span>`;
 const known=n=>n==null?'UNKNOWN':n;
 function ciClass(value){if(value==='success'||value==='archived')return'ok';if(value==='failure')return'bad';if(value==='pending')return'warn';return'unk'}
 function stageClass(value){if(value==='RUNNING')return'ok';if(value==='unknown'||value==null)return'unk';return'warn'}
-function operationalClass(value){if(value==='OPERATIONAL_SOURCE_BOUND'||value==='STATIC_REACHABLE')return'ok';if(value==='RUNTIME_HEALTHY_UNBOUND'||value==='REACHABLE_UNVERIFIED')return'warn';if(value==='DEGRADED')return'bad';return'unk'}
+function operationalClass(value){if(value==='OPERATIONAL_SOURCE_BOUND'||value==='STATIC_REACHABLE')return'info';if(value==='RUNTIME_HEALTHY_UNBOUND'||value==='REACHABLE_UNVERIFIED')return'warn';if(value==='DEGRADED')return'bad';return'unk'}
+function readinessClass(value){if(value==='NOT_READY'||value==='PRODUCTION_HOLD'||value==='PLACEHOLDER'||value==='SOURCE_CONFLICT')return'bad';if(value==='TRANSITIONING'||value==='SCOPED_READY_SOURCE_BOUND'||value==='SCOPED_READY_SOURCE_UNVERIFIED'||value==='SCOPED_READY_UNVERIFIED'||value==='CONTENT_PRESENT_UNVERIFIED')return'warn';return'unk'}
 function sourceData(S,key){return S[key]&&S[key].ok?S[key].data:null}
 function hardwareLabel(hardware){
   if(hardware==null)return'';
@@ -109,12 +110,16 @@ function hardwareLabel(hardware){
   return current||requested||'hardware unknown';
 }
 function spaceChips(space){
-  let result=chip(space.operational_state||'UNKNOWN',operationalClass(space.operational_state));
+  let result=chip(`runtime ${space.operational_state||'UNKNOWN'}`,operationalClass(space.operational_state));
   if(space.sdk==='static')result+=chip('static surface','info');
   else{
     result+=chip(space.healthz===200?'healthz 200':`healthz ${known(space.healthz)}`,space.healthz===200?'ok':'warn');
     result+=chip(space.source_binding_state==='OBSERVED'?`source ${String(space.source_revision||'').slice(0,10)}`:'source unbound',space.source_binding_state==='OBSERVED'?'ok':'warn');
   }
+  result+=chip(`readiness ${space.readiness_state||'NOT_EVALUATED'}`,readinessClass(space.readiness_state));
+  if(space.readiness_route&&space.readiness_http)result+=chip(`${space.readiness_route} ${space.readiness_http}`,space.readiness_http===200?'info':'bad');
+  if(space.production_ready_declared===false)result+=chip('production hold (declared)','bad');
+  if(space.declared_head_match==='DRIFT')result+=chip('source drift (declared)','bad');
   return result+chip(space.card_state||'card unknown',space.card_state==='COMPLETE'?'ok':'warn');
 }
 function metric(label,value,cls=''){return `<div class="metric ${cls}"><div class="label">${esc(label)}</div><div class="value">${esc(known(value))}</div></div>`}

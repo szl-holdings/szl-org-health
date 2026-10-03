@@ -10,6 +10,7 @@ COPY census/github.py /app/census/github.py
 COPY census/github_inventory.py /app/census/github_inventory.py
 COPY census/governance.py /app/census/governance.py
 COPY census/huggingface.py /app/census/huggingface.py
+COPY census/space_readiness.py /app/census/space_readiness.py
 COPY census/report.py /app/census/report.py
 COPY census/sites.py /app/census/sites.py
 COPY governance/policy.json /app/governance/policy.json
