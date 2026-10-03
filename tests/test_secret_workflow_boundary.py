@@ -98,6 +98,12 @@ def _canonical_triggers(
 
 
 class SecretWorkflowBoundaryTests(unittest.TestCase):
+    def test_census_never_falls_back_to_hf_write_token(self) -> None:
+        workflow = (WORKFLOWS / "scheduled-estate-census.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("HF_WRITE_TOKEN", workflow)
+
     def test_census_reader_has_exact_read_only_observation_permissions(self) -> None:
         workflow = (WORKFLOWS / "scheduled-estate-census.yml").read_text(
             encoding="utf-8"

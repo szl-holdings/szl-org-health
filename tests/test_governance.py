@@ -114,6 +114,28 @@ def by_id(result: dict) -> dict[str, dict]:
 
 
 class GovernanceEvaluationTests(unittest.TestCase):
+    def test_admin_repository_reconciliation_does_not_complete_collections(self) -> None:
+        report = passing_report()
+        hf_data = report["sources"]["huggingface"]["data"]
+        hf_data["authentication"]["organization_admin_role_observed"] = True
+        hf_data["repository_export"] = {
+            "schema": "szl.hf-repository-export/v1",
+            "source": "ADMIN_SETTINGS_REPOSITORIES_API",
+            "status": "RECONCILED",
+            "repository_count": 3,
+            "type_counts": {"model": 1, "dataset": 1, "space": 1, "kernel": 0, "bucket": 0},
+            "typed_id_sha256": "a" * 64,
+            "collections_scope": "UNKNOWN",
+        }
+
+        result = evaluate_report(report)
+        inventory = by_id(result)["HF-INVENTORY"]
+
+        self.assertEqual(inventory["status"], "UNKNOWN")
+        self.assertEqual(inventory["evidence"]["repository_export"]["status"], "RECONCILED")
+        self.assertEqual(inventory["evidence"]["repository_export"]["collections_scope"], "UNKNOWN")
+        self.assertEqual(result["overall_status"], "UNKNOWN")
+
     def test_clean_bounded_evidence_remains_unknown_without_completeness_claim(
         self,
     ) -> None:

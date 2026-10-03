@@ -41,11 +41,14 @@ SAFE_AUTH_KEYS = {
     "target_organization_match_observed",
     "organization_membership_observed",
     "organization_read_role_observed",
+    "organization_admin_role_observed",
     "credential_class",
     "fine_grained_metadata_observed",
     "org_scope_candidate_observed",
     "unknown_grants_observed",
     "global_permissions_state",
+    "organization_complete_reconciliation_observed",
+    "organization_complete_reconciliation_method",
     "inventory_scope",
     "probe_state",
 }
@@ -236,6 +239,7 @@ class HuggingFaceAuthenticationTests(unittest.TestCase):
         self.assertIs(result["principal_id_observed"], True)
         self.assertEqual(result["inventory_scope"], HF_SCOPE_IDENTITY_AND_ORG)
         self.assertEqual(result["probe_state"], "AUTHENTICATED")
+        self.assertIs(result["organization_admin_role_observed"], False)
         self.assert_safe_projection(result)
 
     def test_org_schema_requires_type_id_name_and_role_in_org(self) -> None:

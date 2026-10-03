@@ -20,6 +20,17 @@ HF_SCOPE_UNAVAILABLE = "UNAVAILABLE"
 HF_SCOPE_IDENTITY_ONLY = "IDENTITY_ONLY"
 HF_SCOPE_IDENTITY_AND_ORG = "IDENTITY_AND_ORG_ROLE_OBSERVED"
 HF_SCOPE_AUTHENTICATED_BOUNDED = "AUTHENTICATED_BOUNDED"
+HF_REPOSITORY_EXPORT_SCHEMA = "szl.hf-repository-export/v1"
+HF_REPOSITORY_EXPORT_PATH = (
+    f"/api/organizations/{HF_ORG}/settings/repositories"
+)
+HF_REPOSITORY_TYPES = {
+    "model": "models",
+    "dataset": "datasets",
+    "space": "spaces",
+    "kernel": "kernels",
+    "bucket": "buckets",
+}
 HF_SPACE_HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 HF_ASSET_KINDS = (
     "models",
@@ -108,11 +119,14 @@ def collect_hf_authentication() -> dict[str, Any]:
         "target_organization_match_observed": False,
         "organization_membership_observed": False,
         "organization_read_role_observed": False,
+        "organization_admin_role_observed": False,
         "credential_class": "UNKNOWN",
         "fine_grained_metadata_observed": False,
         "org_scope_candidate_observed": False,
         "unknown_grants_observed": False,
         "global_permissions_state": "UNAVAILABLE",
+        "organization_complete_reconciliation_observed": False,
+        "organization_complete_reconciliation_method": "UNAVAILABLE",
         "inventory_scope": HF_SCOPE_UNAVAILABLE,
         "probe_state": "UNAVAILABLE",
     }
@@ -195,6 +209,7 @@ def collect_hf_authentication() -> dict[str, Any]:
     organization_read_role_observed = isinstance(
         organization_role, str
     ) and organization_role in {"read", "contributor", "write", "admin"}
+    organization_admin_role_observed = organization_role == "admin"
     fine_grained = (
         access_token.get("fineGrained")
         if isinstance(access_token.get("fineGrained"), dict)
@@ -268,6 +283,7 @@ def collect_hf_authentication() -> dict[str, Any]:
         "target_organization_match_observed": target_organization_match_observed,
         "organization_membership_observed": target_organization_match_observed,
         "organization_read_role_observed": organization_read_role_observed,
+        "organization_admin_role_observed": organization_admin_role_observed,
         "credential_class": credential_class,
         "fine_grained_metadata_observed": fine_grained_metadata_observed,
         "org_scope_candidate_observed": org_scope_candidate_observed,
@@ -291,6 +307,10 @@ def finalize_hf_authentication(
 ) -> dict[str, Any]:
     """Canonicalize scope, promoting only after every asset endpoint completes."""
     projected = dict(authentication)
+    # Repository export is narrower than all-asset organization visibility.
+    # In particular, the settings endpoint has no collection inventory.
+    projected["organization_complete_reconciliation_observed"] = False
+    projected["organization_complete_reconciliation_method"] = "UNAVAILABLE"
     all_assets_complete = all(
         isinstance(assets.get(name), dict) and assets[name].get("ok") is True
         for name in HF_ASSET_KINDS
@@ -325,6 +345,101 @@ def finalize_hf_authentication(
     else:
         projected["inventory_scope"] = HF_SCOPE_IDENTITY_AND_ORG
     return projected
+
+
+def _typed_repository_ids(
+    rows: list[dict[str, Any]] | None,
+) -> dict[str, set[str]] | None:
+    """Accept only unique, typed IDs within this exact organization namespace."""
+    if not isinstance(rows, list):
+        return None
+    by_type = {kind: set() for kind in HF_REPOSITORY_TYPES}
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        repo_type = row.get("type")
+        repo_id = row.get("id")
+        if (
+            not isinstance(repo_type, str)
+            or repo_type not in by_type
+            or not isinstance(repo_id, str)
+            or repo_id.count("/") != 1
+            or repo_id.split("/", 1)[0].casefold() != HF_ORG.casefold()
+            or not repo_id.split("/", 1)[1]
+            or any(char.isspace() or ord(char) < 0x20 for char in repo_id)
+            or repo_id in by_type[repo_type]
+        ):
+            return None
+        by_type[repo_type].add(repo_id)
+    return by_type
+
+
+def reconcile_hf_repository_export(
+    authentication: dict[str, Any],
+    before: tuple[list[dict[str, Any]] | None, str | None],
+    after: tuple[list[dict[str, Any]] | None, str | None],
+    assets: dict[str, Any],
+) -> dict[str, Any]:
+    """Prove repository IDs only; collections and non-repository assets remain unknown."""
+    evidence: dict[str, Any] = {
+        "schema": HF_REPOSITORY_EXPORT_SCHEMA,
+        "source": "ADMIN_SETTINGS_REPOSITORIES_API",
+        "status": "UNAVAILABLE",
+        "repository_count": None,
+        "type_counts": None,
+        "typed_id_sha256": None,
+        "collections_scope": "UNKNOWN",
+    }
+    if not (
+        authentication.get("schema") == HF_AUTH_SCHEMA
+        and authentication.get("identity_authenticated") is True
+        and authentication.get("target_organization_match_observed") is True
+        and authentication.get("organization_admin_role_observed") is True
+        and authentication.get("probe_state") == "AUTHENTICATED"
+    ):
+        return {**evidence, "status": "ADMIN_AUTHORITY_UNPROVEN"}
+    if before[1] is not None or after[1] is not None:
+        return {**evidence, "status": "EXPORT_REQUEST_FAILED"}
+    first = _typed_repository_ids(before[0])
+    second = _typed_repository_ids(after[0])
+    if first is None or second is None:
+        return {**evidence, "status": "EXPORT_INVALID_RESPONSE"}
+    if first != second:
+        return {**evidence, "status": "EXPORT_DRIFT"}
+    for repo_type, asset_kind in HF_REPOSITORY_TYPES.items():
+        asset = assets.get(asset_kind)
+        items = asset.get("items") if isinstance(asset, dict) else None
+        if (
+            not isinstance(asset, dict)
+            or asset.get("ok") is not True
+            or not isinstance(items, list)
+            or not isinstance(asset.get("count"), int)
+            or isinstance(asset.get("count"), bool)
+            or asset["count"] != len(items)
+        ):
+            return {**evidence, "status": "DETAIL_LIST_INCOMPLETE"}
+        detail_ids = _typed_repository_ids(
+            [{"type": repo_type, "id": item.get("id")}
+             for item in items if isinstance(item, dict)]
+        )
+        if detail_ids is None or len(items) != len(detail_ids[repo_type]):
+            return {**evidence, "status": "DETAIL_LIST_INVALID"}
+        if detail_ids[repo_type] != first[repo_type]:
+            return {**evidence, "status": "DETAIL_LIST_MISMATCH"}
+    typed_ids = sorted(
+        f"{repo_type}:{repo_id}"
+        for repo_type, repo_ids in first.items()
+        for repo_id in repo_ids
+    )
+    return {
+        **evidence,
+        "status": "RECONCILED",
+        "repository_count": len(typed_ids),
+        "type_counts": {kind: len(first[kind]) for kind in HF_REPOSITORY_TYPES},
+        "typed_id_sha256": hashlib.sha256(
+            "\n".join(typed_ids).encode("utf-8")
+        ).hexdigest(),
+    }
 
 
 def hf_paginate(path: str, timeout: float = 30.0, retries: int = 2):
@@ -1786,14 +1901,22 @@ def _full_collection(item: dict[str, Any]) -> tuple[dict[str, Any], set[str]]:
 
 
 def collect_huggingface() -> dict[str, Any]:
+    authentication = collect_hf_authentication()
+    admin_export_allowed = (
+        authentication.get("identity_authenticated") is True
+        and authentication.get("organization_admin_role_observed") is True
+    )
+    export_before = (
+        hf_paginate(HF_REPOSITORY_EXPORT_PATH)
+        if admin_export_allowed
+        else (None, "admin authority unproven")
+    )
     paths = _paths()
-    with cf.ThreadPoolExecutor(max_workers=7) as executor:
-        authentication_future = executor.submit(collect_hf_authentication)
+    with cf.ThreadPoolExecutor(max_workers=6) as executor:
         futures = {
             name: executor.submit(hf_paginate, path) for name, path in paths.items()
         }
         raw = {name: future.result() for name, future in futures.items()}
-        authentication = authentication_future.result()
 
     models_raw, models_error = raw["models"]
     datasets_raw, datasets_error = raw["datasets"]
@@ -1867,6 +1990,14 @@ def collect_huggingface() -> dict[str, Any]:
         "collections": asset_result(collections, collections_error),
         "buckets": asset_result(buckets, buckets_error),
     }
+    export_after = (
+        hf_paginate(HF_REPOSITORY_EXPORT_PATH)
+        if admin_export_allowed and export_before[1] is None
+        else (None, "first export unavailable")
+    )
+    repository_export = reconcile_hf_repository_export(
+        authentication, export_before, export_after, assets
+    )
     authentication = finalize_hf_authentication(authentication, assets)
 
     collection_members: dict[str, set[str]] = {
@@ -1908,6 +2039,7 @@ def collect_huggingface() -> dict[str, Any]:
         "organization": HF_ORG,
         "collection_bucket_references": collection_bucket_references,
         "authentication": authentication,
+        "repository_export": repository_export,
         "assets": assets,
         "collection_coverage": collection_coverage,
         "summary": {
