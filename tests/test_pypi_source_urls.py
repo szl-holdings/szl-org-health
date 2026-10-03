@@ -118,12 +118,15 @@ class PyPISourceUrlTests(unittest.TestCase):
             "gate_sha256": audit.sha256(b"canonical fixture gate\n"),
         }
         cache = {REPO: {
-            "workflows": [], "token_hits": [],
+            "workflows": [], "workflows_status": 200,
+            "token_hits": [], "workflow_errors": [],
+            "environments_status": 200, "environments_total_count": 1,
             "environments": {"pypi": {
-                "deployment_branch_policy": {"custom_branch_policies": True},
+                "deployment_branch_policy": {"custom_branch_policies": True, "protected_branches": False},
                 "_policies": [("v*", "tag")],
+                "_policies_status": 200, "_policies_total_count": 1,
             }},
-            "tag_rulesets": [{"enforcement": "active", "name": "release-tags"}],
+            "tag_rulesets_status": 200, "tag_rulesets": [],
         }}
         results = []
         with contextlib.redirect_stdout(io.StringIO()):
