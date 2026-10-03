@@ -110,6 +110,51 @@ def _safe_governance_status(value: Any) -> str | None:
     return value if value in GOVERNANCE_STATUSES else None
 
 
+def _github_alert_endpoint_projection(value: Any) -> dict[str, dict[str, Any]]:
+    """Keep only coherent, fixed diagnostic fields; never alert content/counts."""
+    source = value if isinstance(value, Mapping) else {}
+    projected = {}
+    non_http_reasons = {
+        "PAGINATION_INCOMPLETE", "INVALID_RESPONSE", "RESPONSE_LIMIT",
+        "TRANSPORT_ERROR", "REQUEST_FAILED",
+    }
+    unavailable_reasons = {
+        401: "HTTP_UNAUTHORIZED", 403: "HTTP_DENIED_OR_RESTRICTED",
+        404: "HTTP_NOT_FOUND_OR_HIDDEN",
+    }
+    for name in ("code", "secret", "dependabot"):
+        raw = source.get(name)
+        result = {
+            "state": "UNKNOWN", "collection_complete": False,
+            "http_failure_status": None,
+            "reason": "NOT_OBSERVED" if raw is None else "INVALID_RESPONSE",
+        }
+        if isinstance(raw, Mapping):
+            state, reason = raw.get("state"), raw.get("reason")
+            complete, status = raw.get("collection_complete"), raw.get("http_failure_status")
+            valid = False
+            if complete is True and state == "READ_COMPLETE" and status is None:
+                valid = reason == "NONE"
+            elif complete is False and isinstance(status, int) and not isinstance(status, bool):
+                if status in unavailable_reasons:
+                    valid = state == "UNAVAILABLE" and reason == unavailable_reasons[status]
+                elif 400 <= status <= 599:
+                    expected = (
+                        "HTTP_RATE_LIMITED" if status == 429 else
+                        "HTTP_PROVIDER_ERROR" if status >= 500 else "HTTP_FAILURE"
+                    )
+                    valid = state == "UNKNOWN" and reason == expected
+            elif complete is False and status is None and state == "UNKNOWN":
+                valid = isinstance(reason, str) and reason in non_http_reasons
+            if valid:
+                result = {
+                    "state": state, "collection_complete": complete,
+                    "http_failure_status": status, "reason": reason,
+                }
+        projected[name] = result
+    return projected
+
+
 def _governance_status_label(value: Any) -> str:
     """Describe a status without reflecting untrusted snapshot content."""
     return _safe_governance_status(value) or ("MISSING" if value is None else "INVALID")
@@ -756,6 +801,10 @@ def build_receipt(
             ),
             "huggingface_authentication": huggingface_authentication,
             "github_discovery": discovery_projection,
+            "github_alert_endpoints": _github_alert_endpoint_projection(
+                (github_data.get("alerts") or {}).get("endpoint_reads")
+                if isinstance(github_data.get("alerts"), dict) else None
+            ),
             "github_repository_total": github_total
             if isinstance(github_total, int)
             and not isinstance(github_total, bool)

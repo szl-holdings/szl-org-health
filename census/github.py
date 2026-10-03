@@ -4,6 +4,7 @@ from __future__ import annotations
 import concurrent.futures as cf
 import json
 import math
+import re
 import urllib.parse
 from typing import Any
 
@@ -766,6 +767,57 @@ def _all_alerts(
     )
 
 
+def _alert_endpoint_read_observation(items: Any, error: Any) -> dict[str, Any]:
+    """Describe collection readability without alert counts or provider text.
+
+    A failed status may come from any page. It is not evidence that the initial
+    endpoint was unreadable, and an empty successful list is complete evidence.
+    """
+    state = "UNKNOWN"
+    reason = "INVALID_RESPONSE" if error is None else "REQUEST_FAILED"
+    status = None
+    complete = (
+        error is None
+        and isinstance(items, list)
+        and all(isinstance(item, dict) for item in items)
+    )
+    if complete:
+        state, reason = "READ_COMPLETE", "NONE"
+    elif isinstance(error, str):
+        http_error = re.fullmatch(r"http([45][0-9]{2})", error)
+        if http_error:
+            status = int(http_error[1])
+            if status in {401, 403, 404}:
+                state = "UNAVAILABLE"
+                reason = {
+                    401: "HTTP_UNAUTHORIZED",
+                    403: "HTTP_DENIED_OR_RESTRICTED",
+                    404: "HTTP_NOT_FOUND_OR_HIDDEN",
+                }[status]
+            elif status == 429:
+                reason = "HTTP_RATE_LIMITED"
+            else:
+                reason = "HTTP_PROVIDER_ERROR" if status >= 500 else "HTTP_FAILURE"
+        elif error.startswith(("pagination ", "invalid pagination URL:", "Link ")):
+            reason = "PAGINATION_INCOMPLETE"
+        elif error.startswith("invalid-json:") or error in {
+            "unexpected non-list API response", "API page contains a non-object entry",
+        }:
+            reason = "INVALID_RESPONSE"
+        elif error in {"response-body-limit-exceeded", "invalid-content-length"}:
+            reason = "RESPONSE_LIMIT"
+        elif error.startswith("URLError:") or error in {
+            "TimeoutError", "ConnectionError", "ConnectionResetError",
+        }:
+            reason = "TRANSPORT_ERROR"
+    return {
+        "state": state,
+        "collection_complete": complete,
+        "http_failure_status": status,
+        "reason": reason,
+    }
+
+
 def collect_github(
     *,
     request_timeout: float = 20.0,
@@ -884,6 +936,12 @@ def collect_github(
                 name: error for name, error in alert_errors.items() if error is not None
             },
             "page_cap": MAX_PAGES,
+            "endpoint_reads": {
+                name: _alert_endpoint_read_observation(
+                    alerts.get(name), alert_errors.get(name)
+                )
+                for name in alert_paths
+            },
         },
         "open_prs": (prs or {}).get("total_count") if isinstance(prs, dict) else None,
         "open_issues": (
