@@ -767,6 +767,23 @@ def _all_alerts(
     )
 
 
+def _pagination_diagnostic(error: str) -> str:
+    """Classify pagination failures without exposing URLs, Link fields, or items."""
+    if re.fullmatch(r"pagination exceeded [0-9]+ pages", error):
+        return "PAGE_CAP_EXCEEDED"
+    if re.fullmatch(r"pagination exceeded [0-9]+ items", error):
+        return "ITEM_CAP_EXCEEDED"
+    return {
+        "pagination next origin changed": "NEXT_ORIGIN_CHANGED",
+        "pagination next path changed": "NEXT_PATH_CHANGED",
+        "pagination cycle detected": "CYCLE_DETECTED",
+    }.get(
+        error,
+        "INVALID_URL" if error.startswith("invalid pagination URL:") else
+        "LINK_INVALID" if error.startswith("Link ") else "OTHER",
+    )
+
+
 def _alert_endpoint_read_observation(items: Any, error: Any) -> dict[str, Any]:
     """Describe collection readability without alert counts or provider text.
 
@@ -776,6 +793,7 @@ def _alert_endpoint_read_observation(items: Any, error: Any) -> dict[str, Any]:
     state = "UNKNOWN"
     reason = "INVALID_RESPONSE" if error is None else "REQUEST_FAILED"
     status = None
+    pagination_diagnostic = None
     complete = (
         error is None
         and isinstance(items, list)
@@ -800,6 +818,7 @@ def _alert_endpoint_read_observation(items: Any, error: Any) -> dict[str, Any]:
                 reason = "HTTP_PROVIDER_ERROR" if status >= 500 else "HTTP_FAILURE"
         elif error.startswith(("pagination ", "invalid pagination URL:", "Link ")):
             reason = "PAGINATION_INCOMPLETE"
+            pagination_diagnostic = _pagination_diagnostic(error)
         elif error.startswith("invalid-json:") or error in {
             "unexpected non-list API response", "API page contains a non-object entry",
         }:
@@ -810,12 +829,15 @@ def _alert_endpoint_read_observation(items: Any, error: Any) -> dict[str, Any]:
             "TimeoutError", "ConnectionError", "ConnectionResetError",
         }:
             reason = "TRANSPORT_ERROR"
-    return {
+    result = {
         "state": state,
         "collection_complete": complete,
         "http_failure_status": status,
         "reason": reason,
     }
+    if pagination_diagnostic is not None:
+        result["pagination_diagnostic"] = pagination_diagnostic
+    return result
 
 
 def collect_github(

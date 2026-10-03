@@ -118,6 +118,11 @@ def _github_alert_endpoint_projection(value: Any) -> dict[str, dict[str, Any]]:
         "PAGINATION_INCOMPLETE", "INVALID_RESPONSE", "RESPONSE_LIMIT",
         "TRANSPORT_ERROR", "REQUEST_FAILED",
     }
+    pagination_diagnostics = {
+        "PAGE_CAP_EXCEEDED", "ITEM_CAP_EXCEEDED", "NEXT_ORIGIN_CHANGED",
+        "NEXT_PATH_CHANGED", "CYCLE_DETECTED", "INVALID_URL", "LINK_INVALID",
+        "OTHER",
+    }
     unavailable_reasons = {
         401: "HTTP_UNAUTHORIZED", 403: "HTTP_DENIED_OR_RESTRICTED",
         404: "HTTP_NOT_FOUND_OR_HIDDEN",
@@ -132,6 +137,13 @@ def _github_alert_endpoint_projection(value: Any) -> dict[str, dict[str, Any]]:
         if isinstance(raw, Mapping):
             state, reason = raw.get("state"), raw.get("reason")
             complete, status = raw.get("collection_complete"), raw.get("http_failure_status")
+            detail = raw.get("pagination_diagnostic")
+            valid_detail = (
+                detail is None if reason != "PAGINATION_INCOMPLETE"
+                else detail is None or (
+                    isinstance(detail, str) and detail in pagination_diagnostics
+                )
+            )
             valid = False
             if complete is True and state == "READ_COMPLETE" and status is None:
                 valid = reason == "NONE"
@@ -146,11 +158,13 @@ def _github_alert_endpoint_projection(value: Any) -> dict[str, dict[str, Any]]:
                     valid = state == "UNKNOWN" and reason == expected
             elif complete is False and status is None and state == "UNKNOWN":
                 valid = isinstance(reason, str) and reason in non_http_reasons
-            if valid:
+            if valid and valid_detail:
                 result = {
                     "state": state, "collection_complete": complete,
                     "http_failure_status": status, "reason": reason,
                 }
+                if detail is not None:
+                    result["pagination_diagnostic"] = detail
         projected[name] = result
     return projected
 
