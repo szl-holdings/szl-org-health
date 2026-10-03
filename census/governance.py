@@ -192,15 +192,38 @@ def _github_alert(
     ok, data = _source(report, "github")
     alerts = data.get("alerts") if isinstance(data.get("alerts"), dict) else {}
     count = alerts.get(field)
-    complete = alerts.get("complete") is True
-    if isinstance(count, int) and count > 0:
+    endpoint = {
+        "code_scanning_high": "code",
+        "secret_scanning_open": "secret",
+        "dependabot_open": "dependabot",
+    }[field]
+    reads = alerts.get("endpoint_reads")
+    errors = alerts.get("errors")
+    if isinstance(reads, dict):
+        read = reads.get(endpoint)
+        complete = (
+            isinstance(read, dict)
+            and read.get("state") == "READ_COMPLETE"
+            and read.get("collection_complete") is True
+            and read.get("reason") == "NONE"
+            and read.get("http_failure_status") is None
+            and isinstance(errors, dict)
+            and endpoint not in errors
+        )
+    elif "endpoint_reads" not in alerts:
+        # Historical reports have only the aggregate flag. It is sufficient
+        # only when all alert endpoints completed without an error.
+        complete = alerts.get("complete") is True and errors == {}
+    else:
+        complete = False
+    if type(count) is int and count > 0:
         return _control(
             control_id,
             "FAIL",
             f"Open {label} were observed.",
             {"open": count, "alert_read_complete": complete},
         )
-    if ok and complete and count == 0:
+    if ok and complete and type(count) is int and count == 0:
         return _control(
             control_id,
             "PASS",

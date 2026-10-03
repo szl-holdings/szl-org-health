@@ -179,6 +179,47 @@ class GovernanceEvaluationTests(unittest.TestCase):
         self.assertEqual(controls["HF-SAFE-MODEL-FORMATS"]["status"], "FAIL")
         self.assertEqual(controls["DNS-DMARC-REJECT"]["status"], "UNKNOWN")
 
+    def test_independent_alert_reads_survive_another_endpoint_page_cap(self) -> None:
+        report = passing_report()
+        alerts = report["sources"]["github"]["data"]["alerts"]
+        alerts.update({
+            "code_scanning_high": None,
+            "complete": False,
+            "errors": {"code": "pagination exceeded page cap"},
+            "endpoint_reads": {
+                "code": {
+                    "state": "UNKNOWN", "collection_complete": False,
+                    "reason": "PAGINATION_INCOMPLETE", "http_failure_status": None,
+                },
+                "secret": {
+                    "state": "READ_COMPLETE", "collection_complete": True,
+                    "reason": "NONE", "http_failure_status": None,
+                },
+                "dependabot": {
+                    "state": "READ_COMPLETE", "collection_complete": True,
+                    "reason": "NONE", "http_failure_status": None,
+                },
+            },
+        })
+
+        controls = by_id(evaluate_report(report))
+        self.assertEqual(controls["GH-HIGH-CODE-ALERTS"]["status"], "UNKNOWN")
+        self.assertEqual(controls["GH-SECRET-ALERTS"]["status"], "PASS")
+        self.assertEqual(controls["GH-DEPENDABOT-ALERTS"]["status"], "PASS")
+
+        alerts["endpoint_reads"]["secret"]["collection_complete"] = False
+        self.assertEqual(by_id(evaluate_report(report))["GH-SECRET-ALERTS"]["status"], "UNKNOWN")
+
+        alerts["secret_scanning_open"] = 1
+        self.assertEqual(by_id(evaluate_report(report))["GH-SECRET-ALERTS"]["status"], "FAIL")
+
+    def test_invalid_endpoint_read_cannot_use_legacy_aggregate(self) -> None:
+        report = passing_report()
+        alerts = report["sources"]["github"]["data"]["alerts"]
+        alerts["endpoint_reads"] = "malformed"
+        controls = by_id(evaluate_report(report))
+        self.assertEqual(controls["GH-SECRET-ALERTS"]["status"], "UNKNOWN")
+
     def test_partial_assets_preserve_observed_failure_precedence(self) -> None:
         report = passing_report()
         assets = report["sources"]["huggingface"]["data"]["assets"]
