@@ -60,6 +60,7 @@ class GitHubAlertReadEvidenceTests(unittest.TestCase):
         self.assertEqual(result["state"], "UNKNOWN")
         self.assertFalse(result["collection_complete"])
         self.assertEqual(result["reason"], "PAGINATION_INCOMPLETE")
+        self.assertEqual(result["pagination_diagnostic"], "PAGE_CAP_EXCEEDED")
 
     def test_foreign_pagination_is_rejected_before_another_request(self):
         result, request = self.observe_pages([
@@ -68,12 +69,42 @@ class GitHubAlertReadEvidenceTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1)
         self.assertEqual(result["reason"], "PAGINATION_INCOMPLETE")
         self.assertEqual(result["state"], "UNKNOWN")
+        self.assertEqual(result["pagination_diagnostic"], "NEXT_ORIGIN_CHANGED")
+
+    def test_changed_pagination_path_is_rejected_and_classified(self):
+        changed = NEXT.replace("/code-scanning/alerts", "/secret-scanning/alerts")
+        result, request = self.observe_pages([([], {"link": changed}, None)])
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(result["pagination_diagnostic"], "NEXT_PATH_CHANGED")
+        self.assertFalse(result["collection_complete"])
 
     def test_pagination_cycle_is_unknown(self):
         repeated = '<https://api.github.com' + PATH + '>; rel="next"'
         result, request = self.observe_pages([([], {"link": repeated}, None)])
         self.assertEqual(request.call_count, 1)
         self.assertEqual(result["reason"], "PAGINATION_INCOMPLETE")
+        self.assertEqual(result["pagination_diagnostic"], "CYCLE_DETECTED")
+
+    def test_every_pagination_class_is_bounded_and_fail_closed(self):
+        cases = {
+            "pagination exceeded 20 pages": "PAGE_CAP_EXCEEDED",
+            "pagination exceeded 10000 items": "ITEM_CAP_EXCEEDED",
+            "pagination next origin changed": "NEXT_ORIGIN_CHANGED",
+            "pagination next path changed": "NEXT_PATH_CHANGED",
+            "pagination cycle detected": "CYCLE_DETECTED",
+            "invalid pagination URL:" + CANARY: "INVALID_URL",
+            "Link " + CANARY: "LINK_INVALID",
+            "pagination " + CANARY: "OTHER",
+        }
+        for error, detail in cases.items():
+            with self.subTest(detail=detail):
+                observed = github._alert_endpoint_read_observation(None, error)
+                projected = _github_alert_endpoint_projection({"code": observed})["code"]
+                self.assertEqual(projected["pagination_diagnostic"], detail)
+                self.assertEqual(projected["reason"], "PAGINATION_INCOMPLETE")
+                self.assertEqual(projected["state"], "UNKNOWN")
+                self.assertFalse(projected["collection_complete"])
+                self.assertNotIn(CANARY, json.dumps(projected))
 
     def test_http_and_transport_reasons_are_bounded_and_redacted(self):
         expected = {
@@ -153,6 +184,28 @@ class GitHubAlertReceiptProjectionTests(unittest.TestCase):
         self.assertNotIn("987654321", json.dumps(receipt))
         self.assertNotIn("endpoint_reads", json.dumps(project_public_report(snapshot)))
 
+    def test_pagination_diagnostic_reaches_only_the_sanitized_receipt(self):
+        snapshot = json.loads(bounded_snapshot())
+        alerts = snapshot["sources"]["github"]["data"]["alerts"]
+        alerts["endpoint_reads"] = {
+            "code": github._alert_endpoint_read_observation(
+                None, "pagination next path changed"
+            ),
+            "secret": github._alert_endpoint_read_observation([], None),
+            "dependabot": github._alert_endpoint_read_observation([], None),
+        }
+        alerts["errors"] = {"code": "pagination next path changed"}
+        alerts["complete"] = False
+        receipt = receipt_for(json.dumps(snapshot).encode())
+        self.assertEqual(receipt["status"], "FAIL_CLOSED")
+        self.assertEqual(
+            receipt["observations"]["github_alert_endpoints"]["code"],
+            alerts["endpoint_reads"]["code"],
+        )
+        self.assertNotIn(
+            "pagination_diagnostic", json.dumps(project_public_report(snapshot))
+        )
+
     def test_incoherent_fields_fail_to_unknown_without_reflecting_input(self):
         valid = github._alert_endpoint_read_observation([], None)
         invalid = [
@@ -164,6 +217,9 @@ class GitHubAlertReceiptProjectionTests(unittest.TestCase):
             {"state": "UNAVAILABLE", "collection_complete": False, "http_failure_status": 403, "reason": "HTTP_PROVIDER_ERROR"},
             {"state": "UNKNOWN", "collection_complete": False, "http_failure_status": True, "reason": "HTTP_FAILURE"},
             {"state": "UNKNOWN", "collection_complete": False, "http_failure_status": None, "reason": [CANARY]},
+            {**valid, "pagination_diagnostic": "PAGE_CAP_EXCEEDED"},
+            {**github._alert_endpoint_read_observation(None, "pagination cycle detected"),
+             "pagination_diagnostic": CANARY},
         ]
         for value in invalid:
             with self.subTest(value=value):
