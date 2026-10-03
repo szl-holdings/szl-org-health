@@ -659,6 +659,10 @@ def build_receipt(
             "organization_read_role_observed"
         )
         is True,
+        "organization_admin_role_observed": raw_huggingface_authentication.get(
+            "organization_admin_role_observed"
+        )
+        is True,
         "credential_class": (
             raw_huggingface_authentication.get("credential_class")
             if raw_huggingface_authentication.get("credential_class")

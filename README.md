@@ -120,7 +120,18 @@ Optional credentials expand the internal evidence scope without expanding the pu
 - `GITHUB_TOKEN`, `GH_TOKEN`, or `SZL_GITHUB_TOKEN` for private GitHub metadata, protection, and alert APIs.
 - `HF_TOKEN` or `HUGGING_FACE_HUB_TOKEN` for private Hugging Face repositories and buckets. Use a fine-grained, organization-scoped read credential with no global or write grants.
 
-Supplying a credential does not establish organization-complete visibility. Bounded endpoint enumeration remains `UNKNOWN` until an authoritative organization reconciliation is observed.
+Supplying a credential does not establish organization-complete visibility. The
+admin settings repository export (`GET
+/api/organizations/SZLHOLDINGS/settings/repositories`) is read twice around the
+per-type census. Only unique typed model, dataset, Space, kernel, and bucket IDs
+that agree across both exports and all five detail listings receive a
+`RECONCILED` repository-export state and a deterministic typed-ID digest. The
+credential identity and organization admin role must be observed; a legacy token
+still fails the separate fine-grained, no-global-grants least-privilege gate.
+The export does not enumerate collections or non-repository organization assets,
+so the overall HF inventory and scheduled receipt remain `UNKNOWN` /
+`FAIL_CLOSED` without separate authoritative collection visibility. Internal
+repository IDs and the export digest are excluded from the public projection.
 
 Endpoints:
 

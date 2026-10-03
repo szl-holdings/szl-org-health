@@ -275,6 +275,32 @@ def _hf_inventory(report: dict[str, Any], _policy: dict[str, Any]) -> dict[str, 
         if isinstance(data.get("authentication"), dict)
         else {}
     )
+    raw_export = (
+        data.get("repository_export")
+        if isinstance(data.get("repository_export"), dict)
+        else {}
+    )
+    repository_reconciled = (
+        authentication.get("organization_admin_role_observed") is True
+        and raw_export.get("schema") == "szl.hf-repository-export/v1"
+        and raw_export.get("source") == "ADMIN_SETTINGS_REPOSITORIES_API"
+        and raw_export.get("status") == "RECONCILED"
+        and raw_export.get("collections_scope") == "UNKNOWN"
+        and isinstance(raw_export.get("repository_count"), int)
+        and not isinstance(raw_export.get("repository_count"), bool)
+        and isinstance(raw_export.get("typed_id_sha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", raw_export["typed_id_sha256"])
+    )
+    repository_evidence = {
+        "status": "RECONCILED" if repository_reconciled else "UNAVAILABLE",
+        "repository_count": (
+            raw_export["repository_count"] if repository_reconciled else None
+        ),
+        "typed_id_sha256": (
+            raw_export["typed_id_sha256"] if repository_reconciled else None
+        ),
+        "collections_scope": "UNKNOWN",
+    }
     authentication_contract = (
         authentication.get("schema") == "szl.hf-authentication-evidence/v2"
         and authentication.get("credential_present") is True
@@ -324,6 +350,10 @@ def _hf_inventory(report: dict[str, Any], _policy: dict[str, Any]) -> dict[str, 
         is True,
         "organization_read_role_observed": authentication.get(
             "organization_read_role_observed"
+        )
+        is True,
+        "organization_admin_role_observed": authentication.get(
+            "organization_admin_role_observed"
         )
         is True,
         "credential_class": (
@@ -388,6 +418,7 @@ def _hf_inventory(report: dict[str, Any], _policy: dict[str, Any]) -> dict[str, 
                 "source_ok": ok,
                 "authenticated_scope": False,
                 "authentication": authentication_evidence,
+                "repository_export": repository_evidence,
                 "unavailable": unavailable,
                 "counts": counts,
             },
@@ -395,11 +426,12 @@ def _hf_inventory(report: dict[str, Any], _policy: dict[str, Any]) -> dict[str, 
     return _control(
         "HF-INVENTORY",
         "UNKNOWN",
-        "Authenticated bounded inventory was observed, but organization-complete visibility was not authoritatively reconciled.",
+        "Repository inventory may be reconciled, but collections and other non-repository visibility remain unproven.",
         {
             "counts": counts,
             "authenticated_scope": False,
             "authentication": authentication_evidence,
+            "repository_export": repository_evidence,
             "visibility_boundary": "AUTHENTICATED_BOUNDED",
         },
     )
