@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import datetime as dt
+import io
 import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from autonomic import slo_controller
 from autonomic.slo_evidence import load_receipt
@@ -494,6 +495,80 @@ class RenderingAndAuthorityTests(unittest.TestCase):
         ):
             self.assertFalse(contract["authority"][key])
         self.assertFalse(contract["secret_values_recorded"])
+
+
+class FailureDiagnosticTests(unittest.TestCase):
+    sensitive_text = "test-secret-value C:\\private\\credential.txt https://private.invalid/?token=secret"
+
+    def failure_receipt(self, action) -> dict:
+        with tempfile.TemporaryDirectory() as temporary:
+            policy_path = Path(temporary) / "policy.json"
+            policy_path.write_text(json.dumps(policy_payload()), encoding="utf-8")
+            output = Path(temporary) / "receipt.json"
+            stderr = io.StringIO()
+            with (
+                patch.object(slo_controller, "run_live", side_effect=lambda **kwargs: action()),
+                patch("sys.stderr", stderr),
+            ):
+                result = slo_controller.main([
+                    "--policy", str(policy_path), "--output", str(output),
+                ])
+            receipt = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(result, 1)
+            self.assertEqual(receipt["verdict"], "FAILED")
+            self.assertEqual(receipt["error"], "controller failed closed")
+            self.assertEqual(json.loads(stderr.getvalue()), receipt)
+            self.assertNotIn(self.sensitive_text, stderr.getvalue())
+            for marker in ("test-secret-value", "credential.txt", "private.invalid"):
+                self.assertNotIn(marker, stderr.getvalue())
+            self.assertNotIn(str(Path(slo_controller.__file__).parent), stderr.getvalue())
+            self.assertNotIn("receipt_sha256", receipt)
+            self.assertFalse(output.with_suffix(".json.sha256").exists())
+            with self.assertRaises(ValueError):
+                load_receipt(output, str(result))
+            return receipt
+
+    def assert_origin(self, receipt: dict, function: str, source_fragment: str) -> None:
+        origin = receipt["error_origin"]
+        self.assertEqual(set(origin), {"module", "function", "line"})
+        self.assertEqual(origin["module"], "autonomic.slo_controller")
+        self.assertEqual(origin["function"], function)
+        source_line = Path(slo_controller.__file__).read_text(encoding="utf-8").splitlines()[origin["line"] - 1]
+        self.assertIn(source_fragment, source_line)
+        self.assertEqual(receipt["error_kind"], "CONTRACTERROR")
+
+    def test_state_size_failure_identifies_its_guard_and_still_fails_closed(self) -> None:
+        with patch.object(slo_controller, "MAX_STATE_BYTES", 32):
+            receipt = self.failure_receipt(lambda: encode_state({"value": self.sensitive_text}))
+        self.assert_origin(receipt, "encode_state", "SLO state exceeded the decompressed byte limit")
+
+    def test_duplicate_issue_failure_identifies_guard_without_echoing_title(self) -> None:
+        client = GitHubApi(token=self.sensitive_text, repository="szl-holdings/szl-org-health", timeout=8)
+        with patch.object(client, "request", return_value={
+            "items": [{"number": number, "title": self.sensitive_text} for number in (1, 2)],
+        }):
+            receipt = self.failure_receipt(lambda: client.find_open_issue(self.sensitive_text))
+        self.assert_origin(receipt, "find_open_issue", "multiple open issues exist")
+
+    def test_github_response_bound_failure_identifies_request_guard(self) -> None:
+        client = GitHubApi(token=self.sensitive_text, repository="szl-holdings/szl-org-health", timeout=8)
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b"x" * 33
+        with (
+            patch.object(slo_controller, "MAX_GITHUB_BYTES", 32),
+            patch.object(client.opener, "open", return_value=response),
+        ):
+            receipt = self.failure_receipt(lambda: client.request("GET", "/repos/szl-holdings/szl-org-health"))
+        self.assert_origin(receipt, "request", "GitHub response exceeded the byte limit")
+
+    def test_foreign_exception_message_and_traceback_paths_are_not_recorded(self) -> None:
+        def fail():
+            raise RuntimeError(self.sensitive_text)
+
+        receipt = self.failure_receipt(fail)
+        self.assertEqual(receipt["error_kind"], "RUNTIMEERROR")
+        self.assertEqual(receipt["error_origin"]["function"], "main")
+        self.assertIsNone(slo_controller.safe_error_origin(RuntimeError(self.sensitive_text)))
 
 
 class LiveReceiptBindingTests(unittest.TestCase):
