@@ -48,6 +48,19 @@ product release, modify protection, or actuate a runtime.
 
 ## Evidence boundary
 
+The sanitized census receipt now records one `github_alert_endpoints` observation
+for each organization code-scanning, secret-scanning, and Dependabot collection.
+`READ_COMPLETE` means the existing bounded paginator returned all observed pages,
+including a valid empty list. `UNAVAILABLE` identifies an HTTP 401, 403, or 404;
+the receipt does not infer the cause of a restriction. Transport, response,
+pagination, rate-limit, and provider failures remain `UNKNOWN`. The HTTP failure
+status describes a failed request anywhere in that collection, not necessarily
+the initial page. Older snapshots without these observations say `NOT_OBSERVED`.
+Only controlled states, completeness, failure status, and fixed reason labels
+survive. Alert counts, identifiers, details, and raw provider errors do not.
+These diagnostics do not change governance gates or establish permission grants,
+organization coverage, absence of security findings, or production readiness.
+
 Even valid App access does not guarantee a passing governance receipt. Real red
 CI, missing protection, security alerts, incomplete HF evidence, and failed
 runtime controls remain failures or unknowns. A local complete file audit, an
