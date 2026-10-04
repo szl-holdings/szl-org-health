@@ -19,7 +19,7 @@
   },
   "recovery": {
     "cooldown_minutes": 30,
-    "enabled": true,
+    "enabled": false,
     "max_actions_per_cycle": 1,
     "max_attempts_before_incident": 3,
     "paused_stages": [
