@@ -857,6 +857,27 @@ def _alert_endpoint_read_observation(items: Any, error: Any) -> dict[str, Any]:
     return result
 
 
+def _search_total_count(payload: Any, error: str | None) -> int | None:
+    """Admit an internal total only from a complete one-item first page."""
+    if error is not None or not isinstance(payload, dict):
+        return None
+    count = payload.get("total_count")
+    items = payload.get("items")
+    if (
+        payload.get("incomplete_results") is not False
+        or type(count) is not int
+        or count < 0
+        or not isinstance(items, list)
+        or any(not isinstance(item, dict) for item in items)
+    ):
+        return None
+    # Both requests select the first page with per_page=1. A contradictory
+    # page does not establish a total, even if it declares itself complete.
+    if len(items) != min(count, 1):
+        return None
+    return count
+
+
 def collect_github(
     *,
     request_timeout: float = 20.0,
@@ -926,12 +947,12 @@ def collect_github(
             if ((alert.get("rule") or {}).get("security_severity_level") == "high")
         )
 
-    prs, _ = gh(
+    prs, prs_error = gh(
         f"/search/issues?q=org:{ORG}+is:pr+is:open&per_page=1",
         request_timeout,
         retries,
     )
-    issues, _ = gh(
+    issues, issues_error = gh(
         f"/search/issues?q=org:{ORG}+is:issue+is:open&per_page=1",
         request_timeout,
         retries,
@@ -986,8 +1007,6 @@ def collect_github(
                 for name in alert_paths
             },
         },
-        "open_prs": (prs or {}).get("total_count") if isinstance(prs, dict) else None,
-        "open_issues": (
-            (issues or {}).get("total_count") if isinstance(issues, dict) else None
-        ),
+        "open_prs": _search_total_count(prs, prs_error),
+        "open_issues": _search_total_count(issues, issues_error),
     }
