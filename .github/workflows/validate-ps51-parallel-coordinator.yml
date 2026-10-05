@@ -1,0 +1,108 @@
+name: Validate PS51 parallel coordinator
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/SZL_PARALLEL_FRONTIER_COORDINATOR_PS51_V12_1.ps1'
+      - '.github/workflows/validate-ps51-parallel-coordinator.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parse-and-contract:
+    name: Windows PowerShell 5.1 parse and safety contract
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Parse and verify coordinator
+        shell: powershell
+        run: |
+          Set-StrictMode -Version 2.0
+          $ErrorActionPreference = 'Stop'
+
+          if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5) {
+              throw "Expected Windows PowerShell 5.1; observed $($PSVersionTable.PSVersion)."
+          }
+
+          $Path = 'tools/SZL_PARALLEL_FRONTIER_COORDINATOR_PS51_V12_1.ps1'
+          $Tokens = $null
+          $Errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $Path,
+              [ref]$Tokens,
+              [ref]$Errors
+          )
+
+          $Errors = @($Errors)
+          if ($Errors.Count -gt 0) {
+              foreach ($ParserError in $Errors) {
+                  Write-Error ("Line {0}, column {1}: {2}" -f $ParserError.Extent.StartLineNumber, $ParserError.Extent.StartColumnNumber, $ParserError.Message)
+              }
+              throw 'Coordinator failed the Windows PowerShell 5.1 parser.'
+          }
+
+          $Bytes = [System.IO.File]::ReadAllBytes($Path)
+          if (@($Bytes | Where-Object { $_ -gt 127 }).Count -gt 0) {
+              throw 'Coordinator must remain ASCII-only.'
+          }
+
+          $Source = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::ASCII)
+          $Required = @(
+              '#requires -version 5.1',
+              'Global\SZL-Estate-Operator-PS51-V11',
+              'Global\SZL-Parallel-Frontier-Coordinator-V12-1',
+              "Start-Job -Name 'github-observer'",
+              "Start-Job -Name 'hf-observer'",
+              "Start-Job -Name 'domain-observer'",
+              "Start-Job -Name 'safe-cleanup'",
+              '$env:SZL_MAX_WRITES_PER_CYCLE = ''1''',
+              '$env:SZL_USE_CODEX = ''0''',
+              'manual_hf_upload = $false',
+              'secret_values_recorded = $false'
+          )
+
+          foreach ($Marker in $Required) {
+              if (-not $Source.Contains($Marker)) {
+                  throw "Required coordinator marker missing: $Marker"
+              }
+          }
+
+          $Forbidden = @(
+              '--admin',
+              'git push origin main',
+              'git push --force',
+              'git push -f',
+              'upload_file(',
+              'upload_folder(',
+              'add_space_secret(',
+              'request a second broad mutation operator'
+          )
+
+          foreach ($Marker in $Forbidden) {
+              if ($Source.IndexOf($Marker, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                  throw "Forbidden coordinator construct found: $Marker"
+              }
+          }
+
+          $Sha = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+          $Lines = [int]([System.IO.File]::ReadLines($Path) | Measure-Object).Count
+          Write-Host "PowerShell: $($PSVersionTable.PSVersion)"
+          Write-Host "Lines: $Lines"
+          Write-Host "Bytes: $($Bytes.Length)"
+          Write-Host "SHA256: $Sha"
+          Write-Host 'Windows PowerShell 5.1 parser: PASS'
+          Write-Host 'Safety contract: PASS'
