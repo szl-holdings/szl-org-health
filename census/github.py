@@ -752,6 +752,23 @@ def _repo_census(
     }
 
 
+def _code_alert_path(organization: Any) -> str | None:
+    """Reuse discovery's validated identity so GitHub's numeric next path stays exact."""
+    if not isinstance(organization, dict):
+        return None
+    identifier = organization.get("id")
+    login = organization.get("login")
+    if (
+        type(identifier) is not int or identifier <= 0
+        or not isinstance(login, str) or login.casefold() != ORG.casefold()
+    ):
+        return None
+    return (
+        f"/organizations/{identifier}/code-scanning/alerts"
+        "?state=open&per_page=100"
+    )
+
+
 def _all_alerts(
     path: str,
     *,
@@ -846,7 +863,7 @@ def collect_github(
     retries: int = 2,
     include_branch_protection: bool = True,
 ) -> dict[str, Any]:
-    discovered, _, discovery_error = discover_repositories(
+    discovered, organization, discovery_error = discover_repositories(
         ORG, headers=github_headers(), timeout=request_timeout, retries=retries,
         max_pages=MAX_PAGES,
     )
@@ -874,12 +891,15 @@ def collect_github(
             repos[name] = info
 
     alert_paths = {
-        "code": f"/orgs/{ORG}/code-scanning/alerts?state=open&per_page=100",
+        "code": _code_alert_path(organization),
         "secret": f"/orgs/{ORG}/secret-scanning/alerts?state=open&per_page=100",
         "dependabot": f"/orgs/{ORG}/dependabot/alerts?state=open&per_page=100",
     }
     alerts: dict[str, list[dict[str, Any]] | None] = {}
     alert_errors: dict[str, str | None] = {}
+    if alert_paths["code"] is None:
+        alerts["code"] = None
+        alert_errors["code"] = "organization identity unavailable"
     with cf.ThreadPoolExecutor(max_workers=3) as executor:
         future_map = {
             executor.submit(
@@ -889,6 +909,7 @@ def collect_github(
                 retries=retries,
             ): name
             for name, path in alert_paths.items()
+            if path is not None
         }
         for future in cf.as_completed(future_map):
             name = future_map[future]

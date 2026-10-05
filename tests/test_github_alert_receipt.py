@@ -141,7 +141,7 @@ class GitHubAlertReadEvidenceTests(unittest.TestCase):
             calls.append(path)
             return (None, "http403") if "/secret-scanning/" in path else ([], None)
 
-        with mock.patch.object(github, "discover_repositories", return_value=([], {}, None)), \
+        with mock.patch.object(github, "discover_repositories", return_value=([], {"id": 273360816, "login": "szl-holdings"}, None)), \
              mock.patch.object(github, "_all_alerts", side_effect=collect_alerts), \
              mock.patch.object(github, "gh", return_value=({"total_count": 0}, None)):
             collected = github.collect_github(include_branch_protection=False)
