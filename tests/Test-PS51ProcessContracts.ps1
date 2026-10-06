@@ -82,7 +82,16 @@ try {
     Test-Case 'wrong helper refuses timestamp fallback' { Assert-Throws { Find-Operator } 'OPERATOR_IDENTITY_MISMATCH'; Assert-Throws { Get-ResumeOperator } 'OPERATOR_IDENTITY_MISMATCH' }
     Copy-Item -LiteralPath $Reference -Destination $Candidate -Force
     (Get-Item -LiteralPath $OldCandidate).LastWriteTimeUtc = [DateTime]::UtcNow.AddYears(1)
-    Test-Case 'both selectors choose exact immutable PS51_JSON' { Assert-True ((Find-Operator) -ceq $Candidate) 'Wrong V13 path'; Assert-True ((Get-ResumeOperator) -ceq $Candidate) 'Wrong V12 path' }
+    Test-Case 'both selectors choose exact immutable PS51_JSON' {
+        # Hosted Windows TEMP may use an 8.3 alias (RUNNER~1). Compare with
+        # the filesystem's full name for this exact fixture, not its input alias.
+        $ExpectedPath = (Get-Item -LiteralPath $Candidate -ErrorAction Stop).FullName
+        $V13Selected = Find-Operator
+        $V12Selected = Get-ResumeOperator
+        Write-Host ('Fixture input path: {0}; filesystem path: {1}' -f $Candidate, $ExpectedPath)
+        Assert-True ($V13Selected -ceq $ExpectedPath) ('Wrong V13 path: {0}; expected: {1}' -f $V13Selected, $ExpectedPath)
+        Assert-True ($V12Selected -ceq $ExpectedPath) ('Wrong V12 path: {0}; expected: {1}' -f $V12Selected, $ExpectedPath)
+    }
     [IO.File]::AppendAllText($Candidate, "`n# changed bytes")
     Test-Case 'post-selection change is refused on recheck' { Assert-Throws { Find-Operator } 'OPERATOR_IDENTITY_MISMATCH' }
     Copy-Item -LiteralPath $Reference -Destination $Candidate -Force
