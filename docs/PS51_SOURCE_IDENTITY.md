@@ -1,7 +1,8 @@
 # PS51 source identity and qualification boundary
 
-Phase 2 continues the accepted inactive PR234 source baseline
-`39a2070d2492ee9e674e81880552cb75b67821fd`.
+The observational worker-state repair continues accepted inactive PR234 source
+`27b5d43682755281927804bbc98bfddfd9aca1e3`. The recovered candidate, shared
+library and lineage manifest retain their exact Phase 2 bytes.
 It changes source only. It does not install a controller, start an estate
 process, reconcile local files, change a schedule, or admit a release.
 
@@ -75,6 +76,14 @@ provenance. Runtime activation requires a separate reviewed transition.
   The separately named recovered successor addresses this native-helper gap;
   original historical admission and full-controller qualification remain blocked.
 - Identity is returned as a descriptor; no operator invocation is admitted.
+- The coordinator now requires its four declared worker names and freezes each
+  observed instance GUID before polling. Duplicate/missing names or IDs, changed
+  identities, incomplete count coverage, unreadable state and unsupported states
+  return UNKNOWN. Completed requires every expected instance to report Completed;
+  Failed/Stopped returns FAILED. NotStarted/Running is internal PENDING only.
+  A monotonic budget returns TIMED_OUT, clamps sleeps and refuses observations
+  after expiry. Every non-COMPLETED result holds before receive/remove/resume.
+  Completion of a job state does not establish successful audit content or admission.
 - Phase 2 adds pure remaining-budget arithmetic. Both Python version probes use
   one monotonic discovery clock (30 seconds by default, five seconds per probe).
   The launcher's GitHub budget loop shares its two-hour Stopwatch across probes
@@ -95,7 +104,8 @@ only where test-file execution is already permitted. Do not relax local policy
 or evaluate the script through another route after an execution denial.
 
 The harness hashes/parses the historical reference as data, imports only named
-prospective shared/V13, selector and launcher definitions, and compiles its own offline C#
+prospective shared/V13, selector, observational coordinator and launcher definitions,
+and compiles its own offline C#
 probe in a new temporary directory. Historical definitions are not executed.
 It tests helper identity, exit7, unavailable exit, rapid exits, empty argv,
 Unicode/spaces/quotes/backslashes, simultaneous streams, direct-child timeout,
@@ -112,7 +122,14 @@ Phase 2 adds fake-clock discovery and budget-loop tests with native calls,
 filesystem discovery, logging and sleep stubbed. Added tests invoke no real
 Python, GitHub, auth, token capture, network, cleanup or entry point. Existing
 native-probe assertions and timeouts remain unchanged; prior counts cannot
-qualify the new head. The original failed mixed-suite replay is retained separately, byte for byte,
+qualify the new head.
+The worker-state additions use only synthetic snapshots, fake clocks/sleeps and
+effect sentinels. They create no jobs, acquire no mutex and perform no actual
+receive/remove/stop/resume, filesystem discovery, auth, network or cleanup.
+Static controls verify the main result binding and gate ordering, including
+removed, forged and moved-gate negative controls. The shared deadline arithmetic
+and all accepted assertions remain unchanged. New exact-head native CI is required.
+The original failed mixed-suite replay is retained separately, byte for byte,
 with both historical failure rows false. Its integrity check is not a new replay
 or a historical qualification pass. See the source-by-source conclusion map in
 `PS51_RECOVERED_SOURCE.md`.

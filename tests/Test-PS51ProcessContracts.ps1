@@ -48,7 +48,7 @@ $LauncherPath = Join-Path $RepositoryRoot 'tools/RUN_SZL_CTO_RATE_AWARE.ps1'
 $V13Path = Join-Path $RepositoryRoot 'tools/SZL_DISK_CLEAN_RESUME_PS51_V13.ps1'
 . ([scriptblock]::Create((Read-Definitions $V13Path @('Invoke-NativeTool','Find-Operator'))))
 $V12Path = Join-Path $RepositoryRoot 'tools/SZL_PARALLEL_FRONTIER_COORDINATOR_PS51_V12_1.ps1'
-. ([scriptblock]::Create((Read-Definitions $V12Path @('Get-ResumeOperator'))))
+. ([scriptblock]::Create((Read-Definitions $V12Path @('Get-ResumeOperator','Read-SzlWorkerStates','Get-SzlWorkerClassification','Wait-SzlWorkerCompletion','Assert-SzlWorkerCompletion'))))
 $Reference = Join-Path $RepositoryRoot 'tests/fixtures/ps51/operator-23b1aaab.ps1.txt'
 $ExpectedHash = '23B1AAABEF7AED9C2801C975BEAD79AC16084432537CFF26059952208B3D687B'
 Assert-True ((Get-FileHash -LiteralPath $Reference -Algorithm SHA256).Hash -ceq $ExpectedHash) 'Recovered source bytes changed'
@@ -120,7 +120,229 @@ function Add-SyntheticBudgetReply {
     param($Fixture,[AllowNull()]$Exit=0,[string]$Text="HTTP/2.0 200 OK`nX-Ratelimit-Remaining: 2000`nX-Ratelimit-Reset: 0",[long]$Advance=0,[switch]$Throw)
     $Fixture.Replies.Enqueue([pscustomobject]@{Exit=$Exit;Text=$Text;Advance=$Advance;Throw=[bool]$Throw})
 }
+function New-SyntheticWorkerRows {
+    param([string]$State='Completed')
+    $Names=@('github-observer','hf-observer','domain-observer','safe-cleanup')
+    for($I=0;$I -lt $Names.Count;$I++) { [pscustomobject]@{Name=$Names[$I];InstanceId=([guid]('00000000-0000-0000-0000-{0:d12}' -f ($I+1)));State=$State} }
+}
+function Invoke-SyntheticWorkerCase([scriptblock]$Action) {
+    $Fixture=[pscustomobject]@{
+        Clock=[pscustomobject]@{ElapsedMilliseconds=0L}; Frames=(New-Object Collections.Queue); Current=$null
+        Reads=0; Sleeps=(New-Object Collections.Generic.List[int]); SleepThrows=$false; Effects=0
+        Jobs=@([pscustomobject]@{SyntheticOnly=$true}); Names=@('github-observer','hf-observer','domain-observer','safe-cleanup')
+    }
+    function Read-SzlWorkerStates {
+        param($Jobs)
+        $Fixture.Reads++
+        if($Fixture.Frames.Count -gt 0) { $Fixture.Current=$Fixture.Frames.Dequeue() }
+        if($null -eq $Fixture.Current) { throw 'SYNTHETIC_FRAME_MISSING' }
+        $Fixture.Clock.ElapsedMilliseconds += $Fixture.Current.Advance
+        if($Fixture.Current.Throw) { throw 'SYNTHETIC_OBSERVATION_FAILURE' }
+        return [pscustomobject]@{Available=$Fixture.Current.Available;Workers=$Fixture.Current.Rows}
+    }
+    function Start-Sleep { param([int]$Milliseconds); if($Fixture.SleepThrows){throw 'SYNTHETIC_SLEEP_FAILURE'}; $Fixture.Sleeps.Add($Milliseconds); $Fixture.Clock.ElapsedMilliseconds += $Milliseconds }
+    function Receive-Job { $Fixture.Effects++; throw 'RECEIVE_MUST_NOT_RUN' }
+    function Remove-Job { $Fixture.Effects++; throw 'REMOVE_MUST_NOT_RUN' }
+    function Stop-Job { $Fixture.Effects++; throw 'STOP_MUST_NOT_RUN' }
+    function Invoke-SyntheticResumeSentinel { $Fixture.Effects++; throw 'RESUME_MUST_NOT_RUN' }
+    & $Action $Fixture
+    Assert-True ($Fixture.Effects -eq 0) 'WORKER_EFFECT_IN_OBSERVATIONAL_TEST'
+}
+function Add-SyntheticWorkerFrame {
+    param($Fixture,[object[]]$Rows=(New-SyntheticWorkerRows),[long]$Advance=0,[bool]$Available=$true,[switch]$Throw)
+    $Fixture.Frames.Enqueue([pscustomobject]@{Rows=$Rows;Advance=$Advance;Available=$Available;Throw=[bool]$Throw})
+}
+function Assert-WorkerObservationSource([string]$Text) {
+    $Tokens=$null; $Errors=$null
+    $Ast=[Management.Automation.Language.Parser]::ParseInput($Text,[ref]$Tokens,[ref]$Errors)
+    Assert-True (@($Errors).Count -eq 0) 'WORKER_SOURCE_PARSE'
+    $Allowed=@('Where-Object','Get-SzlRemainingMilliseconds','Read-SzlWorkerStates','Get-SzlWorkerClassification','Start-Sleep')
+    foreach($Call in @($Ast.FindAll({param($N)$N -is [Management.Automation.Language.CommandAst]},$true))) {
+        Assert-True ($Allowed -ccontains $Call.GetCommandName() -and $Call.InvocationOperator -ne [Management.Automation.Language.TokenKind]::Ampersand) 'WORKER_EFFECT_COMMAND'
+    }
+}
+function Assert-WorkerMainGate([string]$Text) {
+    $Tokens=$null; $Errors=$null
+    $Ast=[Management.Automation.Language.Parser]::ParseInput($Text,[ref]$Tokens,[ref]$Errors)
+    Assert-True (@($Errors).Count -eq 0) 'WORKER_MAIN_PARSE'
+    $Calls=@($Ast.FindAll({param($N)$N -is [Management.Automation.Language.CommandAst]},$true))
+    $Wait=@($Calls|Where-Object {$_.GetCommandName() -ceq 'Wait-SzlWorkerCompletion'})
+    $Gate=@($Calls|Where-Object {$_.GetCommandName() -ceq 'Assert-SzlWorkerCompletion'})
+    Assert-True ($Wait.Count -eq 1 -and $Gate.Count -eq 1) 'WORKER_MAIN_GATE_COUNT'
+    Assert-True ($Gate[0].CommandElements.Count -eq 3 -and $Gate[0].CommandElements[1].Extent.Text -ceq '-Outcome' -and $Gate[0].CommandElements[2].Extent.Text -ceq '$WorkerWaitOutcome') 'WORKER_MAIN_GATE_BINDING'
+    $Assignments=@($Ast.FindAll({param($N)$N -is [Management.Automation.Language.AssignmentStatementAst]},$true)|Where-Object{$_.Left.Extent.Text -ceq '$WorkerWaitOutcome'})
+    Assert-True ($Assignments.Count -eq 1 -and $Assignments[0].Right.Extent.StartOffset -le $Wait[0].Extent.StartOffset -and $Assignments[0].Right.Extent.EndOffset -ge $Wait[0].Extent.EndOffset) 'WORKER_MAIN_WAIT_BINDING'
+    Assert-True ($Gate[0].Extent.StartOffset -gt $Wait[0].Extent.EndOffset) 'WORKER_MAIN_GATE_ORDER'
+    foreach($Name in @('Receive-Job','Remove-Job','Get-ResumeOperator','Assert-SzlOperatorAdmission')) {
+        $Downstream=@($Calls|Where-Object{$_.GetCommandName() -ceq $Name})
+        Assert-True ($Downstream.Count -gt 0) 'WORKER_DOWNSTREAM_MISSING'
+        foreach($Call in $Downstream){Assert-True ($Call.Extent.StartOffset -gt $Gate[0].Extent.EndOffset) 'WORKER_MAIN_GATE_ORDER'}
+    }
+    Assert-True ($Wait[0].Extent.Text.Contains("-ExpectedWorkerNames @('github-observer','hf-observer','domain-observer','safe-cleanup')")) 'WORKER_EXPECTED_NAMES_CHANGED'
+}
 try {
+    Test-Case 'worker classifier requires all expected instances completed' {
+        $Rows=@(New-SyntheticWorkerRows)
+        Assert-True ((Get-SzlWorkerClassification $Rows $Rows) -ceq 'COMPLETED') 'ALL_COMPLETED_REJECTED'
+    }
+    Test-Case 'worker classifier treats running and not-started as pending' {
+        foreach($State in @('Running','NotStarted')) { $Expected=@(New-SyntheticWorkerRows);$Rows=@(New-SyntheticWorkerRows);$Rows[0].State=$State;Assert-True ((Get-SzlWorkerClassification $Expected $Rows) -ceq 'PENDING') 'PENDING_STATE_COMPLETED' }
+    }
+    Test-Case 'worker classifier exposes failed and stopped outcomes' {
+        foreach($State in @('Failed','Stopped')) { $Expected=@(New-SyntheticWorkerRows);$Rows=@(New-SyntheticWorkerRows);$Rows[0].State=$State;Assert-True ((Get-SzlWorkerClassification $Expected $Rows) -ceq 'FAILED') 'FAILED_STATE_COMPLETED' }
+    }
+    Test-Case 'worker unsupported states remain unknown even alongside failure' {
+        foreach($State in @('Blocked','Disconnected','Suspended','Stopping','completed','', $null, 1)) {
+            $Expected=@(New-SyntheticWorkerRows);$Rows=@(New-SyntheticWorkerRows);$Rows[0].State=$State;$Rows[1].State='Failed'
+            Assert-True ((Get-SzlWorkerClassification $Expected $Rows) -ceq 'UNKNOWN') 'UNSUPPORTED_STATE_ACCEPTED'
+        }
+    }
+    Test-Case 'worker empty and null expected sets cannot complete vacuously' {
+        Assert-True ((Get-SzlWorkerClassification -ExpectedWorkers @() -ObservedWorkers @()) -ceq 'UNKNOWN') 'EMPTY_SET_COMPLETED'
+        Assert-True ((Get-SzlWorkerClassification -ExpectedWorkers $null -ObservedWorkers $null) -ceq 'UNKNOWN') 'NULL_SET_COMPLETED'
+    }
+    Test-Case 'worker expected duplicate names or identities are unknown' {
+        $Rows=@(New-SyntheticWorkerRows);$Expected=@(New-SyntheticWorkerRows);$Expected[1].Name=$Expected[0].Name
+        Assert-True ((Get-SzlWorkerClassification $Expected $Rows) -ceq 'UNKNOWN') 'DUPLICATE_EXPECTED_NAME'
+        $Expected=@(New-SyntheticWorkerRows);$Expected[1].InstanceId=$Expected[0].InstanceId
+        Assert-True ((Get-SzlWorkerClassification $Expected $Rows) -ceq 'UNKNOWN') 'DUPLICATE_EXPECTED_ID'
+    }
+    Test-Case 'worker missing and extra observations fail exact count coverage' {
+        $Expected=@(New-SyntheticWorkerRows);$Rows=@(New-SyntheticWorkerRows)
+        Assert-True ((Get-SzlWorkerClassification $Expected $Rows[0..2]) -ceq 'UNKNOWN') 'MISSING_WORKER_ACCEPTED'
+        Assert-True ((Get-SzlWorkerClassification $Expected @($Rows+$Rows[0])) -ceq 'UNKNOWN') 'EXTRA_WORKER_ACCEPTED'
+    }
+    Test-Case 'worker duplicate observed names or identities cannot replace coverage' {
+        $Expected=@(New-SyntheticWorkerRows);$Rows=@(New-SyntheticWorkerRows);$Rows[1].Name=$Rows[0].Name
+        Assert-True ((Get-SzlWorkerClassification $Expected $Rows) -ceq 'UNKNOWN') 'DUPLICATE_OBSERVED_NAME'
+        $Rows=@(New-SyntheticWorkerRows);$Rows[1].InstanceId=$Rows[0].InstanceId
+        Assert-True ((Get-SzlWorkerClassification $Expected $Rows) -ceq 'UNKNOWN') 'DUPLICATE_OBSERVED_ID'
+    }
+    Test-Case 'worker foreign or swapped identity cannot inherit a declared name' {
+        $Expected=@(New-SyntheticWorkerRows);$Rows=@(New-SyntheticWorkerRows);$Rows[0].InstanceId=[guid]'00000000-0000-0000-0000-000000000099'
+        Assert-True ((Get-SzlWorkerClassification $Expected $Rows) -ceq 'UNKNOWN') 'FOREIGN_ID_ACCEPTED'
+        $Rows=@(New-SyntheticWorkerRows);$Rows[0].InstanceId=$Expected[1].InstanceId;$Rows[1].InstanceId=$Expected[0].InstanceId
+        Assert-True ((Get-SzlWorkerClassification $Expected $Rows) -ceq 'UNKNOWN') 'SWAPPED_IDS_ACCEPTED'
+    }
+    Test-Case 'worker malformed and empty identities fail closed' {
+        foreach($Id in @($null,[guid]::Empty,'00000000-0000-0000-0000-000000000001')) {
+            $Expected=@(New-SyntheticWorkerRows);$Rows=@(New-SyntheticWorkerRows);$Rows[0].InstanceId=$Id
+            Assert-True ((Get-SzlWorkerClassification $Expected $Rows) -ceq 'UNKNOWN') 'MALFORMED_ID_ACCEPTED'
+            $Expected[0].InstanceId=$Id
+            Assert-True ((Get-SzlWorkerClassification $Expected $Rows) -ceq 'UNKNOWN') 'MALFORMED_EXPECTED_ID_ACCEPTED'
+        }
+    }
+    Test-Case 'worker metadata read failure becomes unavailable without job commands' {
+        $Job=[pscustomobject]@{Name='synthetic';InstanceId=[guid]'00000000-0000-0000-0000-000000000001'}
+        $Job|Add-Member ScriptProperty State {throw 'SYNTHETIC_STATE_UNAVAILABLE'}
+        $R=Read-SzlWorkerStates -Jobs @($Job)
+        Assert-True ($R.Available -eq $false -and $R.Workers.Count -eq 0) 'READ_FAILURE_COMPLETED'
+    }
+    Test-Case 'worker wait rejects empty duplicate and invalid declarations before reading' {
+        Invoke-SyntheticWorkerCase {param($F)
+            $R=Wait-SzlWorkerCompletion -Jobs $F.Jobs -ExpectedWorkerNames @() -Clock $F.Clock
+            Assert-True ($R -ceq 'UNKNOWN' -and $F.Reads -eq 0 -and $F.Sleeps.Count -eq 0) 'EMPTY_DECLARATION_READ'
+        }
+        foreach($Names in @(@('duplicate','duplicate'),@(''),@($null))) {
+            Invoke-SyntheticWorkerCase {param($F)
+                $R=Wait-SzlWorkerCompletion -Jobs $F.Jobs -ExpectedWorkerNames $Names -Clock $F.Clock
+                Assert-True ($R -ceq 'UNKNOWN' -and $F.Reads -eq 0 -and $F.Sleeps.Count -eq 0) 'INVALID_DECLARATION_READ'
+            }
+        }
+    }
+    Test-Case 'worker completed observation returns once without granting admission' {
+        Invoke-SyntheticWorkerCase {param($F)
+            Add-SyntheticWorkerFrame $F
+            $R=Wait-SzlWorkerCompletion -Jobs $F.Jobs -ExpectedWorkerNames $F.Names -Clock $F.Clock
+            Assert-True ($R -ceq 'COMPLETED' -and $F.Reads -eq 1 -and $F.Sleeps.Count -eq 0) 'COMPLETION_REPOLLED'
+            Assert-SzlWorkerCompletion $R
+            Assert-Throws {Assert-SzlOperatorAdmission $R} 'SZL_SOURCE_ADMISSION_HOLD'
+        }
+    }
+    Test-Case 'worker pending sequence completes only with the original identity set' {
+        Invoke-SyntheticWorkerCase {param($F)
+            Add-SyntheticWorkerFrame $F -Rows @(New-SyntheticWorkerRows 'Running');Add-SyntheticWorkerFrame $F
+            $R=Wait-SzlWorkerCompletion -Jobs $F.Jobs -ExpectedWorkerNames $F.Names -Clock $F.Clock -BudgetSeconds 5 -PollSeconds 2
+            Assert-True ($R -ceq 'COMPLETED' -and $F.Reads -eq 2 -and $F.Sleeps.Count -eq 1 -and $F.Sleeps[0] -eq 2000) 'PENDING_SEQUENCE_CHANGED'
+        }
+    }
+    Test-Case 'worker permanent pending clamps final sleep and observes nothing after expiry' {
+        Invoke-SyntheticWorkerCase {param($F)
+            Add-SyntheticWorkerFrame $F -Rows @(New-SyntheticWorkerRows 'NotStarted')
+            $R=Wait-SzlWorkerCompletion -Jobs $F.Jobs -ExpectedWorkerNames $F.Names -Clock $F.Clock -BudgetSeconds 5 -PollSeconds 2
+            Assert-True ($R -ceq 'TIMED_OUT' -and $F.Reads -eq 3 -and ($F.Sleeps -join ',') -ceq '2000,2000,1000' -and $F.Clock.ElapsedMilliseconds -eq 5000) 'POLL_DEADLINE_OVERSHOOT'
+        }
+    }
+    Test-Case 'worker completion observed exactly at expiry is timed out' {
+        Invoke-SyntheticWorkerCase {param($F)
+            Add-SyntheticWorkerFrame $F -Advance 5000
+            $R=Wait-SzlWorkerCompletion -Jobs $F.Jobs -ExpectedWorkerNames $F.Names -Clock $F.Clock -BudgetSeconds 5
+            Assert-True ($R -ceq 'TIMED_OUT' -and $F.Reads -eq 1 -and $F.Sleeps.Count -eq 0) 'EXPIRED_COMPLETION_ACCEPTED'
+        }
+    }
+    Test-Case 'worker completion before expiry does not require a whole remaining second' {
+        Invoke-SyntheticWorkerCase {param($F)
+            Add-SyntheticWorkerFrame $F -Advance 4999
+            $R=Wait-SzlWorkerCompletion -Jobs $F.Jobs -ExpectedWorkerNames $F.Names -Clock $F.Clock -BudgetSeconds 5
+            Assert-True ($R -ceq 'COMPLETED' -and $F.Reads -eq 1 -and $F.Sleeps.Count -eq 0) 'VALID_COMPLETION_REJECTED'
+        }
+    }
+    Test-Case 'worker changed instance after initial capture becomes unknown' {
+        Invoke-SyntheticWorkerCase {param($F)
+            Add-SyntheticWorkerFrame $F -Rows @(New-SyntheticWorkerRows 'Running');$Rows=@(New-SyntheticWorkerRows);$Rows[0].InstanceId=[guid]'00000000-0000-0000-0000-000000000099';Add-SyntheticWorkerFrame $F -Rows $Rows
+            $R=Wait-SzlWorkerCompletion -Jobs $F.Jobs -ExpectedWorkerNames $F.Names -Clock $F.Clock -BudgetSeconds 5 -PollSeconds 1
+            Assert-True ($R -ceq 'UNKNOWN' -and $F.Reads -eq 2) 'CHANGED_INSTANCE_ACCEPTED'
+        }
+    }
+    Test-Case 'worker lost coverage after initial capture becomes unknown' {
+        Invoke-SyntheticWorkerCase {param($F)
+            Add-SyntheticWorkerFrame $F -Rows @(New-SyntheticWorkerRows 'Running');$Rows=@(New-SyntheticWorkerRows);Add-SyntheticWorkerFrame $F -Rows $Rows[0..2]
+            $R=Wait-SzlWorkerCompletion -Jobs $F.Jobs -ExpectedWorkerNames $F.Names -Clock $F.Clock -BudgetSeconds 5 -PollSeconds 1
+            Assert-True ($R -ceq 'UNKNOWN' -and $F.Reads -eq 2) 'LOST_COVERAGE_ACCEPTED'
+        }
+    }
+    Test-Case 'worker expired or invalid clock performs no observation' {
+        foreach($Elapsed in @(5000,-1)) {
+            Invoke-SyntheticWorkerCase {param($F)
+                $F.Clock.ElapsedMilliseconds=$Elapsed
+                $R=Wait-SzlWorkerCompletion -Jobs $F.Jobs -ExpectedWorkerNames $F.Names -Clock $F.Clock -BudgetSeconds 5
+                $Expected=if($Elapsed -eq 5000){'TIMED_OUT'}else{'UNKNOWN'}
+                Assert-True ($R -ceq $Expected -and $F.Reads -eq 0) 'INVALID_CLOCK_OBSERVED'
+            }
+        }
+    }
+    Test-Case 'worker unavailable observation and sleep failure remain unknown' {
+        Invoke-SyntheticWorkerCase {param($F)
+            Add-SyntheticWorkerFrame $F -Available $false
+            Assert-True ((Wait-SzlWorkerCompletion -Jobs $F.Jobs -ExpectedWorkerNames $F.Names -Clock $F.Clock) -ceq 'UNKNOWN') 'UNAVAILABLE_COMPLETED'
+            Assert-True ($F.Reads -eq 1 -and $F.Sleeps.Count -eq 0) 'UNAVAILABLE_RETRIED'
+        }
+        Invoke-SyntheticWorkerCase {param($F)
+            Add-SyntheticWorkerFrame $F -Rows @(New-SyntheticWorkerRows 'Running');$F.SleepThrows=$true
+            Assert-True ((Wait-SzlWorkerCompletion -Jobs $F.Jobs -ExpectedWorkerNames $F.Names -Clock $F.Clock) -ceq 'UNKNOWN') 'SLEEP_FAILURE_COMPLETED'
+            Assert-True ($F.Reads -eq 1) 'SLEEP_FAILURE_RETRIED'
+        }
+    }
+    Test-Case 'worker noncompletion gate blocks every downstream sentinel' {
+        foreach($Outcome in @('FAILED','UNKNOWN','TIMED_OUT','PENDING','completed',$null,$true)) {
+            Invoke-SyntheticWorkerCase {param($F)
+                foreach($Effect in @('Receive-Job','Remove-Job','Stop-Job','Invoke-SyntheticResumeSentinel')) {
+                    Assert-Throws {Assert-SzlWorkerCompletion $Outcome; & $Effect} 'SZL_WORKER_WAIT_HOLD'
+                }
+            }
+        }
+    }
+    Test-Case 'worker observation definitions reject effect commands as source data' {
+        $Text=Read-Definitions $V12Path @('Read-SzlWorkerStates','Get-SzlWorkerClassification','Wait-SzlWorkerCompletion','Assert-SzlWorkerCompletion')
+        Assert-WorkerObservationSource $Text
+        Assert-Throws {Assert-WorkerObservationSource ($Text+"`nReceive-Job -Id 1")} 'WORKER_EFFECT_COMMAND'
+    }
+    Test-Case 'worker main gate binds exact outcome before receive remove and resume' {
+        $Text=[IO.File]::ReadAllText($V12Path);Assert-WorkerMainGate $Text
+        Assert-Throws {Assert-WorkerMainGate ($Text.Replace('Assert-SzlWorkerCompletion -Outcome $WorkerWaitOutcome','# omitted gate'))} 'WORKER_MAIN_GATE_COUNT'
+        Assert-Throws {Assert-WorkerMainGate ($Text.Replace('Assert-SzlWorkerCompletion -Outcome $WorkerWaitOutcome',"Assert-SzlWorkerCompletion -Outcome 'COMPLETED'"))} 'WORKER_MAIN_GATE_BINDING'
+        Assert-Throws {Assert-WorkerMainGate (($Text.Replace('Assert-SzlWorkerCompletion -Outcome $WorkerWaitOutcome','# moved gate'))+"`nAssert-SzlWorkerCompletion -Outcome `$WorkerWaitOutcome")} 'WORKER_MAIN_GATE_ORDER'
+    }
     Test-Case 'budget timeout uses cap and floors remaining seconds' {
         Assert-True ((Get-SzlRemainingTimeoutSeconds -BudgetSeconds 30 -ElapsedMilliseconds 2501 -OperationTimeoutSeconds 10) -eq 10) 'CAP_CHANGED'
         Assert-True ((Get-SzlRemainingTimeoutSeconds -BudgetSeconds 5 -ElapsedMilliseconds 2501 -OperationTimeoutSeconds 10) -eq 2) 'REMAINDER_ROUNDED_UP'
@@ -376,12 +598,12 @@ finally {
     New-Item -ItemType Directory -Path $ReceiptDirectory -Force | Out-Null
     $PublicReceipt = [ordered]@{
         schema='szl.ps51-inert-ci/v1';suite='prospective-shared-and-v13';fixture_class='SIMULATED'
-        qualification_scope='named-prospective-definitions-source-identity-and-synthetic-budget-contracts'
+        qualification_scope='named-prospective-definitions-source-identity-synthetic-budget-and-worker-state-contracts'
         powershell=$Receipt.powershell;reference_sha256=$Receipt.reference_sha256;harness_sha256=$Receipt.harness_sha256
         source_sha256=[ordered]@{
             shared=(Get-FileHash -LiteralPath $LibraryPath).Hash.ToLowerInvariant()
             v13=(Get-FileHash -LiteralPath $V13Path).Hash.ToLowerInvariant()
-            v12_selectors=(Get-FileHash -LiteralPath $V12Path).Hash.ToLowerInvariant()
+            v12_inert_worker_wait_and_selectors=(Get-FileHash -LiteralPath $V12Path).Hash.ToLowerInvariant()
             launcher_inert_budget_and_identity=(Get-FileHash -LiteralPath $LauncherPath).Hash.ToLowerInvariant()
             recovered_candidate=$RecoveredHash
             lineage=(Get-FileHash -LiteralPath $ManifestPath).Hash.ToLowerInvariant()

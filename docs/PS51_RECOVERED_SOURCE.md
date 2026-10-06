@@ -92,6 +92,38 @@ no real setting changes. The laptop's denied test execution remains **BLOCKED**.
 
 ## Remaining waits and source/runtime relationships
 
+The observational coordinator repair follows accepted source
+`27b5d43682755281927804bbc98bfddfd9aca1e3` without changing the recovered
+candidate, library, lineage, native mechanics or embedded Python. Its worker
+wait requires all four declared names, captures their nonempty unique instance
+GUIDs from the supplied job objects once, and demands that exact name/GUID/count
+coverage on every snapshot. Empty expectations, duplicate or missing identities,
+changed instances, unreadable metadata and unsupported states return UNKNOWN.
+Failed or Stopped returns FAILED; only all-Completed returns COMPLETED.
+NotStarted/Running is an internal PENDING classification, never a final outcome.
+
+The wait reuses the unchanged shared deadline arithmetic and one Stopwatch,
+with the existing MaxHours/PollSeconds values (24 hours/30 seconds). Sleeps are
+clamped to remaining milliseconds; observations and completion are checked
+against expiry. Final outcomes are COMPLETED, FAILED, UNKNOWN or TIMED_OUT.
+An exact-case gate holds every non-completion before Receive-Job, Remove-Job
+or resume processing. No job discovery, recursive evidence scans, disk/mutex
+probes or logging occur inside the new polling functions.
+
+Tests import only the named observational definitions and use fake snapshots,
+clocks, sleeps and downstream sentinels. They create or control no real jobs,
+processes or mutexes and invoke no auth, network, cleanup or entrypoint. Negative
+controls reject missing/forged/moved main gates and effect commands in polling
+source. Existing assertions, timeouts, workflows and historical failures remain
+unchanged; the new head needs its own native CI receipts.
+
+This is a bound on polling decisions, not worker execution or successful audit
+content. A blocking metadata getter, job output collection/removal, worker
+termination, descendants and coordinator-lock lifetime are not qualified. Timeout
+leaves workers untouched; the existing outer finally is unchanged. An owned-worker
+lifecycle library would be separate work. All four entry HOLDs and unconditional
+operator admission refusal remain intact, so no operational behavior is enabled.
+
 Phase 2 replaces both direct invocations in `Resolve-PythonCommand` with the
 existing bounded native helper. One Stopwatch covers direct and launcher probes;
 defaults are 30 seconds overall and five seconds per probe. The launcher similarly
@@ -131,7 +163,7 @@ Line numbers below refer to the historical V11 reference or to PR head
 | Embedded Python lines 179–180 | `subprocess.run` uses a timeout; its descendant/pipe cleanup is not separately qualified. The outer supervisor bounds the direct Python process only. |
 | Embedded Python lines 430/479/621 | Executor contexts, `as_completed` and shutdown can wait without their own total deadline. HTTP socket timeouts also do not impose total response deadlines. |
 | Recovered launcher budget functions | Phase 2 bounds probe handoffs and clamps rate-limit sleeps to the same monotonic budget. Synchronous logging and native initialization remain outside a hard total limit. The installed launcher is unchanged. |
-| Coordinator lines 287–295 | Worker-state loop has no elapsed deadline and job removal is not bounded. The later writer wait has a separate deadline. No worker is started by tests. |
+| Coordinator worker-state wait (formerly lines 287-295) | Polling now has a monotonic deadline and strict name/instance/count coverage. Non-completion holds downstream processing. Metadata access, receive/removal and worker/lock lifetime remain unbounded or unqualified; the later writer wait is separate. No worker is started by tests. |
 | V13 lines 590/743 | Writer waits are unbounded loops. They preserve ownership rather than admitting overlapping work, but full-controller wall-clock boundedness is not established. |
 | V13 `Optimize-Volume`; embedded Python review-thread pagination | Volume operations and no-cursor/page-cap behavior remain outside this patch and unqualified. |
 
