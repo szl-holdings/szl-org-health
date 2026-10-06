@@ -17,22 +17,23 @@ not establish protected source admission. Its test counts are historical
 **REPORTED** evidence; separately replayed native tests have their own receipts.
 
 `tools/SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1` has a distinct version,
-`11.0.6-recovered-bounded.2`. The adjacent lineage JSON records exact byte ranges
-and hashes for five transformations: identity note; first-statement admission
+`11.0.6-recovered-bounded.3`. The adjacent lineage JSON records exact byte ranges
+and hashes for six transformations: identity note; first-statement admission
 hold; standalone inert native
-definitions and read-only policy preflight; the V11 native wrapper; removal of
+definitions and read-only policy preflight; the V11 native wrapper; bounded
+Python discovery probes; removal of
 the historical watchdog's execution-policy override. Every byte outside these
 ranges must match the original reference. The executable successor preserves
 the BOM and mixed line endings; Git must not normalize its bytes.
 
-The five standalone definitions are exact copies of this revision's inert
+The seven standalone definitions are exact copies of this revision's inert
 process library. This keeps the existing whole-file watchdog copy self-contained
 without adding a hidden adjacent-library dependency. Tests verify that equality.
 No watchdog or copied script is installed or executed by this proposal.
 
-Phase 1 continues accepted source `a1ed3461ca45fc3bdfacdf52a0b8606c00e68d8d`.
-The new candidate is 249142 bytes, SHA-256
-`a137d139c13362860cc1d91efb111c4f591152ac9ff8ed4b66d5ce9dfa612d1f`.
+Phase 2 continues accepted inactive source `39a2070d2492ee9e674e81880552cb75b67821fd`.
+The new candidate is 251617 bytes, SHA-256
+`9ab9abe318b9b2706dc688fe5aa213755b8645a9e01f7170def9584a447a319b`.
 The five copied native/policy definitions are unchanged from that baseline.
 All four entry points have an unconditional first-statement admission hold;
 the three former operator invocations now call an always-rejecting assertion.
@@ -75,7 +76,7 @@ by native write failures proving both read ends are closed. A negative control
 keeps both readers open and verifies successful writes. This tests inherited-pipe
 completion and resource release without an indefinite or production child.
 
-The separate recovered-source harness imports only seven named inert definitions,
+The separate recovered-source harness imports only ten named inert definitions,
 never the complete controller. It tests byte-range lineage, immutable embedded
 payload, copied definitions, unavailable exits, quoting and Unicode, twenty
 rapid exits, direct and descendant-held-pipe timeouts, redaction, result shape,
@@ -91,6 +92,28 @@ no real setting changes. The laptop's denied test execution remains **BLOCKED**.
 
 ## Remaining waits and source/runtime relationships
 
+Phase 2 replaces both direct invocations in `Resolve-PythonCommand` with the
+existing bounded native helper. One Stopwatch covers direct and launcher probes;
+defaults are 30 seconds overall and five seconds per probe. The launcher similarly
+shares one two-hour Stopwatch between `Get-GitHubBudgetObservation` and
+`Wait-SzlGitHubBudget`, with 30-second probe caps. Timeouts are the smaller of the
+per-probe cap and floored remaining seconds; a subsecond remainder refuses before
+native handoff. Completion and readiness are rechecked against the same clock.
+Sleep uses only the remaining milliseconds; no unconditional final probe exists.
+Unavailable/nonzero exits and malformed GitHub observations cannot become ready.
+
+The two new shared arithmetic definitions are pure; the five existing native/
+policy definitions are unchanged. Fake-clock tests stub native invocations,
+discovery reads, sleeps and logging. The added tests perform no auth, token
+capture, network, cleanup, real Python or full entrypoint invocation. Existing
+native assertions and timeouts stay intact. New exact-head native CI is required.
+
+This limits probe handoff timeouts and rejects stale completion; it does not
+establish a hard elapsed bound for synchronous discovery, native initialization,
+logging, OS scheduling or the whole controller. The native helper's direct-child
+cleanup allowance of up to one second remains explicit. Every entrypoint HOLD
+and the unconditional admission assertion remains intact.
+
 Line numbers below refer to the historical V11 reference or to PR head
 `ecc3e620ecc910c3391b282d03a0f4115c2124ac` for the other scripts.
 
@@ -99,6 +122,7 @@ Line numbers below refer to the historical V11 reference or to PR head
 | V11 lines 332/344/359 | The timed wait was followed by parameterless cleanup and completion waits. The recovered native definitions replace those paths; the historical reference remains untouched. |
 | V11 line 58 | `WaitOne(0,false)` is a nonblocking ownership probe. |
 | V11 line 168 | Direct `icacls` pipeline has no explicit deadline. Not exercised or qualified. |
+| Recovered `Resolve-PythonCommand` | Both version probes use the shared aggregate clock and bounded native handoff in Phase 2. Discovery filesystem/registry reads and native initialization have no separate hard deadline. |
 | V11 lines 2572–2600 | Direct Codex pipeline is inside a job with a 7200-second `Wait-Job`, but `Stop-Job`/`Remove-Job` cleanup has no explicit deadline. Not qualified by the helper tests. |
 | V11 lines 2677–2682 | Workflow polling has an absolute deadline but a 120-second in-flight native call plus a 20-second sleep can overshoot it. |
 | V11 lines 2772–2776 | HTTP body reads have 30-second per-read timeouts and a byte ceiling, not a total elapsed deadline. |
@@ -106,9 +130,10 @@ Line numbers below refer to the historical V11 reference or to PR head
 | V11 lines 3162/3215/3227 | Finite sleeps and outer cycle/runtime checks do not impose a hard deadline on every synchronous operation. |
 | Embedded Python lines 179–180 | `subprocess.run` uses a timeout; its descendant/pipe cleanup is not separately qualified. The outer supervisor bounds the direct Python process only. |
 | Embedded Python lines 430/479/621 | Executor contexts, `as_completed` and shutdown can wait without their own total deadline. HTTP socket timeouts also do not impose total response deadlines. |
-| Recovered launcher line 35 | Its direct `gh` budget probe has no explicit native deadline; later rate-limit sleeps can overshoot the outer deadline. This source and the installed launcher are unchanged in this iteration. |
+| Recovered launcher budget functions | Phase 2 bounds probe handoffs and clamps rate-limit sleeps to the same monotonic budget. Synchronous logging and native initialization remain outside a hard total limit. The installed launcher is unchanged. |
 | Coordinator lines 287–295 | Worker-state loop has no elapsed deadline and job removal is not bounded. The later writer wait has a separate deadline. No worker is started by tests. |
 | V13 lines 590/743 | Writer waits are unbounded loops. They preserve ownership rather than admitting overlapping work, but full-controller wall-clock boundedness is not established. |
+| V13 `Optimize-Volume`; embedded Python review-thread pagination | Volume operations and no-cursor/page-cap behavior remain outside this patch and unqualified. |
 
 The source selectors now identify the exact repository-adjacent recovered
 successor and return a descriptor with both prospective and runtime admission

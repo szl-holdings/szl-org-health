@@ -6,20 +6,22 @@
   "base_path": "tests/fixtures/ps51/operator-23b1aaab.ps1.txt",
   "base_bytes": 243573,
   "base_sha256": "23b1aaabef7aed9c2801c975bead79ac16084432537cff26059952208b3d687b",
-  "source_proposal_parent": "a1ed3461ca45fc3bdfacdf52a0b8606c00e68d8d",
+  "source_proposal_parent": "39a2070d2492ee9e674e81880552cb75b67821fd",
   "library_path": "tools/SZL_PS51_PROCESS_LIBRARY.ps1",
-  "library_sha256": "d1c1fdc155a5ce6af537d9f62052416037575404a53f4fd5008d3782acfeb888",
+  "library_sha256": "5981ef86bdd351cb3e2f116d2adf6c5ba55099bdd996d7ca2ed92df45d0405d4",
   "copied_definitions": [
     "Assert-SzlExecutionPolicy",
     "ConvertTo-SzlNativeArgument",
     "Get-SzlObservedExitCode",
     "Initialize-SzlNativePipe",
-    "Invoke-SzlNativeProcess"
+    "Invoke-SzlNativeProcess",
+    "Get-SzlRemainingMilliseconds",
+    "Get-SzlRemainingTimeoutSeconds"
   ],
   "candidate_path": "tools/SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1",
-  "candidate_bytes": 249142,
-  "candidate_sha256": "a137d139c13362860cc1d91efb111c4f591152ac9ff8ed4b66d5ce9dfa612d1f",
-  "candidate_version": "11.0.6-recovered-bounded.2",
+  "candidate_bytes": 251617,
+  "candidate_sha256": "9ab9abe318b9b2706dc688fe5aa213755b8645a9e01f7170def9584a447a319b",
+  "candidate_version": "11.0.6-recovered-bounded.3",
   "selection": {
     "root": "repository-adjacent-tools",
     "historical_admission": "UNKNOWN",
@@ -37,7 +39,7 @@
       "old_sha256": "94275aa64cde52ccdd594f2e68735794fb3c542501ee2e86060fc695fbc96b13",
       "new_start": 2220,
       "new_length": 80,
-      "new_sha256": "5d986382670e54dbb041d90d1c94b8eef1744dfe26265a74fe1da3f25554b41c"
+      "new_sha256": "7aa95a967d24b0d12d6758cf2393e00cd3e1a08e2fcb3b1ac21c2b0858e5555d"
     },
     {
       "kind": "inactive-entry-admission-hold",
@@ -54,24 +56,33 @@
       "old_length": 37,
       "old_sha256": "51a7cac39b5af67f3bad85292d297e0630fd69c86eee6321d24b156fac0a34ee",
       "new_start": 2466,
-      "new_length": 8612,
-      "new_sha256": "099e9beb4c9ef084c9c1f9e8e5b27a902c4df97d3037f43d447351eabe688b42"
+      "new_length": 9806,
+      "new_sha256": "368b8e5b3c113bc0461e28f8fc5d86fa935dd9f74fc31b3271cee292f2307563"
     },
     {
       "kind": "v11-native-wrapper",
       "old_start": 13209,
       "old_length": 4374,
       "old_sha256": "ebcc5ad9f58e0c92ffc05c9ed12696233091d807aef397dde4c377c556411968",
-      "new_start": 21873,
+      "new_start": 23067,
       "new_length": 1303,
       "new_sha256": "322f1166afe770d8deff09a080fba71579e6c0a536a8692b35f3aeac4702eaee"
+    },
+    {
+      "kind": "bounded-python-discovery-probes",
+      "old_start": 18820,
+      "old_length": 3487,
+      "old_sha256": "acef1b272f8f0a580c447279c7173c4b93f8354c01d03f79bc7299e236477c41",
+      "new_start": 25607,
+      "new_length": 4768,
+      "new_sha256": "7ab1a59b656dda5406ea1c8a23186254c715b9a2ed90a028a5415ef464f53021"
     },
     {
       "kind": "remove-watchdog-policy-override",
       "old_start": 39236,
       "old_length": 40,
       "old_sha256": "f8bbbdda4db2e257e7a53fc09c8f43e1a06b3d9757fb156dabf49f12f10054e0",
-      "new_start": 44829,
+      "new_start": 47304,
       "new_length": 16,
       "new_sha256": "37bd0f187e7283e342976b2de142d3d0f3468dc9291a46a743bd40820b7bf65e"
     }

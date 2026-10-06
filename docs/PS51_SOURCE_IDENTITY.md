@@ -1,7 +1,7 @@
 # PS51 source identity and qualification boundary
 
-This phase continues the accepted PR234 source baseline
-`a1ed3461ca45fc3bdfacdf52a0b8606c00e68d8d`.
+Phase 2 continues the accepted inactive PR234 source baseline
+`39a2070d2492ee9e674e81880552cb75b67821fd`.
 It changes source only. It does not install a controller, start an estate
 process, reconcile local files, change a schedule, or admit a release.
 
@@ -35,8 +35,8 @@ The source launcher now resolves the adjacent recovered successor through the
 shared identity function and then rejects admission. The installed launcher
 remains unchanged with its historical stale pin.
 
-The candidate is version `11.0.6-recovered-bounded.2`, 249142 bytes, SHA-256
-`a137d139c13362860cc1d91efb111c4f591152ac9ff8ed4b66d5ce9dfa612d1f`.
+The candidate is version `11.0.6-recovered-bounded.3`, 251617 bytes, SHA-256
+`9ab9abe318b9b2706dc688fe5aa213755b8645a9e01f7170def9584a447a319b`.
 All four executable entry points begin with the literal unconditional
 `throw 'SZL_SOURCE_ADMISSION_HOLD'` before imports, preferences, policy reads,
 mutexes, directories, environment changes or other effects. The existing three
@@ -75,6 +75,18 @@ provenance. Runtime activation requires a separate reviewed transition.
   The separately named recovered successor addresses this native-helper gap;
   original historical admission and full-controller qualification remain blocked.
 - Identity is returned as a descriptor; no operator invocation is admitted.
+- Phase 2 adds pure remaining-budget arithmetic. Both Python version probes use
+  one monotonic discovery clock (30 seconds by default, five seconds per probe).
+  The launcher's GitHub budget loop shares its two-hour Stopwatch across probes
+  (30 seconds per probe by default) and sleeps. Native timeouts use the smaller
+  of the cap and remaining whole seconds; a subsecond remainder refuses before
+  handoff. Completed observations are rechecked, sleeps are clamped, and there
+  is no unconditional final probe. These are inactive source contracts pending
+  exact-head CI, not operational qualification or a whole-controller bound.
+- Existing native initialization, synchronous discovery reads, log writes and
+  scheduling can still consume time outside the native wait limit. Direct-child
+  cleanup may add up to one second. The five existing native/policy definitions
+  and embedded Python payload are unchanged by Phase 2.
 
 ## Qualification
 
@@ -83,7 +95,7 @@ only where test-file execution is already permitted. Do not relax local policy
 or evaluate the script through another route after an execution denial.
 
 The harness hashes/parses the historical reference as data, imports only named
-prospective shared/V13 and selector definitions, and compiles its own offline C#
+prospective shared/V13, selector and launcher definitions, and compiles its own offline C#
 probe in a new temporary directory. Historical definitions are not executed.
 It tests helper identity, exit7, unavailable exit, rapid exits, empty argv,
 Unicode/spaces/quotes/backslashes, simultaneous streams, direct-child timeout,
@@ -96,7 +108,11 @@ same-length drift, invalid roots, read failure, actual owned junctions, adjacent
 wrapper binding, forged admission metadata, and unconditional entry ordering.
 Only named selector definitions are written to and loaded from an owned inert
 fixture so their default PSScriptRoot binding is exercised. No entry point runs.
-The original failed mixed-suite replay is retained separately, byte for byte,
+Phase 2 adds fake-clock discovery and budget-loop tests with native calls,
+filesystem discovery, logging and sleep stubbed. Added tests invoke no real
+Python, GitHub, auth, token capture, network, cleanup or entry point. Existing
+native-probe assertions and timeouts remain unchanged; prior counts cannot
+qualify the new head. The original failed mixed-suite replay is retained separately, byte for byte,
 with both historical failure rows false. Its integrity check is not a new replay
 or a historical qualification pass. See the source-by-source conclusion map in
 `PS51_RECOVERED_SOURCE.md`.

@@ -47,7 +47,7 @@
     Owner: Stephen P. Lutar Jr. / SZL Holdings
     GitHub: szl-holdings
     Hugging Face: SZLHOLDINGS
-    Recovered source candidate: 11.0.6-recovered-bounded.2 (not prior admission)
+    Recovered source candidate: 11.0.6-recovered-bounded.3 (not prior admission)
     Embedded controller: SZL Codex Estate Convergence V10
 #>
 
@@ -242,8 +242,34 @@ function Invoke-SzlNativeProcess {
     }
 }
 
+function Get-SzlRemainingMilliseconds {
+    param(
+        [ValidateRange(1,2147483)][int]$BudgetSeconds,
+        [Parameter(Mandatory=$true)][double]$ElapsedMilliseconds
+    )
+    # Arithmetic only. Callers supply elapsed time from the same Stopwatch.
+    if ([double]::IsNaN($ElapsedMilliseconds) -or [double]::IsInfinity($ElapsedMilliseconds) -or $ElapsedMilliseconds -lt 0) {
+        throw 'SZL_DEADLINE_OBSERVATION_INVALID'
+    }
+    $Remaining = [Math]::Floor(($BudgetSeconds * 1000.0) - $ElapsedMilliseconds)
+    if ($Remaining -lt 1) { throw 'SZL_DEADLINE_EXPIRED' }
+    return [long]$Remaining
+}
+
+function Get-SzlRemainingTimeoutSeconds {
+    param(
+        [ValidateRange(1,2147483)][int]$BudgetSeconds,
+        [Parameter(Mandatory=$true)][double]$ElapsedMilliseconds,
+        [ValidateRange(1,2147483)][int]$OperationTimeoutSeconds
+    )
+    $Remaining = Get-SzlRemainingMilliseconds -BudgetSeconds $BudgetSeconds -ElapsedMilliseconds $ElapsedMilliseconds
+    # Do not round a subsecond remainder up into permission to launch.
+    if ($Remaining -lt 1000) { throw 'SZL_DEADLINE_EXPIRED' }
+    return [int][Math]::Min($OperationTimeoutSeconds, [Math]::Floor($Remaining / 1000.0))
+}
+
 Assert-SzlExecutionPolicy
-$OperatorVersion = '11.0.6-recovered-bounded.2'
+$OperatorVersion = '11.0.6-recovered-bounded.3'
 $script:RunMutex = New-Object System.Threading.Mutex($false, 'Global\SZL-Estate-Operator-PS51-V11')
 if (-not $script:RunMutex.WaitOne(0, $false)) { throw 'Another SZL estate operator process is already active.' }
 Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action { try { $script:RunMutex.ReleaseMutex() | Out-Null } catch { } } | Out-Null
@@ -524,6 +550,11 @@ function Ensure-WingetPackage {
 }
 
 function Resolve-PythonCommand {
+    param(
+        [ValidateRange(1,2147483)][int]$DiscoveryTimeoutSeconds = 30,
+        [ValidateRange(1,2147483)][int]$ProbeTimeoutSeconds = 5,
+        $Clock = ([Diagnostics.Stopwatch]::StartNew())
+    )
     $attempted = @()
     $directCandidates = @()
 
@@ -574,20 +605,15 @@ function Resolve-PythonCommand {
 
         $attempted += $candidate
 
+        $Timeout = Get-SzlRemainingTimeoutSeconds -BudgetSeconds $DiscoveryTimeoutSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds -OperationTimeoutSeconds $ProbeTimeoutSeconds
+        $ProbeResult = $null
         try {
-            & $candidate `
-                -c `
-                'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 9)' `
-                2>$null
-
-            if ($LASTEXITCODE -eq 0) {
-                return [pscustomobject]@{
-                    File = $candidate
-                    Prefix = @()
-                }
-            }
+            $ProbeResult = Invoke-SzlNativeProcess -FilePath $candidate -ArgumentList @('-c','import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 9)') -WorkingDirectory $RunRoot -TimeoutSeconds $Timeout -AllowNonZero -Name 'python-discovery'
         }
-        catch {
+        catch { } # An unavailable or failed probe never selects a candidate.
+        $null = Get-SzlRemainingMilliseconds -BudgetSeconds $DiscoveryTimeoutSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds
+        if ($null -ne $ProbeResult -and $ProbeResult.ExitCode -is [int] -and $ProbeResult.ExitCode -eq 0) {
+            return [pscustomobject]@{ File=$candidate; Prefix=@() }
         }
     }
 
@@ -615,24 +641,19 @@ function Resolve-PythonCommand {
 
         $attempted += ($launcher + ' -3.12')
 
+        $Timeout = Get-SzlRemainingTimeoutSeconds -BudgetSeconds $DiscoveryTimeoutSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds -OperationTimeoutSeconds $ProbeTimeoutSeconds
+        $ProbeResult = $null
         try {
-            & $launcher `
-                -3.12 `
-                -c `
-                'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 9)' `
-                2>$null
-
-            if ($LASTEXITCODE -eq 0) {
-                return [pscustomobject]@{
-                    File = $launcher
-                    Prefix = @('-3.12')
-                }
-            }
+            $ProbeResult = Invoke-SzlNativeProcess -FilePath $launcher -ArgumentList @('-3.12','-c','import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 9)') -WorkingDirectory $RunRoot -TimeoutSeconds $Timeout -AllowNonZero -Name 'python-discovery'
         }
-        catch {
+        catch { } # The same aggregate clock covers direct and launcher probes.
+        $null = Get-SzlRemainingMilliseconds -BudgetSeconds $DiscoveryTimeoutSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds
+        if ($null -ne $ProbeResult -and $ProbeResult.ExitCode -is [int] -and $ProbeResult.ExitCode -eq 0) {
+            return [pscustomobject]@{ File=$launcher; Prefix=@('-3.12') }
         }
     }
 
+    $null = Get-SzlRemainingMilliseconds -BudgetSeconds $DiscoveryTimeoutSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds
     $attemptSummary = if ($attempted.Count -gt 0) {
         $attempted -join '; '
     }

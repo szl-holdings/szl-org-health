@@ -185,14 +185,40 @@ function Invoke-SzlNativeProcess {
     }
 }
 
+function Get-SzlRemainingMilliseconds {
+    param(
+        [ValidateRange(1,2147483)][int]$BudgetSeconds,
+        [Parameter(Mandatory=$true)][double]$ElapsedMilliseconds
+    )
+    # Arithmetic only. Callers supply elapsed time from the same Stopwatch.
+    if ([double]::IsNaN($ElapsedMilliseconds) -or [double]::IsInfinity($ElapsedMilliseconds) -or $ElapsedMilliseconds -lt 0) {
+        throw 'SZL_DEADLINE_OBSERVATION_INVALID'
+    }
+    $Remaining = [Math]::Floor(($BudgetSeconds * 1000.0) - $ElapsedMilliseconds)
+    if ($Remaining -lt 1) { throw 'SZL_DEADLINE_EXPIRED' }
+    return [long]$Remaining
+}
+
+function Get-SzlRemainingTimeoutSeconds {
+    param(
+        [ValidateRange(1,2147483)][int]$BudgetSeconds,
+        [Parameter(Mandatory=$true)][double]$ElapsedMilliseconds,
+        [ValidateRange(1,2147483)][int]$OperationTimeoutSeconds
+    )
+    $Remaining = Get-SzlRemainingMilliseconds -BudgetSeconds $BudgetSeconds -ElapsedMilliseconds $ElapsedMilliseconds
+    # Do not round a subsecond remainder up into permission to launch.
+    if ($Remaining -lt 1000) { throw 'SZL_DEADLINE_EXPIRED' }
+    return [int][Math]::Min($OperationTimeoutSeconds, [Math]::Floor($Remaining / 1000.0))
+}
+
 function Resolve-SzlPinnedOperator {
     param([Parameter(Mandatory = $true)][string]$SourceRoot)
     # Repository-adjacent recovered source only. Neither this descriptor nor a
     # manifest/environment value grants admission. These constants bind bytes.
     $FileName = 'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1'
-    $Expected = 'a137d139c13362860cc1d91efb111c4f591152ac9ff8ed4b66d5ce9dfa612d1f'
-    $ExpectedBytes = 249142 # RECOVERED_BYTE_COUNT
-    $Version = '11.0.6-recovered-bounded.2'
+    $Expected = '9ab9abe318b9b2706dc688fe5aa213755b8645a9e01f7170def9584a447a319b'
+    $ExpectedBytes = 251617 # RECOVERED_BYTE_COUNT
+    $Version = '11.0.6-recovered-bounded.3'
     if ($SourceRoot -notmatch '^[A-Za-z]:[\\/]' -or
         $SourceRoot -match '[*?]' -or $SourceRoot.Substring(2).Contains(':') -or
         $SourceRoot -match '(^|[\\/])\.\.?([\\/]|$)' -or

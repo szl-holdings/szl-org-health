@@ -41,8 +41,10 @@ function Read-Definitions([string]$Path, [string[]]$Names) {
     return $Text -join "`n"
 }
 $LibraryPath = Join-Path $RepositoryRoot 'tools/SZL_PS51_PROCESS_LIBRARY.ps1'
-$LibraryDefinitions = Read-Definitions $LibraryPath @('ConvertTo-SzlNativeArgument','Get-SzlObservedExitCode','Initialize-SzlNativePipe','Invoke-SzlNativeProcess','Resolve-SzlPinnedOperator','Assert-SzlOperatorAdmission')
+$LibraryDefinitions = Read-Definitions $LibraryPath @('ConvertTo-SzlNativeArgument','Get-SzlObservedExitCode','Initialize-SzlNativePipe','Invoke-SzlNativeProcess','Get-SzlRemainingMilliseconds','Get-SzlRemainingTimeoutSeconds','Resolve-SzlPinnedOperator','Assert-SzlOperatorAdmission')
 . ([scriptblock]::Create($LibraryDefinitions))
+$LauncherPath = Join-Path $RepositoryRoot 'tools/RUN_SZL_CTO_RATE_AWARE.ps1'
+. ([scriptblock]::Create((Read-Definitions $LauncherPath @('Get-GitHubBudgetObservation','Wait-SzlGitHubBudget'))))
 $V13Path = Join-Path $RepositoryRoot 'tools/SZL_DISK_CLEAN_RESUME_PS51_V13.ps1'
 . ([scriptblock]::Create((Read-Definitions $V13Path @('Invoke-NativeTool','Find-Operator'))))
 $V12Path = Join-Path $RepositoryRoot 'tools/SZL_PARALLEL_FRONTIER_COORDINATOR_PS51_V12_1.ps1'
@@ -94,7 +96,139 @@ function Assert-ArgumentEcho([string]$Raw, [AllowEmptyCollection()][AllowEmptySt
         Assert-True ([string]::Equals($Actual, $Expected[$Index], [StringComparison]::Ordinal)) ('Argument changed at ' + $Index)
     }
 }
+function Invoke-SyntheticBudgetCase([scriptblock]$Action) {
+    # These added cases cannot reach a native process, network, log file or sleep.
+    $Fixture = [pscustomobject]@{
+        Clock=[pscustomobject]@{ElapsedMilliseconds=0L}; Replies=(New-Object Collections.Queue)
+        Calls=(New-Object Collections.Generic.List[object]); Sleeps=(New-Object Collections.Generic.List[int])
+        LogAdvance=0L; SleepAdjustment=0L; UtcNow=([datetime]'2020-01-01T00:00:00Z').ToUniversalTime()
+    }
+    function Invoke-SzlNativeProcess {
+        param($FilePath,$ArgumentList,$WorkingDirectory,$TimeoutSeconds,[switch]$AllowNonZero)
+        $Fixture.Calls.Add([pscustomobject]@{File=$FilePath;Arguments=$ArgumentList;Timeout=$TimeoutSeconds})
+        if ($Fixture.Replies.Count -eq 0) { throw 'UNEXPECTED_SYNTHETIC_PROBE' }
+        $Reply=$Fixture.Replies.Dequeue(); $Fixture.Clock.ElapsedMilliseconds += $Reply.Advance
+        if ($Reply.Throw) { throw 'SYNTHETIC_NATIVE_FAILURE' }
+        return [pscustomobject]@{ExitCode=$Reply.Exit;Stdout=$Reply.Text;Stderr=''}
+    }
+    function Start-Sleep { param([int]$Milliseconds); $Fixture.Sleeps.Add($Milliseconds); $Fixture.Clock.ElapsedMilliseconds += $Milliseconds+$Fixture.SleepAdjustment }
+    function Write-RunLog { param($Message,$Level); $Fixture.Clock.ElapsedMilliseconds += $Fixture.LogAdvance }
+    function Get-Date { return $Fixture.UtcNow }
+    & $Action $Fixture
+}
+function Add-SyntheticBudgetReply {
+    param($Fixture,[AllowNull()]$Exit=0,[string]$Text="HTTP/2.0 200 OK`nX-Ratelimit-Remaining: 2000`nX-Ratelimit-Reset: 0",[long]$Advance=0,[switch]$Throw)
+    $Fixture.Replies.Enqueue([pscustomobject]@{Exit=$Exit;Text=$Text;Advance=$Advance;Throw=[bool]$Throw})
+}
 try {
+    Test-Case 'budget timeout uses cap and floors remaining seconds' {
+        Assert-True ((Get-SzlRemainingTimeoutSeconds -BudgetSeconds 30 -ElapsedMilliseconds 2501 -OperationTimeoutSeconds 10) -eq 10) 'CAP_CHANGED'
+        Assert-True ((Get-SzlRemainingTimeoutSeconds -BudgetSeconds 5 -ElapsedMilliseconds 2501 -OperationTimeoutSeconds 10) -eq 2) 'REMAINDER_ROUNDED_UP'
+    }
+    Test-Case 'budget refuses subsecond exact and exceeded expiry before launch' {
+        foreach($Elapsed in @(1,1000,1001)) { Assert-Throws { Get-SzlRemainingTimeoutSeconds -BudgetSeconds 1 -ElapsedMilliseconds $Elapsed -OperationTimeoutSeconds 5 } 'SZL_DEADLINE_EXPIRED' }
+    }
+    Test-Case 'budget rejects negative and nonfinite elapsed observations' {
+        foreach($Elapsed in @(-1,[double]::NaN,[double]::PositiveInfinity,[double]::NegativeInfinity)) { Assert-Throws { Get-SzlRemainingMilliseconds -BudgetSeconds 5 -ElapsedMilliseconds $Elapsed } 'SZL_DEADLINE_OBSERVATION_INVALID' }
+    }
+    Test-Case 'budget millisecond remainder never rounds upward' {
+        Assert-True ((Get-SzlRemainingMilliseconds -BudgetSeconds 5 -ElapsedMilliseconds 3500.1) -eq 1499) 'MILLISECOND_REMAINDER_CHANGED'
+        Assert-Throws { Get-SzlRemainingMilliseconds -BudgetSeconds 5 -ElapsedMilliseconds 5000 } 'SZL_DEADLINE_EXPIRED'
+    }
+    Test-Case 'synthetic GitHub probe binds argv and remaining timeout' {
+        Invoke-SyntheticBudgetCase { param($F)
+            $F.Clock.ElapsedMilliseconds=2501; Add-SyntheticBudgetReply $F
+            $R=Get-GitHubBudgetObservation -Clock $F.Clock -BudgetSeconds 5 -ProbeTimeoutSeconds 9
+            Assert-True ($R.Status -eq 200 -and $R.Remaining -eq 2000 -and $F.Calls.Count -eq 1 -and $F.Calls[0].Timeout -eq 2) 'PROBE_BUDGET_OR_RESULT'
+            Assert-True ($F.Calls[0].File -ceq 'gh.exe' -and ($F.Calls[0].Arguments -join '|') -ceq 'api|--include|users/szl-holdings/repos?type=all&sort=full_name&per_page=1') 'PROBE_ARGV'
+        }
+    }
+    Test-Case 'synthetic GitHub nonzero and unavailable exits cannot become ready' {
+        foreach($Exit in @(7,$null,'0',$false)) {
+            Invoke-SyntheticBudgetCase { param($F)
+                Add-SyntheticBudgetReply $F -Exit $Exit
+                $R=Get-GitHubBudgetObservation -Clock $F.Clock
+                Assert-True ($R.Status -eq 0 -and $R.Remaining -eq -1 -and $F.Calls.Count -eq 1) 'UNAVAILABLE_EXIT_ACCEPTED'
+            }
+        }
+    }
+    Test-Case 'synthetic GitHub malformed observations cannot become ready' {
+        foreach($Text in @('',"HTTP/2.0 200 OK`nX-Ratelimit-Reset: 0","HTTP/2.0 200 OK`nX-Ratelimit-Remaining: 2000","HTTP/2.0 200 OK`nX-Ratelimit-Remaining: 999999999999999999999`nX-Ratelimit-Reset: 0","HTTP/2.0 200 OK`nX-Ratelimit-Remaining: 2000`nX-Ratelimit-Reset: invalid")) {
+            Invoke-SyntheticBudgetCase { param($F)
+                Add-SyntheticBudgetReply $F -Text $Text
+                $R=Get-GitHubBudgetObservation -Clock $F.Clock
+                Assert-True ($R.Status -eq 0 -and $R.Remaining -eq -1) 'MALFORMED_OBSERVATION_ACCEPTED'
+            }
+        }
+    }
+    Test-Case 'synthetic GitHub native failure stays unavailable' {
+        Invoke-SyntheticBudgetCase { param($F)
+            Add-SyntheticBudgetReply $F -Throw
+            $R=Get-GitHubBudgetObservation -Clock $F.Clock
+            Assert-True ($R.Status -eq 0 -and $F.Calls.Count -eq 1) 'FAILED_PROBE_ACCEPTED'
+        }
+    }
+    Test-Case 'synthetic GitHub completed probe cannot pass after expiry' {
+        Invoke-SyntheticBudgetCase { param($F)
+            Add-SyntheticBudgetReply $F -Advance 5000
+            Assert-Throws { Get-GitHubBudgetObservation -Clock $F.Clock -BudgetSeconds 5 } 'SZL_DEADLINE_EXPIRED'
+            Assert-True ($F.Calls.Count -eq 1) 'PROBE_RETRIED_AFTER_EXPIRY'
+        }
+    }
+    Test-Case 'synthetic GitHub subsecond remainder launches nothing' {
+        Invoke-SyntheticBudgetCase { param($F)
+            $F.Clock.ElapsedMilliseconds=4001
+            Assert-Throws { Get-GitHubBudgetObservation -Clock $F.Clock -BudgetSeconds 5 } 'SZL_DEADLINE_EXPIRED'
+            Assert-True ($F.Calls.Count -eq 0) 'SUBSECOND_PROBE_LAUNCHED'
+        }
+    }
+    Test-Case 'synthetic ready budget returns once without a second probe or sleep' {
+        Invoke-SyntheticBudgetCase { param($F)
+            Add-SyntheticBudgetReply $F
+            $R=Wait-SzlGitHubBudget -Clock $F.Clock
+            Assert-True ($R.Status -eq 200 -and $F.Calls.Count -eq 1 -and $F.Sleeps.Count -eq 0) 'READY_PROBED_AGAIN'
+            Assert-Throws { Assert-SzlOperatorAdmission $R } 'SZL_SOURCE_ADMISSION_HOLD'
+        }
+    }
+    Test-Case 'synthetic budget loop reuses clock and decreases next probe timeout' {
+        Invoke-SyntheticBudgetCase { param($F)
+            Add-SyntheticBudgetReply $F -Text "HTTP/2.0 200 OK`nX-Ratelimit-Remaining: 1`nX-Ratelimit-Reset: 0" -Advance 1500
+            Add-SyntheticBudgetReply $F
+            $R=Wait-SzlGitHubBudget -Clock $F.Clock -BudgetSeconds 300 -ProbeTimeoutSeconds 300
+            Assert-True ($R.Remaining -eq 2000 -and $F.Calls.Count -eq 2 -and $F.Calls[0].Timeout -eq 300 -and $F.Calls[1].Timeout -eq 178 -and $F.Sleeps[0] -eq 120000) 'AGGREGATE_CLOCK_RESET'
+        }
+    }
+    Test-Case 'synthetic budget sleep clamps and expiry permits no further probe' {
+        Invoke-SyntheticBudgetCase { param($F)
+            Add-SyntheticBudgetReply $F -Exit 1 -Advance 1250
+            Assert-Throws { Wait-SzlGitHubBudget -Clock $F.Clock -BudgetSeconds 5 } 'SZL_DEADLINE_EXPIRED'
+            Assert-True ($F.Calls.Count -eq 1 -and $F.Sleeps.Count -eq 1 -and $F.Sleeps[0] -eq 3750) 'SLEEP_OR_POST_DEADLINE_PROBE'
+        }
+    }
+    Test-Case 'synthetic sleep boundary refuses a final subsecond probe' {
+        Invoke-SyntheticBudgetCase { param($F)
+            $F.SleepAdjustment=-1; Add-SyntheticBudgetReply $F -Exit 1
+            Assert-Throws { Wait-SzlGitHubBudget -Clock $F.Clock -BudgetSeconds 5 } 'SZL_DEADLINE_EXPIRED'
+            Assert-True ($F.Calls.Count -eq 1 -and $F.Clock.ElapsedMilliseconds -eq 4999) 'SUBSECOND_LOOP_PROBE'
+        }
+    }
+    Test-Case 'synthetic logging delay cannot return a stale ready observation' {
+        Invoke-SyntheticBudgetCase { param($F)
+            $F.LogAdvance=4000; Add-SyntheticBudgetReply $F -Advance 1000
+            Assert-Throws { Wait-SzlGitHubBudget -Clock $F.Clock -BudgetSeconds 5 } 'SZL_DEADLINE_EXPIRED'
+            Assert-True ($F.Calls.Count -eq 1 -and $F.Sleeps.Count -eq 0) 'STALE_READY_OBSERVATION'
+        }
+    }
+    Test-Case 'synthetic reset waits retain wall-clock clamps within monotonic budget' {
+        foreach($Vector in @(@{Reset=1577836801L;Expected=30000},@{Reset=1577936799L;Expected=3600000})) {
+            Invoke-SyntheticBudgetCase { param($F)
+                Add-SyntheticBudgetReply $F -Text ("HTTP/2.0 200 OK`nX-Ratelimit-Remaining: 1`nX-Ratelimit-Reset: "+$Vector.Reset)
+                Add-SyntheticBudgetReply $F
+                $null=Wait-SzlGitHubBudget -Clock $F.Clock -BudgetSeconds 4000
+                Assert-True ($F.Sleeps.Count -eq 1 -and $F.Sleeps[0] -eq $Vector.Expected -and $F.Calls.Count -eq 2) 'RESET_WAIT_CLAMP'
+            }
+        }
+    }
     Test-Case 'fixture reference parses without running main' { Assert-True ($ExpectedHash -ceq (Get-FileHash -LiteralPath $Reference).Hash) 'Reference changed'; Read-Definitions $Reference @('Invoke-Native') | Out-Null }
     $Candidate = Join-Path $SourceToolsRoot 'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1'
     $OldCandidate = Join-Path $SourceToolsRoot 'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_HF_PREFLIGHT_ROBUST.ps1'
@@ -242,13 +376,13 @@ finally {
     New-Item -ItemType Directory -Path $ReceiptDirectory -Force | Out-Null
     $PublicReceipt = [ordered]@{
         schema='szl.ps51-inert-ci/v1';suite='prospective-shared-and-v13';fixture_class='SIMULATED'
-        qualification_scope='named-prospective-definitions-and-source-identity'
+        qualification_scope='named-prospective-definitions-source-identity-and-synthetic-budget-contracts'
         powershell=$Receipt.powershell;reference_sha256=$Receipt.reference_sha256;harness_sha256=$Receipt.harness_sha256
         source_sha256=[ordered]@{
             shared=(Get-FileHash -LiteralPath $LibraryPath).Hash.ToLowerInvariant()
             v13=(Get-FileHash -LiteralPath $V13Path).Hash.ToLowerInvariant()
             v12_selectors=(Get-FileHash -LiteralPath $V12Path).Hash.ToLowerInvariant()
-            launcher_identity_only=(Get-FileHash -LiteralPath (Join-Path $RepositoryRoot 'tools/RUN_SZL_CTO_RATE_AWARE.ps1')).Hash.ToLowerInvariant()
+            launcher_inert_budget_and_identity=(Get-FileHash -LiteralPath $LauncherPath).Hash.ToLowerInvariant()
             recovered_candidate=$RecoveredHash
             lineage=(Get-FileHash -LiteralPath $ManifestPath).Hash.ToLowerInvariant()
         }

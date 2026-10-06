@@ -12,7 +12,7 @@ $ProgressPreference = 'SilentlyContinue'
 $EvidenceRoot = 'C:\ProgramData\SZL\EstateOperator'
 $ControllerRoot = 'C:\SZL-CTO-CONVERGENCE'
 $LogPath = Join-Path $ControllerRoot ('RATE-AWARE-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
-$Deadline = (Get-Date).AddHours(2)
+$BudgetClock = [Diagnostics.Stopwatch]::StartNew()
 
 function Write-RunLog {
     param([string]$Message,[string]$Level='INFO')
@@ -28,23 +28,56 @@ function Test-Administrator {
 }
 
 function Get-GitHubBudgetObservation {
-    $previousPreference = $ErrorActionPreference
-    $lines = @()
+    param(
+        [Parameter(Mandatory=$true)]$Clock,
+        [ValidateRange(1,2147483)][int]$BudgetSeconds = 7200,
+        [ValidateRange(1,2147483)][int]$ProbeTimeoutSeconds = 30
+    )
+    $Timeout = Get-SzlRemainingTimeoutSeconds -BudgetSeconds $BudgetSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds -OperationTimeoutSeconds $ProbeTimeoutSeconds
+    $Unavailable = [pscustomobject]@{ Status=0; Remaining=-1; Reset=0L }
     try {
-        $ErrorActionPreference = 'Continue'
-        $lines = @(& gh.exe api --include 'users/szl-holdings/repos?type=all&sort=full_name&per_page=1' 2>&1)
+        $Result = Invoke-SzlNativeProcess -FilePath 'gh.exe' -ArgumentList @('api','--include','users/szl-holdings/repos?type=all&sort=full_name&per_page=1') -WorkingDirectory $PSScriptRoot -TimeoutSeconds $Timeout -AllowNonZero
+        $ExitCode = Get-SzlObservedExitCode -Process $Result
     }
-    finally {
-        $ErrorActionPreference = $previousPreference
+    catch {
+        $null = Get-SzlRemainingMilliseconds -BudgetSeconds $BudgetSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds
+        return $Unavailable
     }
-    $text = $lines -join [Environment]::NewLine
+    # An observation completed after expiry cannot authorize another step.
+    $null = Get-SzlRemainingMilliseconds -BudgetSeconds $BudgetSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds
+    if ($ExitCode -ne 0) { return $Unavailable }
+    $text = [string]$Result.Stdout
     $status = 0
     $remaining = -1
     $reset = 0L
-    if ($text -match '(?im)^HTTP/\S+\s+(\d{3})') { $status = [int]$matches[1] }
-    if ($text -match '(?im)^X-Ratelimit-Remaining:\s*(\d+)') { $remaining = [int]$matches[1] }
-    if ($text -match '(?im)^X-Ratelimit-Reset:\s*(\d+)') { $reset = [int64]$matches[1] }
+    if ($text -notmatch '(?im)^HTTP/\S+\s+(\d{3})(?:\s|$)' -or -not [int]::TryParse($matches[1],[ref]$status)) { return $Unavailable }
+    if ($text -notmatch '(?im)^X-Ratelimit-Remaining:\s*(\d+)\s*$' -or -not [int]::TryParse($matches[1],[ref]$remaining)) { return $Unavailable }
+    if ($text -notmatch '(?im)^X-Ratelimit-Reset:\s*(\d+)\s*$' -or -not [int64]::TryParse($matches[1],[ref]$reset)) { return $Unavailable }
     return [pscustomobject]@{ Status=$status; Remaining=$remaining; Reset=$reset }
+}
+
+function Wait-SzlGitHubBudget {
+    param(
+        [Parameter(Mandatory=$true)]$Clock,
+        [ValidateRange(1,2147483)][int]$BudgetSeconds = 7200,
+        [ValidateRange(1,2147483)][int]$ProbeTimeoutSeconds = 30
+    )
+    while ($true) {
+        $null = Get-SzlRemainingTimeoutSeconds -BudgetSeconds $BudgetSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds -OperationTimeoutSeconds $ProbeTimeoutSeconds
+        $observation = Get-GitHubBudgetObservation -Clock $Clock -BudgetSeconds $BudgetSeconds -ProbeTimeoutSeconds $ProbeTimeoutSeconds
+        $null = Get-SzlRemainingMilliseconds -BudgetSeconds $BudgetSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds
+        Write-RunLog ('GitHub probe: status={0}, remaining={1}, reset={2}' -f $observation.Status,$observation.Remaining,$observation.Reset) 'INFO'
+        $null = Get-SzlRemainingMilliseconds -BudgetSeconds $BudgetSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds
+        if ($observation.Status -eq 200 -and $observation.Remaining -gt 1000) { return $observation }
+        $sleepSeconds = 120
+        if ($observation.Reset -gt 0) {
+            $resetUtc = [DateTimeOffset]::FromUnixTimeSeconds($observation.Reset).UtcDateTime
+            $sleepSeconds = [Math]::Ceiling(($resetUtc - (Get-Date).ToUniversalTime()).TotalSeconds) + 20
+            $sleepSeconds = [Math]::Max(30, [Math]::Min(3600, $sleepSeconds))
+        }
+        $Remaining = Get-SzlRemainingMilliseconds -BudgetSeconds $BudgetSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds
+        Start-Sleep -Milliseconds ([int][Math]::Min($sleepSeconds * 1000.0, $Remaining))
+    }
 }
 
 if (-not (Test-Administrator)) { throw 'Run this file from Windows PowerShell 5.1 as Administrator.' }
@@ -62,22 +95,7 @@ if ($otherRunners.Count -gt 0) {
 }
 Write-RunLog 'Waiting for a real GitHub REST request to prove usable core budget. No blind API loop will run.' 'INFO'
 
-while ((Get-Date) -lt $Deadline) {
-    $observation = Get-GitHubBudgetObservation
-    Write-RunLog ('GitHub probe: status={0}, remaining={1}, reset={2}' -f $observation.Status,$observation.Remaining,$observation.Reset) 'INFO'
-    if ($observation.Status -eq 200 -and $observation.Remaining -gt 1000) { break }
-    $sleepSeconds = 120
-    if ($observation.Reset -gt 0) {
-        $resetUtc = [DateTimeOffset]::FromUnixTimeSeconds($observation.Reset).UtcDateTime
-        $sleepSeconds = [int][Math]::Ceiling(($resetUtc - [DateTime]::UtcNow).TotalSeconds) + 20
-        if ($sleepSeconds -lt 30) { $sleepSeconds = 30 }
-        if ($sleepSeconds -gt 3600) { $sleepSeconds = 3600 }
-        Write-RunLog ('Rate budget unavailable. Waiting until approximately {0:u}.' -f $resetUtc) 'WARN'
-    }
-    Start-Sleep -Seconds $sleepSeconds
-}
-
-$ready = Get-GitHubBudgetObservation
+$ready = Wait-SzlGitHubBudget -Clock $BudgetClock -BudgetSeconds 7200 -ProbeTimeoutSeconds 30
 if ($ready.Status -ne 200 -or $ready.Remaining -le 1000) {
     throw ('GitHub REST budget did not recover before the bounded deadline. Status={0}; remaining={1}.' -f $ready.Status,$ready.Remaining)
 }

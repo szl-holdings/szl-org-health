@@ -93,7 +93,7 @@ $Decoder=New-Object Text.UTF8Encoding($false,$true)
 $Source=$Decoder.GetString($Candidate).TrimStart([char]0xFEFF)
 $Library=[IO.File]::ReadAllText((Join-Path $RepositoryRoot $Manifest.library_path),$Decoder)
 Assert-True ((Get-FileHash -LiteralPath (Join-Path $RepositoryRoot $Manifest.library_path)).Hash.ToLowerInvariant() -ceq $Manifest.library_sha256) 'LIBRARY_HASH_CHANGED'
-$Names=@('Assert-SzlExecutionPolicy','ConvertTo-SzlNativeArgument','Get-SzlObservedExitCode','Initialize-SzlNativePipe','Invoke-SzlNativeProcess','Invoke-Native','Redact-Text')
+$Names=@('Assert-SzlExecutionPolicy','ConvertTo-SzlNativeArgument','Get-SzlObservedExitCode','Initialize-SzlNativePipe','Invoke-SzlNativeProcess','Get-SzlRemainingMilliseconds','Get-SzlRemainingTimeoutSeconds','Resolve-PythonCommand','Invoke-Native','Redact-Text')
 $Definitions=@($Names | ForEach-Object { Get-Definition $Source $_ }) -join "`n"
 . ([scriptblock]::Create($Definitions))
 $RunRoot=Join-Path $env:TEMP ('szl-v11-inert-'+[Guid]::NewGuid().ToString('N'))
@@ -112,12 +112,113 @@ function Assert-ArgumentEcho([string]$Raw,[AllowEmptyCollection()][AllowEmptyStr
         Assert-True ([string]::Equals($Actual,$Expected[$I],[StringComparison]::Ordinal)) ('Argument changed at '+$I)
     }
 }
+function Invoke-SyntheticPythonCase([scriptblock]$Action) {
+    # Registry/path discovery and every native probe are fixture stubs. No real
+    # Python, auth, network, cleanup or controller entry point can be invoked.
+    $Fixture=[pscustomobject]@{
+        Clock=[pscustomobject]@{ElapsedMilliseconds=0L}; Replies=(New-Object Collections.Queue)
+        Calls=(New-Object Collections.Generic.List[object]); Direct=@('C:\synthetic\python.exe'); Launchers=@()
+    }
+    function Test-Path { param($LiteralPath,$PathType); return ($LiteralPath -in @($Fixture.Direct+$Fixture.Launchers)) }
+    function Get-Item { throw 'REGISTRY_READ_MUST_NOT_RUN' }
+    function Get-Command {
+        param($Name,[switch]$All,$ErrorAction)
+        $Paths=if($Name -eq 'python.exe'){$Fixture.Direct}elseif($Name -eq 'py.exe'){$Fixture.Launchers}else{@()}
+        foreach($Path in $Paths) { [pscustomobject]@{Source=$Path} }
+    }
+    function Invoke-SzlNativeProcess {
+        param($FilePath,$ArgumentList,$WorkingDirectory,$TimeoutSeconds,[switch]$AllowNonZero,$Name)
+        $Fixture.Calls.Add([pscustomobject]@{File=$FilePath;Arguments=$ArgumentList;Timeout=$TimeoutSeconds})
+        if ($Fixture.Replies.Count -eq 0) { throw 'UNEXPECTED_SYNTHETIC_PYTHON_PROBE' }
+        $Reply=$Fixture.Replies.Dequeue(); $Fixture.Clock.ElapsedMilliseconds += $Reply.Advance
+        if ($Reply.Throw) { throw 'NATIVE_TIMEOUT' }
+        return [pscustomobject]@{ExitCode=$Reply.Exit;Stdout='';Stderr=''}
+    }
+    & $Action $Fixture
+}
+function Add-SyntheticPythonReply {
+    param($Fixture,[AllowNull()]$Exit=0,[long]$Advance=0,[switch]$Throw)
+    $Fixture.Replies.Enqueue([pscustomobject]@{Exit=$Exit;Advance=$Advance;Throw=[bool]$Throw})
+}
 try {
+    Test-Case 'synthetic Python direct probe preserves selection argv and cap' {
+        Invoke-SyntheticPythonCase { param($F)
+            Add-SyntheticPythonReply $F
+            $R=Resolve-PythonCommand -Clock $F.Clock
+            Assert-True ($R.File -ceq $F.Direct[0] -and $R.Prefix.Count -eq 0 -and $F.Calls.Count -eq 1 -and $F.Calls[0].Timeout -eq 5) 'DIRECT_SELECTION'
+            Assert-True (($F.Calls[0].Arguments -join '|') -ceq '-c|import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 9)') 'DIRECT_ARGV'
+        }
+    }
+    Test-Case 'synthetic Python launcher shares aggregate discovery budget' {
+        Invoke-SyntheticPythonCase { param($F)
+            $F.Launchers=@('C:\synthetic\py.exe'); Add-SyntheticPythonReply $F -Exit 9 -Advance 1100; Add-SyntheticPythonReply $F
+            $R=Resolve-PythonCommand -Clock $F.Clock -ProbeTimeoutSeconds 40
+            Assert-True ($R.File -ceq $F.Launchers[0] -and ($R.Prefix -join ',') -ceq '-3.12' -and $F.Calls.Count -eq 2 -and $F.Calls[0].Timeout -eq 30 -and $F.Calls[1].Timeout -eq 28) 'LAUNCHER_BUDGET_RESET'
+            Assert-True (($F.Calls[1].Arguments -join '|') -ceq '-3.12|-c|import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 9)') 'LAUNCHER_ARGV'
+        }
+    }
+    Test-Case 'synthetic Python consumed budget rejects next subsecond probe' {
+        Invoke-SyntheticPythonCase { param($F)
+            $F.Direct=@('C:\synthetic\first.exe','C:\synthetic\second.exe'); Add-SyntheticPythonReply $F -Exit 9 -Advance 2200
+            Assert-Throws { Resolve-PythonCommand -Clock $F.Clock -DiscoveryTimeoutSeconds 3 } 'SZL_DEADLINE_EXPIRED'
+            Assert-True ($F.Calls.Count -eq 1) 'SUBSECOND_SECOND_PROBE'
+        }
+    }
+    Test-Case 'synthetic Python timeout can retry only within remaining budget' {
+        Invoke-SyntheticPythonCase { param($F)
+            $F.Direct=@('C:\synthetic\first.exe','C:\synthetic\second.exe'); Add-SyntheticPythonReply $F -Throw -Advance 1000; Add-SyntheticPythonReply $F
+            $R=Resolve-PythonCommand -Clock $F.Clock -DiscoveryTimeoutSeconds 3 -ProbeTimeoutSeconds 2
+            Assert-True ($R.File -ceq $F.Direct[1] -and $F.Calls.Count -eq 2 -and $F.Calls[0].Timeout -eq 2 -and $F.Calls[1].Timeout -eq 2) 'TIMEOUT_RETRY_BUDGET'
+        }
+    }
+    Test-Case 'synthetic Python successful exit after expiry is rejected' {
+        Invoke-SyntheticPythonCase { param($F)
+            Add-SyntheticPythonReply $F -Advance 30000
+            Assert-Throws { Resolve-PythonCommand -Clock $F.Clock } 'SZL_DEADLINE_EXPIRED'
+            Assert-True ($F.Calls.Count -eq 1) 'EXPIRED_SUCCESS_ACCEPTED'
+        }
+    }
+    Test-Case 'synthetic Python unavailable candidates retain expired budget' {
+        Invoke-SyntheticPythonCase { param($F)
+            $F.Direct=@(); $F.Clock.ElapsedMilliseconds=30000
+            Assert-Throws { Resolve-PythonCommand -Clock $F.Clock } 'SZL_DEADLINE_EXPIRED'
+            Assert-True ($F.Calls.Count -eq 0) 'MISSING_CANDIDATE_LAUNCHED'
+        }
+    }
+    Test-Case 'synthetic Python nonzero and unavailable exits never select source' {
+        foreach($Exit in @(9,$null,'0',$false)) {
+            Invoke-SyntheticPythonCase { param($F)
+                Add-SyntheticPythonReply $F -Exit $Exit
+                Assert-Throws { Resolve-PythonCommand -Clock $F.Clock } 'Python 3.12\+ is unavailable'
+                Assert-True ($F.Calls.Count -eq 1) 'INVALID_EXIT_SELECTED'
+            }
+        }
+    }
+    Test-Case 'synthetic Python first subsecond probe is never invoked' {
+        Invoke-SyntheticPythonCase { param($F)
+            $F.Clock.ElapsedMilliseconds=29501
+            Assert-Throws { Resolve-PythonCommand -Clock $F.Clock } 'SZL_DEADLINE_EXPIRED'
+            Assert-True ($F.Calls.Count -eq 0) 'FIRST_SUBSECOND_PROBE'
+        }
+    }
+    Test-Case 'synthetic Python fractional remainder is floored before launch' {
+        Invoke-SyntheticPythonCase { param($F)
+            $F.Clock.ElapsedMilliseconds=1001; Add-SyntheticPythonReply $F
+            $null=Resolve-PythonCommand -Clock $F.Clock -DiscoveryTimeoutSeconds 5 -ProbeTimeoutSeconds 9
+            Assert-True ($F.Calls.Count -eq 1 -and $F.Calls[0].Timeout -eq 3) 'PYTHON_REMAINDER_ROUNDED_UP'
+        }
+    }
+    Test-Case 'Python discovery uses monotonic clock and only bounded probe calls' {
+        $Definition=Get-Definition $Source 'Resolve-PythonCommand'; $Ast=Parse-Source $Definition
+        $Direct=@($Ast.FindAll({param($N) $N -is [Management.Automation.Language.CommandAst] -and $N.InvocationOperator -eq [Management.Automation.Language.TokenKind]::Ampersand},$true))
+        $Bounded=@($Ast.FindAll({param($N) $N -is [Management.Automation.Language.CommandAst] -and $N.GetCommandName() -ceq 'Invoke-SzlNativeProcess'},$true))
+        Assert-True ($Direct.Count -eq 0 -and $Bounded.Count -eq 2 -and $Definition.Contains('[Diagnostics.Stopwatch]::StartNew()')) 'UNBOUNDED_DISCOVERY_PROBE'
+    }
     Test-Case 'exact recovered lineage and unchanged payload' { Assert-Lineage $Base $Candidate $Manifest; Assert-True ((Embedded-Hash $Source) -ceq $Manifest.embedded_python_sha256) 'EMBEDDED_HASH' }
     Test-Case 'copied native definitions equal reviewed library' { foreach($Name in $Manifest.copied_definitions) { Assert-True ((Get-Definition $Source $Name) -ceq (Get-Definition $Library $Name)) ('Definition drift: '+$Name) } }
     Test-Case 'lineage declares prospective identity without admission' {
         Assert-True ($Manifest.original_admission -ceq 'UNKNOWN' -and $Manifest.recovered_source_admission -ceq 'BLOCKED') 'ADMISSION_PROMOTED'
-        Assert-True ($Manifest.candidate_path -ceq 'tools/SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1' -and $Manifest.candidate_version -ceq '11.0.6-recovered-bounded.2') 'CANDIDATE_IDENTITY_CHANGED'
+        Assert-True ($Manifest.candidate_path -ceq 'tools/SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1' -and $Manifest.candidate_version -ceq '11.0.6-recovered-bounded.3') 'CANDIDATE_IDENTITY_CHANGED'
         Assert-True ($Manifest.selection.root -ceq 'repository-adjacent-tools' -and $Manifest.selection.historical_admission -ceq 'UNKNOWN' -and $Manifest.selection.prospective_admission -ceq 'BLOCKED' -and $Manifest.selection.runtime_admission -ceq 'BLOCKED' -and $Manifest.selection.can_invoke -is [bool] -and $Manifest.selection.can_invoke -eq $false -and $Manifest.selection.entry_hold -ceq 'SZL_SOURCE_ADMISSION_HOLD') 'SELECTION_ADMISSION_PROMOTED'
     }
     foreach($EntryPath in @($Manifest.candidate_path,'tools/SZL_DISK_CLEAN_RESUME_PS51_V13.ps1','tools/SZL_PARALLEL_FRONTIER_COORDINATOR_PS51_V12_1.ps1','tools/RUN_SZL_CTO_RATE_AWARE.ps1')) {
@@ -215,7 +316,7 @@ finally {
     $Failed=@($Rows | Where-Object { -not $_.passed }).Count
     $Receipt=[ordered]@{
         schema='szl.ps51-inert-ci/v1';suite='recovered-v11';fixture_class='SIMULATED';powershell=$PSVersionTable.PSVersion.ToString()
-        qualification_scope='named-recovered-v11-definitions-and-static-inactive-entry-contracts';historical_definitions_executed=$false;runtime_admission='BLOCKED'
+        qualification_scope='named-recovered-v11-definitions-static-entry-and-synthetic-discovery-contracts';historical_definitions_executed=$false;runtime_admission='BLOCKED'
         reference_sha256=$Manifest.base_sha256;candidate_sha256=$Manifest.candidate_sha256;manifest_sha256=(Get-FileHash -LiteralPath $ManifestPath).Hash.ToLowerInvariant()
         harness_sha256=(Get-FileHash -LiteralPath $PSCommandPath).Hash.ToLowerInvariant();passed=$Rows.Count-$Failed;failed=$Failed;tests=$Rows.ToArray()
         controller_main_executed=$false;production_subprocesses_executed=$false;policy_settings_changed=$false
