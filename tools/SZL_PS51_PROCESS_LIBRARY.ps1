@@ -186,18 +186,41 @@ function Invoke-SzlNativeProcess {
 }
 
 function Resolve-SzlPinnedOperator {
-    param([Parameter(Mandatory = $true)][string]$RuntimeRoot)
-    # Exact recovered source bytes, preserved in tests/fixtures/ps51. This is an
-    # identity boundary, not authorization to run the full historical controller.
-    $FileName = 'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_PS51_JSON.ps1'
-    $Expected = '23b1aaabef7aed9c2801c975bead79ac16084432537cff26059952208b3d687b'
-    $Candidate = Join-Path $RuntimeRoot $FileName
-    if (-not (Test-Path -LiteralPath $Candidate -PathType Leaf)) { throw 'OPERATOR_IDENTITY_MISSING' }
+    param([Parameter(Mandatory = $true)][string]$SourceRoot)
+    # Repository-adjacent recovered source only. Neither this descriptor nor a
+    # manifest/environment value grants admission. These constants bind bytes.
+    $FileName = 'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1'
+    $Expected = 'a137d139c13362860cc1d91efb111c4f591152ac9ff8ed4b66d5ce9dfa612d1f'
+    $ExpectedBytes = 249142 # RECOVERED_BYTE_COUNT
+    $Version = '11.0.6-recovered-bounded.2'
+    if ($SourceRoot -notmatch '^[A-Za-z]:[\\/]' -or
+        $SourceRoot -match '[*?]' -or $SourceRoot.Substring(2).Contains(':') -or
+        $SourceRoot -match '(^|[\\/])\.\.?([\\/]|$)' -or
+        $SourceRoot -match '(^|[\\/])[^\\/]*[. ]([\\/]|$)') { throw 'OPERATOR_SOURCE_ROOT_INVALID' }
+    $Root = [IO.Path]::GetFullPath($SourceRoot)
+    if ($Root.Length -gt 3) { $Root = $Root.TrimEnd([char[]]@('\','/')) }
+    # Inspect every component, including ancestors of the supplied tools root.
+    # This is a static path check, not a lock against replacement after the read.
+    $ProbePath = $Root
+    $FirstPart = $true
+    while (-not [string]::IsNullOrWhiteSpace($ProbePath)) {
+        $Part = Get-Item -LiteralPath $ProbePath -Force -ErrorAction Stop
+        if (($Part.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'OPERATOR_REPARSE_POINT_REJECTED' }
+        if (-not $Part.PSIsContainer) { throw 'OPERATOR_SOURCE_ROOT_INVALID' }
+        if ($FirstPart) { $Root = $Part.FullName; $FirstPart = $false }
+        $ProbePath = Split-Path -Parent $Part.FullName
+    }
+    $Candidate = Join-Path $Root $FileName
+    if (-not (Test-Path -LiteralPath $Candidate)) { throw 'OPERATOR_IDENTITY_MISSING' }
     $Item = Get-Item -LiteralPath $Candidate -Force -ErrorAction Stop
     if (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'OPERATOR_REPARSE_POINT_REJECTED' }
+    if ($Item.PSIsContainer -or $Item.Name -cne $FileName) { throw 'OPERATOR_SOURCE_PATH_INVALID' }
+    if (-not [string]::Equals([IO.Path]::GetDirectoryName($Item.FullName), $Root, [StringComparison]::OrdinalIgnoreCase)) { throw 'OPERATOR_SOURCE_PATH_INVALID' }
+    if ($Item.Length -ne $ExpectedBytes) { throw 'OPERATOR_IDENTITY_MISMATCH' }
     # Hash and parse the same buffer. Never select by mtime or fall back to an
     # older family after a missing, changed, unreadable, or invalid candidate.
     $Bytes = [IO.File]::ReadAllBytes($Item.FullName)
+    if ($Bytes.Length -ne $ExpectedBytes) { throw 'OPERATOR_IDENTITY_MISMATCH' }
     $Hasher = [Security.Cryptography.SHA256]::Create()
     try { $Actual = [BitConverter]::ToString($Hasher.ComputeHash($Bytes)).Replace('-', '').ToLowerInvariant() }
     finally { $Hasher.Dispose() }
@@ -208,5 +231,16 @@ function Resolve-SzlPinnedOperator {
     $Errors = $null
     [void][Management.Automation.Language.Parser]::ParseInput($Source, [ref]$Tokens, [ref]$Errors)
     if (@($Errors).Count -ne 0) { throw 'OPERATOR_PARSE_FAILED' }
-    return $Item.FullName
+    return [pscustomobject]@{
+        Path = $Item.FullName; SHA256 = $Actual; Bytes = $Bytes.Length; Version = $Version
+        HistoricalAdmission = 'UNKNOWN'; ProspectiveAdmission = 'BLOCKED'
+        RuntimeAdmission = 'BLOCKED'; CanInvoke = $false
+    }
+}
+
+function Assert-SzlOperatorAdmission {
+    param([AllowNull()][object]$Identity)
+    # Deliberately has no approval flag, environment override, or execution path.
+    # Removing this HOLD requires a separately reviewed source-admission change.
+    throw 'SZL_SOURCE_ADMISSION_HOLD'
 }

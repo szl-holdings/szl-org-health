@@ -41,7 +41,7 @@ function Read-Definitions([string]$Path, [string[]]$Names) {
     return $Text -join "`n"
 }
 $LibraryPath = Join-Path $RepositoryRoot 'tools/SZL_PS51_PROCESS_LIBRARY.ps1'
-$LibraryDefinitions = Read-Definitions $LibraryPath @('ConvertTo-SzlNativeArgument','Get-SzlObservedExitCode','Initialize-SzlNativePipe','Invoke-SzlNativeProcess','Resolve-SzlPinnedOperator')
+$LibraryDefinitions = Read-Definitions $LibraryPath @('ConvertTo-SzlNativeArgument','Get-SzlObservedExitCode','Initialize-SzlNativePipe','Invoke-SzlNativeProcess','Resolve-SzlPinnedOperator','Assert-SzlOperatorAdmission')
 . ([scriptblock]::Create($LibraryDefinitions))
 $V13Path = Join-Path $RepositoryRoot 'tools/SZL_DISK_CLEAN_RESUME_PS51_V13.ps1'
 . ([scriptblock]::Create((Read-Definitions $V13Path @('Invoke-NativeTool','Find-Operator'))))
@@ -50,6 +50,11 @@ $V12Path = Join-Path $RepositoryRoot 'tools/SZL_PARALLEL_FRONTIER_COORDINATOR_PS
 $Reference = Join-Path $RepositoryRoot 'tests/fixtures/ps51/operator-23b1aaab.ps1.txt'
 $ExpectedHash = '23B1AAABEF7AED9C2801C975BEAD79AC16084432537CFF26059952208B3D687B'
 Assert-True ((Get-FileHash -LiteralPath $Reference -Algorithm SHA256).Hash -ceq $ExpectedHash) 'Recovered source bytes changed'
+$RecoveredPath = Join-Path $RepositoryRoot 'tools/SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1'
+$ManifestPath = Join-Path $RepositoryRoot 'tools/ps51-recovered-source.lineage.json'
+$Manifest = [IO.File]::ReadAllText($ManifestPath) | ConvertFrom-Json
+$RecoveredHash = (Get-FileHash -LiteralPath $RecoveredPath).Hash.ToLowerInvariant()
+Assert-True ($RecoveredHash -ceq $Manifest.candidate_sha256) 'Candidate and lineage differ'
 $HistoricalReceiptPath = Join-Path $RepositoryRoot 'tests/fixtures/ps51/historical-replay-b1b1c5df.json'
 $HistoricalReceiptHash = '1c4956b577bfc43e6e341551f1347b902f0c90d77b4063f86acfbf2c7c16efcb'
 Assert-True ((Get-FileHash -LiteralPath $HistoricalReceiptPath).Hash.ToLowerInvariant() -ceq $HistoricalReceiptHash) 'Historical replay evidence changed'
@@ -64,7 +69,14 @@ $TempRoot = Join-Path $WorkRoot 'legacy-io'
 $LogRoot = Join-Path $WorkRoot 'logs'
 $EstateRoot = Join-Path $WorkRoot 'estate'
 $RuntimeRoot = Join-Path $EstateRoot 'Runtime'
-New-Item -ItemType Directory -Path $WorkRoot,$TempRoot,$LogRoot,$RuntimeRoot -Force | Out-Null
+$SourceToolsRoot = Join-Path $WorkRoot 'source tools'
+New-Item -ItemType Directory -Path $WorkRoot,$TempRoot,$LogRoot,$RuntimeRoot,$SourceToolsRoot -Force | Out-Null
+# Only the two named selector definitions enter this owned inert fixture. Loading
+# it gives their actual default PSScriptRoot binding a real adjacent directory.
+$SelectorFixture = Join-Path $SourceToolsRoot 'named-selectors.ps1'
+$SelectorDefinitions = (Read-Definitions $V13Path @('Find-Operator')) + "`n" + (Read-Definitions $V12Path @('Get-ResumeOperator'))
+[IO.File]::WriteAllText($SelectorFixture, $SelectorDefinitions, (New-Object Text.UTF8Encoding($false)))
+. $SelectorFixture
 $Probe = Join-Path $WorkRoot 'Native Probe.exe'
 $ProbeSource = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'tests/fixtures/ps51/NativeProbe.cs'))
 Add-Type -TypeDefinition $ProbeSource -OutputAssembly $Probe -OutputType ConsoleApplication
@@ -84,31 +96,89 @@ function Assert-ArgumentEcho([string]$Raw, [AllowEmptyCollection()][AllowEmptySt
 }
 try {
     Test-Case 'fixture reference parses without running main' { Assert-True ($ExpectedHash -ceq (Get-FileHash -LiteralPath $Reference).Hash) 'Reference changed'; Read-Definitions $Reference @('Invoke-Native') | Out-Null }
-    $Candidate = Join-Path $RuntimeRoot 'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_PS51_JSON.ps1'
-    $OldCandidate = Join-Path $RuntimeRoot 'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_HF_PREFLIGHT_ROBUST.ps1'
+    $Candidate = Join-Path $SourceToolsRoot 'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1'
+    $OldCandidate = Join-Path $SourceToolsRoot 'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_HF_PREFLIGHT_ROBUST.ps1'
     [IO.File]::WriteAllText($OldCandidate, 'throw "OLD_HELPER_MAIN_MUST_NOT_RUN"')
-    Test-Case 'missing PS51_JSON rejects available older helper' { Assert-Throws { Find-Operator } 'OPERATOR_IDENTITY_MISSING'; Assert-Throws { Get-ResumeOperator } 'OPERATOR_IDENTITY_MISSING' }
+    Copy-Item -LiteralPath $Reference -Destination (Join-Path $RuntimeRoot 'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_PS51_JSON.ps1')
+    Test-Case 'missing recovered candidate rejects historical and older fallback' { Assert-Throws { Find-Operator } 'OPERATOR_IDENTITY_MISSING'; Assert-Throws { Get-ResumeOperator } 'OPERATOR_IDENTITY_MISSING' }
     [IO.File]::WriteAllText($Candidate, 'throw "WRONG_HELPER_MAIN_MUST_NOT_RUN"')
     Test-Case 'wrong helper refuses timestamp fallback' { Assert-Throws { Find-Operator } 'OPERATOR_IDENTITY_MISMATCH'; Assert-Throws { Get-ResumeOperator } 'OPERATOR_IDENTITY_MISMATCH' }
-    Copy-Item -LiteralPath $Reference -Destination $Candidate -Force
+    Copy-Item -LiteralPath $RecoveredPath -Destination $Candidate -Force
     (Get-Item -LiteralPath $OldCandidate).LastWriteTimeUtc = [DateTime]::UtcNow.AddYears(1)
-    Test-Case 'both selectors choose exact immutable PS51_JSON' {
+    Test-Case 'both selector defaults bind adjacent recovered identity without authority' {
         # Hosted Windows TEMP may use an 8.3 alias (RUNNER~1). Compare with
         # the filesystem's full name for this exact fixture, not its input alias.
         $ExpectedPath = (Get-Item -LiteralPath $Candidate -ErrorAction Stop).FullName
         $V13Selected = Find-Operator
         $V12Selected = Get-ResumeOperator
         Write-Host ('Fixture input path: {0}; filesystem path: {1}' -f $Candidate, $ExpectedPath)
-        Assert-True ($V13Selected -ceq $ExpectedPath) ('Wrong V13 path: {0}; expected: {1}' -f $V13Selected, $ExpectedPath)
-        Assert-True ($V12Selected -ceq $ExpectedPath) ('Wrong V12 path: {0}; expected: {1}' -f $V12Selected, $ExpectedPath)
+        foreach ($Selected in @($V13Selected,$V12Selected)) {
+            Assert-True ($Selected -isnot [string] -and $Selected.Path -ceq $ExpectedPath) 'Wrong recovered descriptor path'
+            Assert-True ($Selected.SHA256 -ceq $RecoveredHash -and $Selected.Bytes -eq $Manifest.candidate_bytes -and $Selected.Version -ceq $Manifest.candidate_version) 'Wrong recovered identity'
+            Assert-True ($Selected.HistoricalAdmission -ceq 'UNKNOWN' -and $Selected.ProspectiveAdmission -ceq 'BLOCKED' -and $Selected.RuntimeAdmission -ceq 'BLOCKED') 'Admission promoted'
+            Assert-True ($Selected.CanInvoke -is [bool] -and $Selected.CanInvoke -eq $false) 'Invocation authority granted'
+            Assert-True ((@($Selected.PSObject.Properties.Name) -join ',') -ceq 'Path,SHA256,Bytes,Version,HistoricalAdmission,ProspectiveAdmission,RuntimeAdmission,CanInvoke') 'Descriptor contract changed'
+        }
     }
     [IO.File]::AppendAllText($Candidate, "`n# changed bytes")
     Test-Case 'post-selection change is refused on recheck' { Assert-Throws { Find-Operator } 'OPERATOR_IDENTITY_MISMATCH' }
-    Copy-Item -LiteralPath $Reference -Destination $Candidate -Force
-    Test-Case 'stale pin is absent from source launcher' {
+    Copy-Item -LiteralPath $RecoveredPath -Destination $Candidate -Force
+    Test-Case 'same-length byte change is refused' {
+        try { $Changed=[IO.File]::ReadAllBytes($Candidate); $Changed[100]=$Changed[100] -bxor 1; [IO.File]::WriteAllBytes($Candidate,$Changed); Assert-Throws { Find-Operator } 'OPERATOR_IDENTITY_MISMATCH' }
+        finally { Copy-Item -LiteralPath $RecoveredPath -Destination $Candidate -Force }
+    }
+    Test-Case 'malformed candidate is refused without fallback' {
+        try { [IO.File]::WriteAllText($Candidate,'function {'); Assert-Throws { Get-ResumeOperator } 'OPERATOR_IDENTITY_MISMATCH' }
+        finally { Copy-Item -LiteralPath $RecoveredPath -Destination $Candidate -Force }
+    }
+    Test-Case 'relative traversal wildcard and stream roots rejected' {
+        foreach ($Root in @('relative',($SourceToolsRoot+'\..'),($SourceToolsRoot+'\.'),($SourceToolsRoot+'\.. '),($SourceToolsRoot+'\trailing.'),($SourceToolsRoot+'\*'),($SourceToolsRoot+':stream'))) {
+            Assert-Throws { Resolve-SzlPinnedOperator -SourceRoot $Root } 'OPERATOR_SOURCE_ROOT_INVALID'
+        }
+    }
+    Test-Case 'ordinary file cannot be a source root' { Assert-Throws { Resolve-SzlPinnedOperator -SourceRoot $Candidate } 'OPERATOR_SOURCE_ROOT_INVALID' }
+    Test-Case 'foreign empty root has no timestamp or installed fallback' { Assert-Throws { Resolve-SzlPinnedOperator -SourceRoot $TempRoot } 'OPERATOR_IDENTITY_MISSING' }
+    Test-Case 'source metadata read error fails closed' {
+        function Get-Item { param($LiteralPath,[switch]$Force,$ErrorAction) throw 'SYNTHETIC_SOURCE_READ_FAILURE' }
+        Assert-Throws { Find-Operator } 'SYNTHETIC_SOURCE_READ_FAILURE'
+    }
+    Test-Case 'source root junction rejected' {
+        $Link=Join-Path $WorkRoot 'linked tools'
+        New-Item -ItemType Junction -Path $Link -Value $SourceToolsRoot -ErrorAction Stop | Out-Null
+        Assert-Throws { Resolve-SzlPinnedOperator -SourceRoot $Link } 'OPERATOR_REPARSE_POINT_REJECTED'
+    }
+    Test-Case 'ancestor junction rejected' {
+        $Container=Join-Path $WorkRoot 'plain ancestor'; $Child=Join-Path $Container 'tools'
+        New-Item -ItemType Directory -Path $Child -Force | Out-Null
+        Copy-Item -LiteralPath $RecoveredPath -Destination (Join-Path $Child (Split-Path -Leaf $Candidate))
+        $Link=Join-Path $WorkRoot 'linked ancestor'
+        New-Item -ItemType Junction -Path $Link -Value $Container -ErrorAction Stop | Out-Null
+        Assert-Throws { Resolve-SzlPinnedOperator -SourceRoot (Join-Path $Link 'tools') } 'OPERATOR_REPARSE_POINT_REJECTED'
+    }
+    Test-Case 'candidate leaf junction rejected' {
+        $LeafRoot=Join-Path $WorkRoot 'leaf fixture'; New-Item -ItemType Directory -Path $LeafRoot | Out-Null
+        New-Item -ItemType Junction -Path (Join-Path $LeafRoot (Split-Path -Leaf $Candidate)) -Value $SourceToolsRoot -ErrorAction Stop | Out-Null
+        Assert-Throws { Resolve-SzlPinnedOperator -SourceRoot $LeafRoot } 'OPERATOR_REPARSE_POINT_REJECTED'
+    }
+    Test-Case 'genuine descriptor never admits execution' { Assert-Throws { Assert-SzlOperatorAdmission -Identity (Find-Operator) } 'SZL_SOURCE_ADMISSION_HOLD' }
+    Test-Case 'adjacent forged admission manifest cannot grant authority' {
+        [IO.File]::WriteAllText((Join-Path $SourceToolsRoot 'ps51-recovered-source.lineage.json'),'{"recovered_source_admission":"ADMITTED","selection":{"can_invoke":true,"runtime_admission":"ADMITTED"}}')
+        $Identity=Find-Operator
+        Assert-True ($Identity.CanInvoke -eq $false -and $Identity.RuntimeAdmission -ceq 'BLOCKED') 'Manifest granted authority'
+        Assert-Throws { Assert-SzlOperatorAdmission -Identity $Identity } 'SZL_SOURCE_ADMISSION_HOLD'
+    }
+    Test-Case 'forged approval flags and null descriptor never admit execution' {
+        $Forged=[pscustomobject]@{Path=$Candidate;SHA256=$RecoveredHash;CanInvoke=$true;ProspectiveAdmission='ADMITTED';RuntimeAdmission='ADMITTED';Force=$true;Environment=@{SZL_APPLY='1';SZL_CONFIRM='approved'}}
+        Assert-Throws { Assert-SzlOperatorAdmission -Identity $Forged } 'SZL_SOURCE_ADMISSION_HOLD'
+        Assert-Throws { Assert-SzlOperatorAdmission -Identity $null } 'SZL_SOURCE_ADMISSION_HOLD'
+    }
+    Test-Case 'launcher uses adjacent identity and no historical pin or invocation' {
         $Source = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'tools/RUN_SZL_CTO_RATE_AWARE.ps1'))
         Assert-True (-not $Source.Contains('c6ea52536a3a5c0562a8deb16de5a7db023bed802dff1029944317f12d1cda78')) 'Stale launcher pin'
-        Assert-True ($Source.Contains($ExpectedHash.ToLowerInvariant())) 'Missing recovered identity'
+        Assert-True (-not $Source.Contains($ExpectedHash.ToLowerInvariant())) 'Historical launcher identity'
+        Assert-True ($Source.Contains('Resolve-SzlPinnedOperator -SourceRoot $PSScriptRoot')) 'Missing adjacent identity'
+        Assert-True ($Source.Contains('Assert-SzlOperatorAdmission -Identity $OperatorIdentity')) 'Missing inactive admission'
+        Assert-True ($Source -notmatch '(?m)^\s*&\s*\$Operator') 'Operator invocation remains'
     }
     Test-Case 'unavailable exit is not cast to zero' { Assert-Throws { Get-SzlObservedExitCode ([pscustomobject]@{ExitCode=$null}) } 'NATIVE_EXIT_UNAVAILABLE' }
     Test-Case 'non-native exit values rejected' { foreach ($Value in @('0',$false)) { Assert-Throws { Get-SzlObservedExitCode ([pscustomobject]@{ExitCode=$Value}) } 'NATIVE_EXIT_UNAVAILABLE' } }
@@ -179,6 +249,8 @@ finally {
             v13=(Get-FileHash -LiteralPath $V13Path).Hash.ToLowerInvariant()
             v12_selectors=(Get-FileHash -LiteralPath $V12Path).Hash.ToLowerInvariant()
             launcher_identity_only=(Get-FileHash -LiteralPath (Join-Path $RepositoryRoot 'tools/RUN_SZL_CTO_RATE_AWARE.ps1')).Hash.ToLowerInvariant()
+            recovered_candidate=$RecoveredHash
+            lineage=(Get-FileHash -LiteralPath $ManifestPath).Hash.ToLowerInvariant()
         }
         historical_replay_sha256=$HistoricalReceiptHash;historical_definitions_executed=$false;runtime_admission='BLOCKED'
         passed=$Receipt.passed;failed=$Failed;tests=@($Rows | Select-Object name,passed)

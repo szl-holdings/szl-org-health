@@ -17,8 +17,9 @@ not establish protected source admission. Its test counts are historical
 **REPORTED** evidence; separately replayed native tests have their own receipts.
 
 `tools/SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1` has a distinct version,
-`11.0.6-recovered-bounded.1`. The adjacent lineage JSON records exact byte ranges
-and hashes for four transformations: identity note; standalone inert native
+`11.0.6-recovered-bounded.2`. The adjacent lineage JSON records exact byte ranges
+and hashes for five transformations: identity note; first-statement admission
+hold; standalone inert native
 definitions and read-only policy preflight; the V11 native wrapper; removal of
 the historical watchdog's execution-policy override. Every byte outside these
 ranges must match the original reference. The executable successor preserves
@@ -28,6 +29,15 @@ The five standalone definitions are exact copies of this revision's inert
 process library. This keeps the existing whole-file watchdog copy self-contained
 without adding a hidden adjacent-library dependency. Tests verify that equality.
 No watchdog or copied script is installed or executed by this proposal.
+
+Phase 1 continues accepted source `a1ed3461ca45fc3bdfacdf52a0b8606c00e68d8d`.
+The new candidate is 249142 bytes, SHA-256
+`a137d139c13362860cc1d91efb111c4f591152ac9ff8ed4b66d5ce9dfa612d1f`.
+The five copied native/policy definitions are unchanged from that baseline.
+All four entry points have an unconditional first-statement admission hold;
+the three former operator invocations now call an always-rejecting assertion.
+No runtime effects, token retrieval, authentication, ACL operation, cleanup,
+service/volume operation or registration are enabled by this phase.
 
 The embedded V10 Python payload is 108583 bytes with SHA-256
 `19cd7b182c9b97ce9ec06a694dbc67f342ab87fe7c0de2288e9df47bbccdfee2`.
@@ -100,10 +110,13 @@ Line numbers below refer to the historical V11 reference or to PR head
 | Coordinator lines 287–295 | Worker-state loop has no elapsed deadline and job removal is not bounded. The later writer wait has a separate deadline. No worker is started by tests. |
 | V13 lines 590/743 | Writer waits are unbounded loops. They preserve ownership rather than admitting overlapping work, but full-controller wall-clock boundedness is not established. |
 
-Selectors still identify the historical PS51_JSON bytes. They do not silently
-repin to the recovered successor. The installed external launcher still has its
-historical stale pin, and no runtime reconciliation is performed. Admission,
-installation, selector repinning and activation are separate transitions.
+The source selectors now identify the exact repository-adjacent recovered
+successor and return a descriptor with both prospective and runtime admission
+BLOCKED and CanInvoke=false. They reject path redirection and content drift and
+have no installed-helper or timestamp fallback. All entry points hold before
+effects; identity selection cannot activate them. The installed external launcher
+still has its historical stale pin, and no runtime reconciliation is performed.
+Admission, installation and activation remain separate transitions.
 
 ## Evidence retention
 
@@ -138,7 +151,7 @@ failures with unresolved causes; no passing retry supersedes them.
 
 ## Prospective qualification and archived historical replay
 
-The current contract separates the source being qualified from prior replay
+The accepted `a1ed3461` contract separated the source being qualified from prior replay
 evidence. No assertion or timeout for a prospective definition is relaxed.
 Both harnesses still throw on any failed current test; workflows contain no
 `continue-on-error`, waived gate or ignored current-source failure.
@@ -149,8 +162,8 @@ contracts below passed, not full-controller safety or historical qualification.
 
 | Receipt / CI conclusion | Source and scope |
 | --- | --- |
-| `process-contracts.json` | 48 prospective/identity checks: named definitions from the shared process library and V13 wrapper, plus V12/V13 selector contracts and launcher identity as data. The receipt binds all four source hashes. Historical source is hashed/parsed as data only. |
-| `recovered-v11.json` | 39 checks for named definitions in the standalone recovered V11, byte lineage, policy-reader mocks, and validator controls. The added control must reject the actual hash-verified historical source for its parameterless waits; the synthetic-call control is retained. Candidate, manifest and harness hashes bind this conclusion. |
+| `process-contracts.json` at `a1ed3461` | 48 prospective/identity checks: named definitions from the shared process library and V13 wrapper, plus V12/V13 selector contracts and launcher identity as data. The receipt binds all four source hashes. Historical source is hashed/parsed as data only. |
+| `recovered-v11.json` at `a1ed3461` | 39 checks for named definitions in the standalone recovered V11, byte lineage, policy-reader mocks, and validator controls. The added control rejects the actual hash-verified historical source for its parameterless waits; the synthetic-call control is retained. Candidate, manifest and harness hashes bind this conclusion. |
 | `historical-replay-b1b1c5df.json` | Exact archived mixed-suite receipt: 63 passed, 2 failed, including 15 passed and 2 failed historical cases. It is copied unchanged into each artifact after hash/count/failure-name integrity checks. No historical definitions are replayed now; preserving this receipt does not qualify them. |
 
 The archive fixture is 9886 bytes with SHA-256
@@ -168,9 +181,23 @@ preserved. Counts in this archived receipt are not fresh measurements.
 
 Fresh native CI is required for this changed test contract. Exact-revision results
 and artifact links belong in the PR validation record. Even a green prospective
-CI conclusion leaves runtime admission **BLOCKED**: existing selectors still
-choose the historical `23b1aaab` source. Admission and a selector binding to the
-qualified successor require a separate explicit review. Original canonical
-admission remains **UNKNOWN**. All direct CLI/auth, job-cleanup, coordinator-loop,
+CI conclusion leaves runtime admission **BLOCKED**. Phase 1 changes prospective
+selector expectations from historical `23b1aaab` to the new recovered identity,
+retains all native assertions/timeouts, and adds deterministic identity/path and
+static entry-hold contracts. Both current receipt counts must come from fresh
+exact-head CI; the accepted baseline receipts are not reused as new results.
+Tests reject removed, moved, conditional or comment-only guards, a swallowing
+trap, pre-guard parameter/module work, and restored operator invocation as data.
+They never execute an entry point. The process receipt also binds candidate and
+lineage hashes. Prospective admission is still BLOCKED pending normal protected
+review; original canonical admission remains UNKNOWN. All direct CLI/auth,
+job-cleanup, coordinator-loop,
 embedded-Python and other waits inventoried above remain outside the tested
 bounded-native-helper claim.
+
+Historical receipt clarification: the older local native-exit receipt at
+`2026-10-05T04:08:30.0374286Z` contains 13 passed / 1 failed plus 20 rapid repeats
+(SHA-256 `2005ab1156e60c2d832d1622244ecf3f84081b1319a5f4d5d90809e2e4c95b73`).
+It is distinct from the later reported 14+20 claim, which needs its own matching
+receipt, and from the archived b1b1c5df replay with 63 passed / 2 failed.
+None is relabeled or rerun by this phase.

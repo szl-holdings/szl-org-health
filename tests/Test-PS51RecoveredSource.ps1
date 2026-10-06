@@ -66,6 +66,24 @@ function Embedded-Hash([string]$Source) {
     Assert-True $Match.Success 'EMBEDDED_PAYLOAD_MISSING'
     return Hash-Bytes ([Convert]::FromBase64String($Match.Groups[1].Value))
 }
+function Assert-InactiveEntry([string]$Text) {
+    $Ast=Parse-Source ($Text.TrimStart([char]0xFEFF))
+    Assert-True ($null -eq $Ast.ParamBlock -and $null -eq $Ast.BeginBlock -and $null -eq $Ast.ProcessBlock -and $null -eq $Ast.DynamicParamBlock) 'ENTRY_PRELUDE_REJECTED'
+    Assert-True (@($Ast.UsingStatements).Count -eq 0) 'ENTRY_USING_REJECTED'
+    if ($null -ne $Ast.ScriptRequirements) {
+        Assert-True (@($Ast.ScriptRequirements.RequiredModules).Count -eq 0 -and @($Ast.ScriptRequirements.RequiredAssemblies).Count -eq 0) 'ENTRY_REQUIREMENT_LOAD_REJECTED'
+    }
+    Assert-True ($Text -notmatch '(?im)^\s*#requires\s+-PSSnapin\b') 'ENTRY_REQUIREMENT_LOAD_REJECTED'
+    Assert-True ($null -ne $Ast.EndBlock -and $Ast.EndBlock.Statements.Count -gt 0) 'ENTRY_HOLD_MISSING'
+    Assert-True ($null -eq $Ast.EndBlock.Traps -or $Ast.EndBlock.Traps.Count -eq 0) 'ENTRY_TRAP_REJECTED'
+    $First=$Ast.EndBlock.Statements[0]
+    Assert-True ($First -is [Management.Automation.Language.ThrowStatementAst] -and $First.Extent.Text -ceq "throw 'SZL_SOURCE_ADMISSION_HOLD'") 'ENTRY_HOLD_NOT_FIRST_LITERAL'
+}
+function Assert-NoOperatorInvocation([string]$Text) {
+    $Ast=Parse-Source $Text
+    $Calls=@($Ast.FindAll({param($N) $N -is [Management.Automation.Language.CommandAst] -and $N.InvocationOperator -eq [Management.Automation.Language.TokenKind]::Ampersand -and $N.CommandElements[0].Extent.Text -match '^\$Operator(?:Path|Identity)?(?:\.|$)'},$true))
+    Assert-True ($Calls.Count -eq 0) 'OPERATOR_INVOCATION_REJECTED'
+}
 $ManifestPath=Join-Path $RepositoryRoot 'tools/ps51-recovered-source.lineage.json'
 $Manifest=[IO.File]::ReadAllText($ManifestPath) | ConvertFrom-Json
 $Base=[IO.File]::ReadAllBytes((Join-Path $RepositoryRoot $Manifest.base_path))
@@ -97,6 +115,25 @@ function Assert-ArgumentEcho([string]$Raw,[AllowEmptyCollection()][AllowEmptyStr
 try {
     Test-Case 'exact recovered lineage and unchanged payload' { Assert-Lineage $Base $Candidate $Manifest; Assert-True ((Embedded-Hash $Source) -ceq $Manifest.embedded_python_sha256) 'EMBEDDED_HASH' }
     Test-Case 'copied native definitions equal reviewed library' { foreach($Name in $Manifest.copied_definitions) { Assert-True ((Get-Definition $Source $Name) -ceq (Get-Definition $Library $Name)) ('Definition drift: '+$Name) } }
+    Test-Case 'lineage declares prospective identity without admission' {
+        Assert-True ($Manifest.original_admission -ceq 'UNKNOWN' -and $Manifest.recovered_source_admission -ceq 'BLOCKED') 'ADMISSION_PROMOTED'
+        Assert-True ($Manifest.candidate_path -ceq 'tools/SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1' -and $Manifest.candidate_version -ceq '11.0.6-recovered-bounded.2') 'CANDIDATE_IDENTITY_CHANGED'
+        Assert-True ($Manifest.selection.root -ceq 'repository-adjacent-tools' -and $Manifest.selection.historical_admission -ceq 'UNKNOWN' -and $Manifest.selection.prospective_admission -ceq 'BLOCKED' -and $Manifest.selection.runtime_admission -ceq 'BLOCKED' -and $Manifest.selection.can_invoke -is [bool] -and $Manifest.selection.can_invoke -eq $false -and $Manifest.selection.entry_hold -ceq 'SZL_SOURCE_ADMISSION_HOLD') 'SELECTION_ADMISSION_PROMOTED'
+    }
+    foreach($EntryPath in @($Manifest.candidate_path,'tools/SZL_DISK_CLEAN_RESUME_PS51_V13.ps1','tools/SZL_PARALLEL_FRONTIER_COORDINATOR_PS51_V12_1.ps1','tools/RUN_SZL_CTO_RATE_AWARE.ps1')) {
+        $Entry=[IO.File]::ReadAllText((Join-Path $RepositoryRoot $EntryPath))
+        Test-Case ('first executable statement holds '+(Split-Path -Leaf $EntryPath)) { Assert-InactiveEntry $Entry; Assert-NoOperatorInvocation $Entry }
+        Test-Case ('removed guard rejected '+(Split-Path -Leaf $EntryPath)) { Assert-Throws { Assert-InactiveEntry ($Entry.Replace("throw 'SZL_SOURCE_ADMISSION_HOLD'",'# removed hold')) } 'ENTRY_HOLD_NOT_FIRST_LITERAL' }
+    }
+    Test-Case 'guard after a side effect is rejected without executing either' { Assert-Throws { Assert-InactiveEntry ("Write-Output 'SENTINEL_MUST_NOT_RUN'`n"+$Source.TrimStart([char]0xFEFF)) } 'ENTRY_HOLD_NOT_FIRST_LITERAL' }
+    Test-Case 'guard in comment or conditional cannot admit entry' {
+        Assert-Throws { Assert-InactiveEntry "# throw 'SZL_SOURCE_ADMISSION_HOLD'`nWrite-Output 'SENTINEL'" } 'ENTRY_HOLD_NOT_FIRST_LITERAL'
+        Assert-Throws { Assert-InactiveEntry "if (`$env:SZL_APPLY -ne '1') { throw 'SZL_SOURCE_ADMISSION_HOLD' }" } 'ENTRY_HOLD_NOT_FIRST_LITERAL'
+    }
+    Test-Case 'trap cannot swallow the entry hold' { Assert-Throws { Assert-InactiveEntry "trap { continue }; throw 'SZL_SOURCE_ADMISSION_HOLD'" } 'ENTRY_TRAP_REJECTED' }
+    Test-Case 'parameter default cannot run before the hold' { Assert-Throws { Assert-InactiveEntry "param(`$value=(Write-Output 'SENTINEL'))`nthrow 'SZL_SOURCE_ADMISSION_HOLD'" } 'ENTRY_PRELUDE_REJECTED' }
+    Test-Case 'module requirement cannot load before the hold' { Assert-Throws { Assert-InactiveEntry "#requires -Modules SyntheticModuleMustNotLoad`nthrow 'SZL_SOURCE_ADMISSION_HOLD'" } 'ENTRY_REQUIREMENT_LOAD_REJECTED' }
+    Test-Case 'operator invocation mutation rejected as data' { Assert-Throws { Assert-NoOperatorInvocation ($Source+"`n& `$OperatorIdentity.Path") } 'OPERATOR_INVOCATION_REJECTED' }
     Test-Case 'candidate mutation is rejected' { $Changed=[byte[]]$Candidate.Clone(); $Changed[100]=$Changed[100] -bxor 1; Assert-Throws { Assert-Lineage $Base $Changed $Manifest } 'LINEAGE_CANDIDATE_HASH' }
     Test-Case 'manifest region mutation is rejected' { $Changed=$Manifest | ConvertTo-Json -Depth 8 | ConvertFrom-Json; $Changed.regions[0].new_sha256='0'*64; Assert-Throws { Assert-Lineage $Base $Candidate $Changed } 'LINEAGE_NEW_REGION' }
     Test-Case 'undeclared byte mutation rejected even with updated candidate hash' { $Changed=[byte[]]$Candidate.Clone(); $Changed[100]=$Changed[100] -bxor 1; $M=$Manifest | ConvertTo-Json -Depth 8 | ConvertFrom-Json; $M.candidate_sha256=Hash-Bytes $Changed; Assert-Throws { Assert-Lineage $Base $Changed $M } 'LINEAGE_UNDECLARED_CHANGE' }
@@ -178,7 +215,7 @@ finally {
     $Failed=@($Rows | Where-Object { -not $_.passed }).Count
     $Receipt=[ordered]@{
         schema='szl.ps51-inert-ci/v1';suite='recovered-v11';fixture_class='SIMULATED';powershell=$PSVersionTable.PSVersion.ToString()
-        qualification_scope='named-recovered-v11-definitions';historical_definitions_executed=$false;runtime_admission='BLOCKED'
+        qualification_scope='named-recovered-v11-definitions-and-static-inactive-entry-contracts';historical_definitions_executed=$false;runtime_admission='BLOCKED'
         reference_sha256=$Manifest.base_sha256;candidate_sha256=$Manifest.candidate_sha256;manifest_sha256=(Get-FileHash -LiteralPath $ManifestPath).Hash.ToLowerInvariant()
         harness_sha256=(Get-FileHash -LiteralPath $PSCommandPath).Hash.ToLowerInvariant();passed=$Rows.Count-$Failed;failed=$Failed;tests=$Rows.ToArray()
         controller_main_executed=$false;production_subprocesses_executed=$false;policy_settings_changed=$false

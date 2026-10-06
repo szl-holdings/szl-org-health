@@ -17,6 +17,8 @@ Reversible material change:
     hiberfil.sys. Re-enable later with: powercfg.exe /hibernate on
 #>
 
+throw 'SZL_SOURCE_ADMISSION_HOLD'
+
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'SZL_PS51_PROCESS_LIBRARY.ps1')
@@ -415,7 +417,8 @@ function Clear-WindowsUpdateCaches {
 }
 
 function Find-Operator {
-    return Resolve-SzlPinnedOperator -RuntimeRoot $RuntimeRoot
+    param([string]$SourceRoot = $PSScriptRoot)
+    return Resolve-SzlPinnedOperator -SourceRoot $SourceRoot
 }
 
 function Write-LargeFileReport {
@@ -747,11 +750,11 @@ try {
         Start-Sleep -Seconds 60
     }
 
-    $Operator = $null
-    try { $Operator = Find-Operator }
+    $OperatorIdentity = $null
+    try { $OperatorIdentity = Find-Operator }
     catch { Write-Event -Event 'operator_identity_rejected' -Message $_.Exception.Message }
 
-    if (-not $Operator) {
+    if (-not $OperatorIdentity) {
         Write-FinalReport `
             -OperatorDisposition 'BLOCKED_OPERATOR_IDENTITY' `
             -OperatorPath '' `
@@ -763,7 +766,8 @@ try {
         throw 'The required immutable V11 operator identity is unavailable.'
     }
 
-    $OperatorSha256 = (Get-FileHash -LiteralPath $Operator -Algorithm SHA256).Hash.ToLowerInvariant()
+    $Operator = $OperatorIdentity.Path
+    $OperatorSha256 = $OperatorIdentity.SHA256
 
     New-Item -ItemType Directory -Path $EstateRoot -Force | Out-Null
 
@@ -841,9 +845,9 @@ try {
     $OperatorException = $null
 
     try {
-        # Recheck the pinned source identity before the existing invocation.
-        $Operator = Find-Operator
-        & $Operator
+        # Identity is data. This proposal has no admitted invocation path.
+        $OperatorIdentity = Find-Operator
+        Assert-SzlOperatorAdmission -Identity $OperatorIdentity
 
         if (-not $?) {
             $OperatorDisposition = 'RETURNED_UNSUCCESSFUL_STATUS'

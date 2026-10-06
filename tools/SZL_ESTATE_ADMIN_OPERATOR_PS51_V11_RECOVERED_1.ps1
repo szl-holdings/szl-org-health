@@ -47,9 +47,11 @@
     Owner: Stephen P. Lutar Jr. / SZL Holdings
     GitHub: szl-holdings
     Hugging Face: SZLHOLDINGS
-    Recovered source candidate: 11.0.6-recovered-bounded.1 (not prior admission)
+    Recovered source candidate: 11.0.6-recovered-bounded.2 (not prior admission)
     Embedded controller: SZL Codex Estate Convergence V10
 #>
+
+throw 'SZL_SOURCE_ADMISSION_HOLD'
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -241,7 +243,7 @@ function Invoke-SzlNativeProcess {
 }
 
 Assert-SzlExecutionPolicy
-$OperatorVersion = '11.0.6-recovered-bounded.1'
+$OperatorVersion = '11.0.6-recovered-bounded.2'
 $script:RunMutex = New-Object System.Threading.Mutex($false, 'Global\SZL-Estate-Operator-PS51-V11')
 if (-not $script:RunMutex.WaitOne(0, $false)) { throw 'Another SZL estate operator process is already active.' }
 Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action { try { $script:RunMutex.ReleaseMutex() | Out-Null } catch { } } | Out-Null

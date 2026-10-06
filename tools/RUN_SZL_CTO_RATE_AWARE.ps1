@@ -1,14 +1,14 @@
 #requires -Version 5.1
 #requires -RunAsAdministrator
 
+throw 'SZL_SOURCE_ADMISSION_HOLD'
+
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'SZL_PS51_PROCESS_LIBRARY.ps1')
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$OperatorPath = 'C:\ProgramData\SZL\EstateOperator\Runtime\SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_PS51_JSON.ps1'
-$ExpectedOperatorSha256 = '23b1aaabef7aed9c2801c975bead79ac16084432537cff26059952208b3d687b'
 $EvidenceRoot = 'C:\ProgramData\SZL\EstateOperator'
 $ControllerRoot = 'C:\SZL-CTO-CONVERGENCE'
 $LogPath = Join-Path $ControllerRoot ('RATE-AWARE-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
@@ -48,17 +48,9 @@ function Get-GitHubBudgetObservation {
 }
 
 if (-not (Test-Administrator)) { throw 'Run this file from Windows PowerShell 5.1 as Administrator.' }
-if (-not (Test-Path -LiteralPath $OperatorPath -PathType Leaf)) { throw ('Missing operator: {0}' -f $OperatorPath) }
-$actual = (Get-FileHash -LiteralPath $OperatorPath -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actual -ne $ExpectedOperatorSha256) { throw ('Operator integrity mismatch. Expected {0}; observed {1}.' -f $ExpectedOperatorSha256,$actual) }
-$tokens=$null; $errors=$null
-[System.Management.Automation.Language.Parser]::ParseFile($OperatorPath,[ref]$tokens,[ref]$errors) | Out-Null
-if ($errors.Count -gt 0) {
-    $details = ($errors | ForEach-Object { '{0}:{1} {2}' -f $_.Extent.StartLineNumber,$_.Extent.StartColumnNumber,$_.Message }) -join [Environment]::NewLine
-    throw ('Operator parser preflight failed:' + [Environment]::NewLine + $details)
-}
+$OperatorIdentity = Resolve-SzlPinnedOperator -SourceRoot $PSScriptRoot
 
-Write-RunLog ('Verified operator SHA-256 {0} and PowerShell 5.1 parser.' -f $actual) 'OK'
+Write-RunLog ('Verified inactive recovered source SHA-256 {0}; admission remains blocked.' -f $OperatorIdentity.SHA256) 'OK'
 $otherRunners = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
     $_.ProcessId -ne $PID -and
     -not [string]::IsNullOrWhiteSpace([string]$_.CommandLine) -and
@@ -124,8 +116,8 @@ $env:SZL_INSTALL_WATCHDOG='0'
 
 $started = Get-Date
 Write-RunLog 'GitHub budget recovered. Launching one bounded full convergence cycle with Codex disabled by the retained quota hold.' 'OK'
-$OperatorPath = Resolve-SzlPinnedOperator -RuntimeRoot (Split-Path -Parent $OperatorPath)
-& $OperatorPath
+$OperatorIdentity = Resolve-SzlPinnedOperator -SourceRoot $PSScriptRoot
+Assert-SzlOperatorAdmission -Identity $OperatorIdentity
 $operatorExit = $LASTEXITCODE
 
 $latest = Get-ChildItem -LiteralPath $EvidenceRoot -Directory -ErrorAction SilentlyContinue |

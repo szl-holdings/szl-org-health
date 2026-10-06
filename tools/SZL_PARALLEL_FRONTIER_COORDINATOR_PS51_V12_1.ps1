@@ -1,5 +1,7 @@
 #requires -version 5.1
 
+throw 'SZL_SOURCE_ADMISSION_HOLD'
+
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'SZL_PS51_PROCESS_LIBRARY.ps1')
@@ -80,7 +82,8 @@ function Get-LatestOperatorEventLog {
 }
 
 function Get-ResumeOperator {
-    return Resolve-SzlPinnedOperator -RuntimeRoot (Join-Path $EstateRoot 'Runtime')
+    param([string]$SourceRoot = $PSScriptRoot)
+    return Resolve-SzlPinnedOperator -SourceRoot $SourceRoot
 }
 
 $CoordinatorMutex = New-Object -TypeName System.Threading.Mutex -ArgumentList $false, 'Global\SZL-Parallel-Frontier-Coordinator-V12-1'
@@ -320,13 +323,14 @@ try {
         $ResumeDisposition = 'BLOCKED_DISK_FLOOR'
     }
     else {
-        $Operator = $null
-        try { $Operator = Get-ResumeOperator }
+        $OperatorIdentity = $null
+        try { $OperatorIdentity = Get-ResumeOperator }
         catch { Write-Event -Event 'operator_identity_rejected' -Message $_.Exception.Message }
-        if (-not $Operator) {
+        if (-not $OperatorIdentity) {
             $ResumeDisposition = 'BLOCKED_OPERATOR_IDENTITY'
         }
         else {
+            $Operator = $OperatorIdentity.Path
             $PythonExe = 'C:\Users\steph\AppData\Local\Programs\Python\Python312\python.exe'
             if (Test-Path -LiteralPath $PythonExe -PathType Leaf) {
                 $env:SZL_PYTHON_EXE = $PythonExe
@@ -351,8 +355,8 @@ try {
             $env:SZL_INSTALL_WATCHDOG = '0'
             Write-Event 'serialized_resume_started' 'Active writer finished and disk floor is met; starting exactly one convergence resume.' @{ operator = $Operator; free_gb = Get-FreeGB }
             try {
-                $Operator = Get-ResumeOperator
-                & $Operator
+                $OperatorIdentity = Get-ResumeOperator
+                Assert-SzlOperatorAdmission -Identity $OperatorIdentity
                 $ResumeDisposition = if ($?) { 'RETURNED_SUCCESS' } else { 'RETURNED_UNSUCCESSFUL' }
             }
             catch {
