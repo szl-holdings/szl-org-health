@@ -117,3 +117,17 @@ or credentials are included. A failure before a receipt is written remains an
 explicit missing-evidence failure. Whole-controller boundedness and operational
 qualification remain **BLOCKED** by the separate paths above, regardless of
 native-helper results.
+
+The first successor CI at `bafff3205ba06821455faf5054dc7876e811f4a7`
+passed the existing 65 checks in both jobs, but the recovered suite passed 35/38.
+The failures exposed a null AST argument collection under PS5.1 and two pipe
+fixture assertions that addressed the child's default standard handles instead
+of the inherited parent pipe handles. The follow-up fixture passes those exact
+inherited handles explicitly and retains the open-pipe output negative control.
+No production helper change was made for these test fixes. Failure artifacts
+`11389736760` and `11389353034` each retain both sanitized receipts; downloaded
+archive hashes match GitHub's published SHA-256 digest
+`1ecf03ebe1a6dd42e8f8bc7ca393ade8ba942a7895b94bc726e306b48967a6ec`.
+These failed results are preserved; qualification of the corrected harness is
+**UNKNOWN** until fresh native CI completes for its exact revision. Later
+exact-revision results and artifact links belong in the PR's validation record.

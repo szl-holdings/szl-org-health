@@ -58,7 +58,7 @@ function Get-Definition([string]$Source,[string]$Name) {
 }
 function Assert-BoundedNative([string]$Source) {
     $Ast=Parse-Source $Source
-    $Unbounded=@($Ast.FindAll({param($N) $N -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $N.Member.Value -eq 'WaitForExit' -and $N.Arguments.Count -eq 0},$true))
+    $Unbounded=@($Ast.FindAll({param($N) $N -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $N.Member.Value -eq 'WaitForExit' -and ($null -eq $N.Arguments -or $N.Arguments.Count -eq 0)},$true))
     Assert-True ($Unbounded.Count -eq 0) 'UNBOUNDED_NATIVE_WAIT'
 }
 function Embedded-Hash([string]$Source) {
