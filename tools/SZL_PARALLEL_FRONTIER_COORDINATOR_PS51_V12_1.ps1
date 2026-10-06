@@ -3,6 +3,7 @@
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'SZL_PS51_PROCESS_LIBRARY.ps1')
+Assert-SzlExecutionPolicy
 $ProgressPreference = 'SilentlyContinue'
 
 if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5) {
@@ -15,8 +16,6 @@ $AdminRole = [Security.Principal.WindowsBuiltInRole]::Administrator
 if (-not $Principal.IsInRole($AdminRole)) {
     throw 'Open Windows PowerShell 5.1 with Run as administrator.'
 }
-
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 
 $Org = 'szl-holdings'
 $HfOrg = 'SZLHOLDINGS'

@@ -6,6 +6,9 @@ on:
     paths:
       - 'tools/SZL_PARALLEL_FRONTIER_COORDINATOR_PS51_V12_1.ps1'
       - 'tools/SZL_PS51_PROCESS_LIBRARY.ps1'
+      - 'tools/SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1'
+      - 'tools/ps51-recovered-source.lineage.json'
+      - 'tests/Test-PS51RecoveredSource.ps1'
       - 'tools/SZL_DISK_CLEAN_RESUME_PS51_V13.ps1'
       - 'tools/RUN_SZL_CTO_RATE_AWARE.ps1'
       - 'tests/Test-PS51ProcessContracts.ps1'
@@ -116,3 +119,17 @@ jobs:
       - name: Exercise inert PS51 process and identity definitions
         shell: powershell
         run: ./tests/Test-PS51ProcessContracts.ps1
+
+      - name: Exercise recovered V11 definitions and policy preflight
+        if: success() || failure()
+        shell: powershell
+        run: ./tests/Test-PS51RecoveredSource.ps1
+
+      - name: Retain sanitized inert contract receipts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ps51-coordinator-contracts-${{ github.run_id }}
+          path: artifacts/ps51/*.json
+          if-no-files-found: error
+          retention-days: 30

@@ -36,7 +36,7 @@ the adjacent inert library from the same reviewed source revision.
   or timestamp fallback. Hashing and parsing use one byte buffer.
 - The new process helper retains the original native process handle, rejects
   unavailable/non-integer exits, and preserves nonzero exits and argument values.
-- Stdout and stderr drain concurrently with explicit UTF-8 decoding. Arbitrary
+- Stdout and stderr drain in alternating bounded chunks with explicit UTF-8 decoding. Arbitrary
   legacy code pages are not qualified.
 - New process/pipe waits share a finite deadline; direct-child cleanup waits at
   most one additional second. Descendant-tree cleanup and timeout partial-output
@@ -44,7 +44,8 @@ the adjacent inert library from the same reviewed source revision.
 - The historical V11 `Invoke-Native` still has parameterless `WaitForExit` calls.
   It is preserved as evidence, not upgraded by the new V13 helper. Its direct-
   child timeout tests cannot qualify descendant-held pipes or all cleanup paths.
-  Full V11 admission requires resolving that gap in its canonical source lane.
+  The separately named recovered successor addresses this native-helper gap;
+  original historical admission and full-controller qualification remain blocked.
 - Identity rechecks before the existing path-based invocation narrow drift but
   do not establish a lock against adversarial replacement during invocation.
 
@@ -67,7 +68,15 @@ The user authorized a source-only push to existing draft PR234 for qualification
 on its existing native Windows runners. Repository push/PR triggers were reviewed:
 this change runs source/tests and disposable container CI; production controller
 and census workflows are schedule-only and unchanged. Independent source review
-is complete. Native Windows CI results remain **UNKNOWN** until collected for
-the exact pushed candidate. Local execution remains **BLOCKED**. Full-controller
-release admission remains **BLOCKED** on canonical V11 source/admission and its
-unbounded-wait gap, regardless of the helper harness outcome.
+is complete. Historical native CI at `ecc3e620ecc910c3391b282d03a0f4115c2124ac`
+passed 65/65 in each Windows PowerShell 5.1 job: runs `37409450282` / job
+`112094353536` and `37409450252` / job `112094353683`. The PR test merge
+`1b52f7b3ebb5e2e153f188336489027470395501` has the same tree as that head.
+The earlier `9473f56` runs each passed 64/65; the one failure compared an 8.3
+temporary-path alias with its expanded filesystem path. The corrected assertion
+preserves exact fixture selection. Historical receipts exist in logs; those runs
+did not upload their temporary JSON. Successor workflows retain sanitized JSON.
+These results do not qualify later source revisions. See
+`PS51_RECOVERED_SOURCE.md` for the separately identified recovered proposal.
+Local execution and full-controller admission remain **BLOCKED**. New helper
+qualification cannot establish missing prior admission or authorize activation.

@@ -1,7 +1,10 @@
 #requires -version 5.1
 # Every child is NativeProbe.exe, compiled below in a unique owned directory.
 # Production scripts are parsed as data; only explicitly named definitions load.
-param([string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot))
+param(
+    [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$ReceiptDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts/ps51')
+)
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5) {
@@ -36,7 +39,7 @@ function Read-Definitions([string]$Path, [string[]]$Names) {
     return $Text -join "`n"
 }
 $LibraryPath = Join-Path $RepositoryRoot 'tools/SZL_PS51_PROCESS_LIBRARY.ps1'
-$LibraryDefinitions = Read-Definitions $LibraryPath @('ConvertTo-SzlNativeArgument','Get-SzlObservedExitCode','Invoke-SzlNativeProcess','Resolve-SzlPinnedOperator')
+$LibraryDefinitions = Read-Definitions $LibraryPath @('ConvertTo-SzlNativeArgument','Get-SzlObservedExitCode','Initialize-SzlNativePipe','Invoke-SzlNativeProcess','Resolve-SzlPinnedOperator')
 . ([scriptblock]::Create($LibraryDefinitions))
 $V13Path = Join-Path $RepositoryRoot 'tools/SZL_DISK_CLEAN_RESUME_PS51_V13.ps1'
 . ([scriptblock]::Create((Read-Definitions $V13Path @('Invoke-NativeTool','Find-Operator'))))
@@ -157,6 +160,16 @@ finally {
     }
     $ReceiptPath = Join-Path $WorkRoot 'RESULTS.json'
     [IO.File]::WriteAllText($ReceiptPath, ($Receipt | ConvertTo-Json -Depth 8), (New-Object Text.UTF8Encoding($false)))
+    # Publish only the fixture verdicts and source identifiers, never raw command
+    # output, exception text, local paths, arguments, credentials, or environment.
+    New-Item -ItemType Directory -Path $ReceiptDirectory -Force | Out-Null
+    $PublicReceipt = [ordered]@{
+        schema='szl.ps51-inert-ci/v1';suite='historical-and-v13';fixture_class='SIMULATED'
+        powershell=$Receipt.powershell;reference_sha256=$Receipt.reference_sha256;harness_sha256=$Receipt.harness_sha256
+        passed=$Receipt.passed;failed=$Failed;tests=@($Rows | Select-Object name,passed)
+        controller_main_executed=$false;production_subprocesses_executed=$false
+    }
+    [IO.File]::WriteAllText((Join-Path $ReceiptDirectory 'process-contracts.json'), ($PublicReceipt | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
     Write-Host ('Receipt: ' + $ReceiptPath)
     Write-Host ('Passed: {0}; failed: {1}' -f $Receipt.passed, $Failed)
 }

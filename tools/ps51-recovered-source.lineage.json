@@ -1,0 +1,61 @@
+{
+  "schema": "szl.ps51-recovered-source-lineage/v1",
+  "original_admission": "UNKNOWN",
+  "recovered_source_admission": "BLOCKED",
+  "admission_note": "New source proposal only; no historical canonical admission or runtime activation is claimed.",
+  "base_path": "tests/fixtures/ps51/operator-23b1aaab.ps1.txt",
+  "base_bytes": 243573,
+  "base_sha256": "23b1aaabef7aed9c2801c975bead79ac16084432537cff26059952208b3d687b",
+  "source_proposal_parent": "ecc3e620ecc910c3391b282d03a0f4115c2124ac",
+  "library_path": "tools/SZL_PS51_PROCESS_LIBRARY.ps1",
+  "library_sha256": "9a09cbd2e605c3302a598ded2ed77c633bcff0c9b0ea6213a348ba40ba40c2ab",
+  "copied_definitions": [
+    "Assert-SzlExecutionPolicy",
+    "ConvertTo-SzlNativeArgument",
+    "Get-SzlObservedExitCode",
+    "Initialize-SzlNativePipe",
+    "Invoke-SzlNativeProcess"
+  ],
+  "candidate_path": "tools/SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1",
+  "candidate_bytes": 249105,
+  "candidate_sha256": "94bc11482c1b0db5be6841450f7287c0b30385f893dbe72709c390829e0bccec",
+  "embedded_python_sha256": "19cd7b182c9b97ce9ec06a694dbc67f342ab87fe7c0de2288e9df47bbccdfee2",
+  "regions": [
+    {
+      "kind": "identity-note",
+      "old_start": 2220,
+      "old_length": 28,
+      "old_sha256": "94275aa64cde52ccdd594f2e68735794fb3c542501ee2e86060fc695fbc96b13",
+      "new_start": 2220,
+      "new_length": 80,
+      "new_sha256": "c94d05b3ad3cf8959148db5577e8df0504cfab9ff34bab04fdfd990ee16f2ca6"
+    },
+    {
+      "kind": "standalone-preflight-and-native-definitions",
+      "old_start": 2377,
+      "old_length": 37,
+      "old_sha256": "51a7cac39b5af67f3bad85292d297e0630fd69c86eee6321d24b156fac0a34ee",
+      "new_start": 2429,
+      "new_length": 8612,
+      "new_sha256": "123b52f355a0e402953c7734cc1e710711650682efbfb9780577fef468ba88f0"
+    },
+    {
+      "kind": "v11-native-wrapper",
+      "old_start": 13209,
+      "old_length": 4374,
+      "old_sha256": "ebcc5ad9f58e0c92ffc05c9ed12696233091d807aef397dde4c377c556411968",
+      "new_start": 21836,
+      "new_length": 1303,
+      "new_sha256": "322f1166afe770d8deff09a080fba71579e6c0a536a8692b35f3aeac4702eaee"
+    },
+    {
+      "kind": "remove-watchdog-policy-override",
+      "old_start": 39236,
+      "old_length": 40,
+      "old_sha256": "f8bbbdda4db2e257e7a53fc09c8f43e1a06b3d9757fb156dabf49f12f10054e0",
+      "new_start": 44792,
+      "new_length": 16,
+      "new_sha256": "37bd0f187e7283e342976b2de142d3d0f3468dc9291a46a743bd40820b7bf65e"
+    }
+  ]
+}
