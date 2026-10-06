@@ -1,0 +1,274 @@
+{
+    "schema":  "szl.ps51-inert-ci/v1",
+    "suite":  "historical-and-v13",
+    "fixture_class":  "SIMULATED",
+    "powershell":  "5.1.20348.5622",
+    "reference_sha256":  "23b1aaabef7aed9c2801c975bead79ac16084432537cff26059952208b3d687b",
+    "harness_sha256":  "1b7335c97e00a47b6174117665df6ebd0e48f9d9249b45cf30be88a8106b17ba",
+    "passed":  63,
+    "failed":  2,
+    "tests":  [
+                  {
+                      "name":  "fixture reference parses without running main",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "missing PS51_JSON rejects available older helper",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "wrong helper refuses timestamp fallback",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "both selectors choose exact immutable PS51_JSON",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "post-selection change is refused on recheck",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "stale pin is absent from source launcher",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "unavailable exit is not cast to zero",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "non-native exit values rejected",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "throwing exit getter rejected",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "native invocation propagates unavailable exit even AllowNonZero",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "legacy empty argv",
+                      "passed":  false
+                  },
+                  {
+                      "name":  "legacy exit7 retained with both streams",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "legacy exit7 throws by default",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "legacy timeout bounded",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "legacy concurrent stdout stderr",
+                      "passed":  false
+                  },
+                  {
+                      "name":  "legacy argv zero",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "legacy argv empty",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "legacy argv adjacent-empty",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "legacy argv spaces-tabs",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "legacy argv unicode-spaces",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "legacy argv quotes",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "legacy argv trailing-slashes",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "legacy argv slash-quotes",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "legacy argv literal-shell",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "legacy argv newlines",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "legacy argv mixed",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "legacy 20 rapid exits preserve 7",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new empty argv",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new exit7 retained with both streams",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new exit7 throws by default",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new timeout bounded",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new concurrent stdout stderr",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new argv zero",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new argv empty",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new argv adjacent-empty",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new argv spaces-tabs",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new argv unicode-spaces",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new argv quotes",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new argv trailing-slashes",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new argv slash-quotes",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new argv literal-shell",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new argv newlines",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new argv mixed",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new 20 rapid exits preserve 7",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 empty argv",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 exit7 retained with both streams",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 exit7 throws by default",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 timeout bounded",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 concurrent stdout stderr",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 argv zero",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 argv empty",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 argv adjacent-empty",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 argv spaces-tabs",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 argv unicode-spaces",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 argv quotes",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 argv trailing-slashes",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 argv slash-quotes",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 argv literal-shell",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 argv newlines",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 argv mixed",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "v13 20 rapid exits preserve 7",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "new Unicode output on both streams",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "zero timeout rejected before launch",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "argument assertion rejects altered content",
+                      "passed":  true
+                  },
+                  {
+                      "name":  "argument assertion rejects missing empty element",
+                      "passed":  true
+                  }
+              ],
+    "controller_main_executed":  false,
+    "production_subprocesses_executed":  false
+}

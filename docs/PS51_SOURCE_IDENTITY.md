@@ -55,12 +55,18 @@ Run `powershell.exe -NoProfile -NonInteractive -File tests/Test-PS51ProcessContr
 only where test-file execution is already permitted. Do not relax local policy
 or evaluate the script through another route after an execution denial.
 
-The harness hashes/parses the reference, imports only named legacy and candidate
-definitions, and compiles its own offline C# probe in a new temporary directory.
+The harness hashes/parses the historical reference as data, imports only named
+prospective shared/V13 and selector definitions, and compiles its own offline C#
+probe in a new temporary directory. Historical definitions are not executed.
 It tests helper identity, exit7, unavailable exit, rapid exits, empty argv,
 Unicode/spaces/quotes/backslashes, simultaneous streams, direct-child timeout,
 and assertion negative controls. It never imports controller main or runs
 production tools. Its small owned fixture/evidence directory is retained.
+The 48 prospective/identity assertions retain their prior conditions and timeouts.
+The original failed mixed-suite replay is retained separately, byte for byte,
+with both historical failure rows false. Its integrity check is not a new replay
+or a historical qualification pass. See the source-by-source conclusion map in
+`PS51_RECOVERED_SOURCE.md`.
 
 Local execution is **BLOCKED**: Windows PowerShell 5.1 rejected the test file
 under its existing execution policy. No policy/security setting changed.

@@ -1,6 +1,8 @@
 #requires -version 5.1
 # Every child is NativeProbe.exe, compiled below in a unique owned directory.
 # Production scripts are parsed as data; only explicitly named definitions load.
+# This suite qualifies prospective shared/V13 definitions and source identity.
+# Historical replay is retained as immutable evidence, never executed or relabeled.
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$ReceiptDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'artifacts/ps51')
@@ -48,8 +50,14 @@ $V12Path = Join-Path $RepositoryRoot 'tools/SZL_PARALLEL_FRONTIER_COORDINATOR_PS
 $Reference = Join-Path $RepositoryRoot 'tests/fixtures/ps51/operator-23b1aaab.ps1.txt'
 $ExpectedHash = '23B1AAABEF7AED9C2801C975BEAD79AC16084432537CFF26059952208B3D687B'
 Assert-True ((Get-FileHash -LiteralPath $Reference -Algorithm SHA256).Hash -ceq $ExpectedHash) 'Recovered source bytes changed'
-. ([scriptblock]::Create((Read-Definitions $Reference @('Repeat-Backslash','ConvertTo-NativeArgument','Invoke-Native'))))
-function Redact-Text([string]$Text) { return $Text } # Not testing legacy redaction.
+$HistoricalReceiptPath = Join-Path $RepositoryRoot 'tests/fixtures/ps51/historical-replay-b1b1c5df.json'
+$HistoricalReceiptHash = '1c4956b577bfc43e6e341551f1347b902f0c90d77b4063f86acfbf2c7c16efcb'
+Assert-True ((Get-FileHash -LiteralPath $HistoricalReceiptPath).Hash.ToLowerInvariant() -ceq $HistoricalReceiptHash) 'Historical replay evidence changed'
+$HistoricalReceipt = [IO.File]::ReadAllText($HistoricalReceiptPath) | ConvertFrom-Json
+Assert-True ($HistoricalReceipt.passed -eq 63 -and $HistoricalReceipt.failed -eq 2 -and @($HistoricalReceipt.tests).Count -eq 65) 'Historical replay counts changed'
+Assert-True (@($HistoricalReceipt.tests | Where-Object { $_.passed -isnot [bool] }).Count -eq 0) 'Historical replay verdict types changed'
+$HistoricalFailures = @($HistoricalReceipt.tests | Where-Object { $_.passed -eq $false })
+Assert-True ($HistoricalFailures.Count -eq 2 -and ($HistoricalFailures[0].name -ceq 'legacy empty argv') -and ($HistoricalFailures[1].name -ceq 'legacy concurrent stdout stderr')) 'Historical failures changed'
 $WorkRoot = Join-Path $env:TEMP ('szl-ps51-contract-' + [Guid]::NewGuid().ToString('N'))
 $RunRoot = $WorkRoot
 $TempRoot = Join-Path $WorkRoot 'legacy-io'
@@ -61,8 +69,7 @@ $Probe = Join-Path $WorkRoot 'Native Probe.exe'
 $ProbeSource = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'tests/fixtures/ps51/NativeProbe.cs'))
 Add-Type -TypeDefinition $ProbeSource -OutputAssembly $Probe -OutputType ConsoleApplication
 function Invoke-Probe {
-    param([string]$Lane, [AllowEmptyCollection()][AllowEmptyString()][string[]]$Values = @(), [int]$Timeout = 5, [switch]$AllowNonZero)
-    if ($Lane -eq 'legacy') { return Invoke-Native -FilePath $Probe -ArgumentList $Values -WorkingDirectory $WorkRoot -TimeoutSeconds $Timeout -AllowNonZero:$AllowNonZero }
+    param([ValidateSet('new','v13')][string]$Lane, [AllowEmptyCollection()][AllowEmptyString()][string[]]$Values = @(), [int]$Timeout = 5, [switch]$AllowNonZero)
     if ($Lane -eq 'v13') { return Invoke-NativeTool -FilePath $Probe -ArgumentList $Values -TimeoutSeconds $Timeout -AllowNonZero:$AllowNonZero }
     return Invoke-SzlNativeProcess -FilePath $Probe -ArgumentList $Values -WorkingDirectory $WorkRoot -TimeoutSeconds $Timeout -AllowNonZero:$AllowNonZero
 }
@@ -76,7 +83,7 @@ function Assert-ArgumentEcho([string]$Raw, [AllowEmptyCollection()][AllowEmptySt
     }
 }
 try {
-    Test-Case 'fixture reference parses without running main' { Assert-True ($ExpectedHash -ceq (Get-FileHash -LiteralPath $Reference).Hash) 'Reference changed' }
+    Test-Case 'fixture reference parses without running main' { Assert-True ($ExpectedHash -ceq (Get-FileHash -LiteralPath $Reference).Hash) 'Reference changed'; Read-Definitions $Reference @('Invoke-Native') | Out-Null }
     $Candidate = Join-Path $RuntimeRoot 'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_PS51_JSON.ps1'
     $OldCandidate = Join-Path $RuntimeRoot 'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_HF_PREFLIGHT_ROBUST.ps1'
     [IO.File]::WriteAllText($OldCandidate, 'throw "OLD_HELPER_MAIN_MUST_NOT_RUN"')
@@ -132,7 +139,7 @@ try {
         [pscustomobject]@{name='newlines';values=[string[]]@("line1`nline2","line1`r`nline2")},
         [pscustomobject]@{name='mixed';values=[string[]]@('',$Unicode,'C:\a b\','a"b','tail')}
     )
-    foreach ($Lane in @('legacy','new','v13')) {
+    foreach ($Lane in @('new','v13')) {
         Test-Case "$Lane empty argv" { $Result = Invoke-Probe $Lane; Assert-True ($Result.ExitCode -eq 0 -and $Result.Stdout.Trim() -ceq 'NO_ARGUMENTS') 'No-argument invocation changed' }
         Test-Case "$Lane exit7 retained with both streams" { $Result = Invoke-Probe $Lane @('exit7') -AllowNonZero; Assert-True ($Result.ExitCode -eq 7 -and $Result.Stdout -ceq 'out-seven' -and $Result.Stderr -ceq 'err-seven') 'Exit or streams changed' }
         Test-Case "$Lane exit7 throws by default" { Assert-Throws { Invoke-Probe $Lane @('exit7') } 'exit (code )?7' }
@@ -164,12 +171,24 @@ finally {
     # output, exception text, local paths, arguments, credentials, or environment.
     New-Item -ItemType Directory -Path $ReceiptDirectory -Force | Out-Null
     $PublicReceipt = [ordered]@{
-        schema='szl.ps51-inert-ci/v1';suite='historical-and-v13';fixture_class='SIMULATED'
+        schema='szl.ps51-inert-ci/v1';suite='prospective-shared-and-v13';fixture_class='SIMULATED'
+        qualification_scope='named-prospective-definitions-and-source-identity'
         powershell=$Receipt.powershell;reference_sha256=$Receipt.reference_sha256;harness_sha256=$Receipt.harness_sha256
+        source_sha256=[ordered]@{
+            shared=(Get-FileHash -LiteralPath $LibraryPath).Hash.ToLowerInvariant()
+            v13=(Get-FileHash -LiteralPath $V13Path).Hash.ToLowerInvariant()
+            v12_selectors=(Get-FileHash -LiteralPath $V12Path).Hash.ToLowerInvariant()
+            launcher_identity_only=(Get-FileHash -LiteralPath (Join-Path $RepositoryRoot 'tools/RUN_SZL_CTO_RATE_AWARE.ps1')).Hash.ToLowerInvariant()
+        }
+        historical_replay_sha256=$HistoricalReceiptHash;historical_definitions_executed=$false;runtime_admission='BLOCKED'
         passed=$Receipt.passed;failed=$Failed;tests=@($Rows | Select-Object name,passed)
         controller_main_executed=$false;production_subprocesses_executed=$false
     }
     [IO.File]::WriteAllText((Join-Path $ReceiptDirectory 'process-contracts.json'), ($PublicReceipt | ConvertTo-Json -Depth 6), (New-Object Text.UTF8Encoding($false)))
+    # Preserve the original mixed-suite receipt byte for byte, including its two
+    # false historical rows. This copy is archived evidence, not a current replay.
+    Copy-Item -LiteralPath $HistoricalReceiptPath -Destination (Join-Path $ReceiptDirectory 'historical-replay-b1b1c5df.json')
+    Write-Host 'Archived historical replay: 63 passed; 2 failed. Historical/runtime admission remains BLOCKED.'
     Write-Host ('Receipt: ' + $ReceiptPath)
     Write-Host ('Passed: {0}; failed: {1}' -f $Receipt.passed, $Failed)
 }

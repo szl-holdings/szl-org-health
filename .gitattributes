@@ -11,3 +11,4 @@
 /tools/SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1 -text
 /tools/ps51-recovered-source.lineage.json text eol=lf
 /tests/Test-PS51RecoveredSource.ps1 text eol=lf
+/tests/fixtures/ps51/historical-replay-b1b1c5df.json -text

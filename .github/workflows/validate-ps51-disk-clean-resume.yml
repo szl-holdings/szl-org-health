@@ -128,16 +128,16 @@ jobs:
           Write-Host 'Windows PowerShell 5.1 parser: PASS'
           Write-Host 'Cleanup safety contract: PASS'
 
-      - name: Exercise inert PS51 process and identity definitions
+      - name: Qualify prospective shared and V13 definitions and source identity
         shell: powershell
         run: ./tests/Test-PS51ProcessContracts.ps1
 
-      - name: Exercise recovered V11 definitions and policy preflight
+      - name: Qualify recovered V11 definitions and reject historical unbounded waits
         if: success() || failure()
         shell: powershell
         run: ./tests/Test-PS51RecoveredSource.ps1
 
-      - name: Retain sanitized inert contract receipts
+      - name: Retain prospective receipts and unchanged historical replay evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

@@ -128,6 +128,49 @@ No production helper change was made for these test fixes. Failure artifacts
 `11389736760` and `11389353034` each retain both sanitized receipts; downloaded
 archive hashes match GitHub's published SHA-256 digest
 `1ecf03ebe1a6dd42e8f8bc7ca393ade8ba942a7895b94bc726e306b48967a6ec`.
-These failed results are preserved; qualification of the corrected harness is
-**UNKNOWN** until fresh native CI completes for its exact revision. Later
-exact-revision results and artifact links belong in the PR's validation record.
+These failed results remain preserved. At the subsequent head
+`b1b1c5dfcaf5fd5ec21ac21ad9cf149ec10bcc92`, the recovered suite passed 38/38
+in both jobs. The mixed suite passed 65/65 in the disk job, but 63/65 in the
+coordinator job: `legacy empty argv` threw `NATIVE_EXIT_UNAVAILABLE`, and
+`legacy concurrent stdout stderr` exceeded five seconds. Both exercised the
+unchanged historical definitions, not the recovered executable. They are genuine
+failures with unresolved causes; no passing retry supersedes them.
+
+## Prospective qualification and archived historical replay
+
+The current contract separates the source being qualified from prior replay
+evidence. No assertion or timeout for a prospective definition is relaxed.
+Both harnesses still throw on any failed current test; workflows contain no
+`continue-on-error`, waived gate or ignored current-source failure.
+The disk workflow's existing static step parses/checks markers in V13; the
+coordinator's static step does the same for V12_1. Neither executes those entry
+points. Whole-workflow success means those static checks and the prospective
+contracts below passed, not full-controller safety or historical qualification.
+
+| Receipt / CI conclusion | Source and scope |
+| --- | --- |
+| `process-contracts.json` | 48 prospective/identity checks: named definitions from the shared process library and V13 wrapper, plus V12/V13 selector contracts and launcher identity as data. The receipt binds all four source hashes. Historical source is hashed/parsed as data only. |
+| `recovered-v11.json` | 39 checks for named definitions in the standalone recovered V11, byte lineage, policy-reader mocks, and validator controls. The added control must reject the actual hash-verified historical source for its parameterless waits; the synthetic-call control is retained. Candidate, manifest and harness hashes bind this conclusion. |
+| `historical-replay-b1b1c5df.json` | Exact archived mixed-suite receipt: 63 passed, 2 failed, including 15 passed and 2 failed historical cases. It is copied unchanged into each artifact after hash/count/failure-name integrity checks. No historical definitions are replayed now; preserving this receipt does not qualify them. |
+
+The archive fixture is 9886 bytes with SHA-256
+`1c4956b577bfc43e6e341551f1347b902f0c90d77b4063f86acfbf2c7c16efcb`.
+It came from [coordinator artifact 11389074520](https://github.com/szl-holdings/szl-org-health/actions/runs/37412426623/artifacts/11389074520),
+whose ZIP SHA-256 is `08d55482659fae7f998a809d7349a984bc50025d9119b0dce1f8989d2d3db50e`.
+The original run `37412426623`, job `112103605426`, tested head
+`b1b1c5dfcaf5fd5ec21ac21ad9cf149ec10bcc92` through merge
+`cc5c9d2618d31a821bdab5326fec205093d159b4` with main
+`ce381bd9a933f9f5e3211b1041e889e1e98f1184`. Its harness SHA-256 is
+`1b7335c97e00a47b6174117665df6ebd0e48f9d9249b45cf30be88a8106b17ba`;
+the historical reference remains `23b1aaab...d687b`. The baseline receipt and
+source are non-normalized fixtures, and the original remote/local archives remain
+preserved. Counts in this archived receipt are not fresh measurements.
+
+Fresh native CI is required for this changed test contract. Exact-revision results
+and artifact links belong in the PR validation record. Even a green prospective
+CI conclusion leaves runtime admission **BLOCKED**: existing selectors still
+choose the historical `23b1aaab` source. Admission and a selector binding to the
+qualified successor require a separate explicit review. Original canonical
+admission remains **UNKNOWN**. All direct CLI/auth, job-cleanup, coordinator-loop,
+embedded-Python and other waits inventoried above remain outside the tested
+bounded-native-helper claim.

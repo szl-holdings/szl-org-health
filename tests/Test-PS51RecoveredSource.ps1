@@ -103,6 +103,7 @@ try {
     Test-Case 'embedded mutation does not preserve payload identity' { $Changed=$Source.Replace('IyEvdXNyL2Jpbi9lbnYgcHl0aG9uMw','IyEvdXNyL2Jpbi9lbnYgcHl0aG9uNA'); Assert-True ((Embedded-Hash $Changed) -cne $Manifest.embedded_python_sha256) 'EMBEDDED_NEGATIVE_CONTROL' }
     Test-Case 'no parameterless native wait remains' { Assert-BoundedNative $Source }
     Test-Case 'parameterless wait negative control rejected' { Assert-Throws { Assert-BoundedNative ($Source+"`n`$synthetic.WaitForExit()") } 'UNBOUNDED_NATIVE_WAIT' }
+    Test-Case 'actual unchanged historical source rejected by bounded-wait validator' { Assert-Throws { Assert-BoundedNative ($Decoder.GetString($Base).TrimStart([char]0xFEFF)) } 'UNBOUNDED_NATIVE_WAIT' }
     Test-Case 'canonical executable sources have no policy setter or bypass launch' {
         foreach($Path in @($Manifest.candidate_path,'tools/SZL_DISK_CLEAN_RESUME_PS51_V13.ps1','tools/SZL_PARALLEL_FRONTIER_COORDINATOR_PS51_V12_1.ps1')) {
             $Text=[IO.File]::ReadAllText((Join-Path $RepositoryRoot $Path))
@@ -177,6 +178,7 @@ finally {
     $Failed=@($Rows | Where-Object { -not $_.passed }).Count
     $Receipt=[ordered]@{
         schema='szl.ps51-inert-ci/v1';suite='recovered-v11';fixture_class='SIMULATED';powershell=$PSVersionTable.PSVersion.ToString()
+        qualification_scope='named-recovered-v11-definitions';historical_definitions_executed=$false;runtime_admission='BLOCKED'
         reference_sha256=$Manifest.base_sha256;candidate_sha256=$Manifest.candidate_sha256;manifest_sha256=(Get-FileHash -LiteralPath $ManifestPath).Hash.ToLowerInvariant()
         harness_sha256=(Get-FileHash -LiteralPath $PSCommandPath).Hash.ToLowerInvariant();passed=$Rows.Count-$Failed;failed=$Failed;tests=$Rows.ToArray()
         controller_main_executed=$false;production_subprocesses_executed=$false;policy_settings_changed=$false
