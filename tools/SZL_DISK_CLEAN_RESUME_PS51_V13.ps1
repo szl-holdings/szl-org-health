@@ -19,6 +19,7 @@ Reversible material change:
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'SZL_PS51_PROCESS_LIBRARY.ps1')
 $ProgressPreference = 'SilentlyContinue'
 
 if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5) {
@@ -138,100 +139,22 @@ function Test-WriterActive {
 function Invoke-NativeTool {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
-        [string[]]$ArgumentList = @(),
-        [int]$TimeoutSeconds = 3600,
+        [AllowEmptyCollection()][AllowEmptyString()][string[]]$ArgumentList = @(),
+        [ValidateRange(1, 2147483)][int]$TimeoutSeconds = 3600,
         [switch]$AllowNonZero,
         [string]$Name = 'native-tool'
     )
-
     $Id = [Guid]::NewGuid().ToString('N')
     $StdoutPath = Join-Path $LogRoot ($Id + '.stdout.log')
     $StderrPath = Join-Path $LogRoot ($Id + '.stderr.log')
-
-    $QuotedArguments = @(
-        $ArgumentList |
-        ForEach-Object {
-            $Value = [string]$_
-            if ($Value -match '[\s"]') {
-                '"' + $Value.Replace('"','\"') + '"'
-            }
-            else {
-                $Value
-            }
-        }
-    ) -join ' '
-
-    $Process = $null
-    $ExitCode = $null
-    $Started = [DateTime]::UtcNow
-
-    try {
-        $Process = Start-Process `
-            -FilePath $FilePath `
-            -ArgumentList $QuotedArguments `
-            -WorkingDirectory $env:TEMP `
-            -NoNewWindow `
-            -PassThru `
-            -RedirectStandardOutput $StdoutPath `
-            -RedirectStandardError $StderrPath
-
-        $Completed = $Process.WaitForExit($TimeoutSeconds * 1000)
-
-        if (-not $Completed) {
-            try {
-                $Process.Kill()
-            }
-            catch {
-            }
-
-            try {
-                $Process.WaitForExit()
-            }
-            catch {
-            }
-
-            throw ('{0} timed out after {1} seconds.' -f $Name,$TimeoutSeconds)
-        }
-
-        $Process.WaitForExit()
-        $Process.Refresh()
-        $ExitCode = [int]$Process.ExitCode
+    $Result = Invoke-SzlNativeProcess -FilePath $FilePath -ArgumentList $ArgumentList `
+        -WorkingDirectory $env:TEMP -TimeoutSeconds $TimeoutSeconds -AllowNonZero -Name $Name
+    $Encoding = New-Object Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($StdoutPath, $Result.Stdout, $Encoding)
+    [IO.File]::WriteAllText($StderrPath, $Result.Stderr, $Encoding)
+    if (-not $AllowNonZero -and $Result.ExitCode -ne 0) {
+        throw ('{0} failed with exit code {1}. See {2} and {3}.' -f $Name, $Result.ExitCode, $StdoutPath, $StderrPath)
     }
-    finally {
-        if ($null -ne $Process) {
-            try {
-                $Process.Dispose()
-            }
-            catch {
-            }
-        }
-    }
-
-    $Stdout = ''
-    $Stderr = ''
-
-    if (Test-Path -LiteralPath $StdoutPath -PathType Leaf) {
-        $Stdout = Get-Content -LiteralPath $StdoutPath -Raw -ErrorAction SilentlyContinue
-    }
-
-    if (Test-Path -LiteralPath $StderrPath -PathType Leaf) {
-        $Stderr = Get-Content -LiteralPath $StderrPath -Raw -ErrorAction SilentlyContinue
-    }
-
-    $Result = [pscustomobject]@{
-        Name = $Name
-        FilePath = $FilePath
-        Arguments = $ArgumentList
-        ExitCode = $ExitCode
-        Stdout = $Stdout
-        Stderr = $Stderr
-        Seconds = [Math]::Round(([DateTime]::UtcNow - $Started).TotalSeconds, 3)
-    }
-
-    if (-not $AllowNonZero -and $ExitCode -ne 0) {
-        throw ('{0} failed with exit code {1}. See {2} and {3}.' -f $Name,$ExitCode,$StdoutPath,$StderrPath)
-    }
-
     return $Result
 }
 
@@ -493,65 +416,7 @@ function Clear-WindowsUpdateCaches {
 }
 
 function Find-Operator {
-    if (-not (Test-Path -LiteralPath $RuntimeRoot -PathType Container)) {
-        return $null
-    }
-
-    $Patterns = @(
-        'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_HF_PREFLIGHT_ROBUST*.ps1',
-        'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_HF_PREFLIGHT_FIX*.ps1',
-        'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_NATIVEFIX*.ps1',
-        'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_PYTHONFIX*.ps1',
-        'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_FIXED*.ps1'
-    )
-
-    $RequiredMarkers = @(
-        '$OperatorVersion = ''11.0.0''',
-        'function Resolve-PythonCommand {',
-        'function Invoke-Native {',
-        'function Get-LiveGitHubCensus {',
-        'function Get-HuggingFaceAuthObservation {',
-        'controller_bootstrap_started',
-        'SZL_RESUME_LATEST'
-    )
-
-    foreach ($Pattern in $Patterns) {
-        $Candidates = @(
-            Get-ChildItem -LiteralPath $RuntimeRoot -Filter $Pattern -File -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTimeUtc -Descending
-        )
-
-        foreach ($Candidate in $Candidates) {
-            $Tokens = $null
-            $Errors = $null
-
-            [void][System.Management.Automation.Language.Parser]::ParseFile(
-                $Candidate.FullName,
-                [ref]$Tokens,
-                [ref]$Errors
-            )
-
-            if (@($Errors).Count -ne 0) {
-                continue
-            }
-
-            $Source = [System.IO.File]::ReadAllText($Candidate.FullName)
-            $Complete = $true
-
-            foreach ($Marker in $RequiredMarkers) {
-                if (-not $Source.Contains($Marker)) {
-                    $Complete = $false
-                    break
-                }
-            }
-
-            if ($Complete) {
-                return $Candidate.FullName
-            }
-        }
-    }
-
-    return $null
+    return Resolve-SzlPinnedOperator -RuntimeRoot $RuntimeRoot
 }
 
 function Write-LargeFileReport {
@@ -883,18 +748,20 @@ try {
         Start-Sleep -Seconds 60
     }
 
-    $Operator = Find-Operator
+    $Operator = $null
+    try { $Operator = Find-Operator }
+    catch { Write-Event -Event 'operator_identity_rejected' -Message $_.Exception.Message }
 
     if (-not $Operator) {
         Write-FinalReport `
-            -OperatorDisposition 'BLOCKED_OPERATOR_NOT_FOUND' `
+            -OperatorDisposition 'BLOCKED_OPERATOR_IDENTITY' `
             -OperatorPath '' `
             -NewOperatorRun '' `
             -FreeBefore $FreeBefore `
             -FreeAfterCleanup $FreeAfterCleanup `
             -FreeAtEnd (Get-FreeGB)
 
-        throw 'No parse-clean fully repaired V11 operator was found.'
+        throw 'The required immutable V11 operator identity is unavailable.'
     }
 
     $OperatorSha256 = (Get-FileHash -LiteralPath $Operator -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -975,6 +842,8 @@ try {
     $OperatorException = $null
 
     try {
+        # Recheck the pinned source identity before the existing invocation.
+        $Operator = Find-Operator
         & $Operator
 
         if (-not $?) {

@@ -2,6 +2,7 @@
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'SZL_PS51_PROCESS_LIBRARY.ps1')
 $ProgressPreference = 'SilentlyContinue'
 
 if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5) {
@@ -80,27 +81,7 @@ function Get-LatestOperatorEventLog {
 }
 
 function Get-ResumeOperator {
-    $Runtime = Join-Path $EstateRoot 'Runtime'
-    if (-not (Test-Path -LiteralPath $Runtime -PathType Container)) { return $null }
-    $Patterns = @(
-        'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_HF_PREFLIGHT_ROBUST*.ps1',
-        'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_HF_PREFLIGHT_FIX*.ps1',
-        'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_NATIVEFIX*.ps1',
-        'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_PYTHONFIX*.ps1',
-        'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_FIXED*.ps1'
-    )
-    foreach ($Pattern in $Patterns) {
-        $Candidate = Get-ChildItem -LiteralPath $Runtime -Filter $Pattern -File -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTimeUtc -Descending |
-            Select-Object -First 1
-        if ($Candidate) {
-            $Tokens = $null
-            $Errors = $null
-            [void][System.Management.Automation.Language.Parser]::ParseFile($Candidate.FullName, [ref]$Tokens, [ref]$Errors)
-            if (@($Errors).Count -eq 0) { return $Candidate.FullName }
-        }
-    }
-    return $null
+    return Resolve-SzlPinnedOperator -RuntimeRoot (Join-Path $EstateRoot 'Runtime')
 }
 
 $CoordinatorMutex = New-Object -TypeName System.Threading.Mutex -ArgumentList $false, 'Global\SZL-Parallel-Frontier-Coordinator-V12-1'
@@ -340,9 +321,11 @@ try {
         $ResumeDisposition = 'BLOCKED_DISK_FLOOR'
     }
     else {
-        $Operator = Get-ResumeOperator
+        $Operator = $null
+        try { $Operator = Get-ResumeOperator }
+        catch { Write-Event -Event 'operator_identity_rejected' -Message $_.Exception.Message }
         if (-not $Operator) {
-            $ResumeDisposition = 'BLOCKED_NO_PARSE_CLEAN_OPERATOR'
+            $ResumeDisposition = 'BLOCKED_OPERATOR_IDENTITY'
         }
         else {
             $PythonExe = 'C:\Users\steph\AppData\Local\Programs\Python\Python312\python.exe'
@@ -369,6 +352,7 @@ try {
             $env:SZL_INSTALL_WATCHDOG = '0'
             Write-Event 'serialized_resume_started' 'Active writer finished and disk floor is met; starting exactly one convergence resume.' @{ operator = $Operator; free_gb = Get-FreeGB }
             try {
+                $Operator = Get-ResumeOperator
                 & $Operator
                 $ResumeDisposition = if ($?) { 'RETURNED_SUCCESS' } else { 'RETURNED_UNSUCCESSFUL' }
             }

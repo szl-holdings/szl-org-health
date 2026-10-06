@@ -4,3 +4,7 @@
 /census/diligence.py text eol=lf
 /diligence/policy.json text eol=lf
 /schemas/series-a-diligence.schema.json text eol=lf
+/tests/fixtures/ps51/operator-23b1aaab.ps1.txt -text
+/tools/SZL_PS51_PROCESS_LIBRARY.ps1 text eol=lf
+/tests/Test-PS51ProcessContracts.ps1 text eol=lf
+/tests/fixtures/ps51/NativeProbe.cs text eol=lf

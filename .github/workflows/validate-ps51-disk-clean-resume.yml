@@ -5,6 +5,11 @@ on:
     branches: [main]
     paths:
       - 'tools/SZL_DISK_CLEAN_RESUME_PS51_V13.ps1'
+      - 'tools/SZL_PS51_PROCESS_LIBRARY.ps1'
+      - 'tools/RUN_SZL_CTO_RATE_AWARE.ps1'
+      - 'tests/Test-PS51ProcessContracts.ps1'
+      - 'tests/fixtures/ps51/**'
+      - '.gitattributes'
       - '.github/workflows/validate-ps51-disk-clean-resume.yml'
   workflow_dispatch:
 
@@ -119,3 +124,7 @@ jobs:
           Write-Host "SHA256: $Sha"
           Write-Host 'Windows PowerShell 5.1 parser: PASS'
           Write-Host 'Cleanup safety contract: PASS'
+
+      - name: Exercise inert PS51 process and identity definitions
+        shell: powershell
+        run: ./tests/Test-PS51ProcessContracts.ps1
