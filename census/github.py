@@ -16,6 +16,8 @@ GH = "https://api.github.com"
 API_VERSION = "2022-11-28"
 RUN_WINDOW = 100
 MAX_PAGES = 20
+# Alert reads use 100-item API pages and the shared 10,000-item ceiling.
+MAX_ALERT_PAGES = 100
 
 KEY_REPOS_FALLBACK = [
     "a11oy",
@@ -780,7 +782,7 @@ def _all_alerts(
         path,
         request_timeout,
         retries,
-        max_pages=MAX_PAGES,
+        max_pages=MAX_ALERT_PAGES,
     )
 
 
@@ -999,7 +1001,7 @@ def collect_github(
             "errors": {
                 name: error for name, error in alert_errors.items() if error is not None
             },
-            "page_cap": MAX_PAGES,
+            "page_cap": MAX_ALERT_PAGES,
             "endpoint_reads": {
                 name: _alert_endpoint_read_observation(
                     alerts.get(name), alert_errors.get(name)

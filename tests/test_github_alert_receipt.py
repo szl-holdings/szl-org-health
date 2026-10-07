@@ -54,7 +54,7 @@ class GitHubAlertReadEvidenceTests(unittest.TestCase):
         self.assertNotIn(CANARY, json.dumps(result))
 
     def test_pagination_limit_remains_unknown(self):
-        with mock.patch.object(github, "MAX_PAGES", 1):
+        with mock.patch.object(github, "MAX_ALERT_PAGES", 1):
             result, request = self.observe_pages([([], {"link": NEXT}, None)])
         self.assertEqual(request.call_count, 1)
         self.assertEqual(result["state"], "UNKNOWN")
