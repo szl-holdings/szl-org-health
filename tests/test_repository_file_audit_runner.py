@@ -196,6 +196,7 @@ class ReceiptTests(unittest.TestCase):
                 {
                     "repository": "szl-holdings/public-0",
                     "visibility": "public",
+                    "private": False,
                     "state": "PASS",
                     "revision": "a" * 40,
                     "tree_sha": "b" * 40,

@@ -49,32 +49,34 @@ class ClaimBoundaryTests(unittest.TestCase):
     def test_missing_report_fields_do_not_create_positive_claims(self):
         value = audit.public_projection({})
         self.assert_boundary(value)
-        self.assertIsNone(value["summary"])
-        self.assertIsNone(value["inventory_reconciliation"])
+        self.assertEqual(value["summary"]["state"], "INCOMPLETE")
+        self.assertIsNone(value["inventory_reconciliation"]["matched"])
 
-    def test_all_summary_states_preserve_their_original_evidence(self):
+    def test_internal_summary_states_never_influence_public_projection(self):
         for state in ("PASS", "WARN", "FAIL", "INCOMPLETE", "UNKNOWN", None):
             with self.subTest(state=state):
                 report = self.report(state)
                 before = copy.deepcopy(report)
                 value = audit.public_projection(report)
                 self.assert_boundary(value)
-                for name in ("summary", "source", "inventory_reconciliation"):
-                    self.assertEqual(value[name], before[name])
+                self.assertEqual(value["summary"]["state"], "INCOMPLETE")
+                self.assertEqual(value, audit.public_projection(self.report()))
                 self.assertEqual(report, before)
 
     def test_partial_population_does_not_hide_unfinished_rows(self):
         report = self.report()
         report["repositories"] = [
-            {"repository": "szl-holdings/public-fixture", "visibility": "public",
+            {"repository": "szl-holdings/public-fixture", "visibility": "public", "private": False,
              "state": "PASS", "file_count": 2, "bytes_tracked": 6},
-            {"repository": "szl-holdings/unfinished-fixture", "visibility": "public",
+            {"repository": "szl-holdings/unfinished-fixture", "visibility": "public", "private": False,
              "state": "INCOMPLETE", "errors": ["fixture failure"]},
         ]
         report["summary"] = audit.summarize(report["repositories"])
         value = audit.public_projection(report)
         self.assert_boundary(value)
-        self.assertEqual(value["public_repositories"], report["repositories"])
+        self.assertEqual([row["repository"] for row in value["public_repositories"]],
+                         [row["repository"] for row in report["repositories"]])
+        self.assertEqual(value["public_repositories"][1]["errors"], ["SOURCE_UNAVAILABLE"])
         self.assertEqual(value["summary"]["state_counts"], {"INCOMPLETE": 1, "PASS": 1})
         self.assertEqual(value["summary"]["totals"]["bytes_tracked_and_verified"], 6)
 
@@ -88,13 +90,11 @@ class ClaimBoundaryTests(unittest.TestCase):
         value = audit.public_projection(report)
         self.assert_boundary(value)
         self.assertEqual(value["public_repositories"], [])
-        self.assertEqual(value["private_repositories"], {
-            "count": 2, "state_counts": {"INCOMPLETE": 2},
-            "names_paths_hashes_and_findings_disclosed": False,
-        })
+        self.assertNotIn("private_repositories", value)
+        self.assertEqual(value["summary"]["totals"]["repositories"], 0)
         self.assertNotIn("private-fixture-", json.dumps(value))
 
-    def test_positive_inventory_reconciliation_is_retained_not_reinterpreted(self):
+    def test_internal_inventory_reconciliation_is_never_published(self):
         report = self.report("WARN")
         report["inventory_reconciliation"] = {
             "authoritative_count_available": True, "authoritative_expected_count": 3,
@@ -102,8 +102,11 @@ class ClaimBoundaryTests(unittest.TestCase):
         }
         value = audit.public_projection(report)
         self.assert_boundary(value)
-        self.assertEqual(value["inventory_reconciliation"], report["inventory_reconciliation"])
-        self.assertEqual(value["summary"]["state"], "WARN")
+        self.assertEqual(value["inventory_reconciliation"], {
+            "authoritative_count_available": False, "authoritative_expected_count": None,
+            "matched": None,
+        })
+        self.assertEqual(value["summary"]["state"], "INCOMPLETE")
 
     def test_receipt_digest_commits_to_current_claim_boundary(self):
         value = audit.public_projection(self.report())
