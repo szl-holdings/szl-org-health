@@ -198,6 +198,7 @@ class FileAuditTests(unittest.TestCase):
         public = {
             "repository": "szl-holdings/public-alpha",
             "visibility": "public",
+            "private": False,
             "state": "PASS",
             "files": [],
             "findings": [],
@@ -214,7 +215,8 @@ class FileAuditTests(unittest.TestCase):
         rendered = audit.canonical_json(projected).decode()
         self.assertNotIn("private-alpha", rendered)
         self.assertNotIn("secret/name.py", rendered)
-        self.assertEqual(projected["private_repositories"]["count"], 1)
+        self.assertNotIn("private_repositories", projected)
+        self.assertEqual(projected["summary"]["totals"]["repositories"], 1)
         self.assertEqual(len(projected["public_repositories"]), 1)
 
     def test_run_audit_requires_inventory_floor_and_authoritative_match(self) -> None:

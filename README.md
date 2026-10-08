@@ -80,6 +80,24 @@ The public report is constructed from a closed, versioned allowlist. Unknown fie
 
 A scheduled refresh creates `census-internal.json` only as an ephemeral, gitignored input to the fail-closed receipt gate. The workflow artifact contains only the public projection and the sanitized receipt; it never contains the internal census.
 
+### Public repository file-audit projection
+
+`szl.repository-file-audit-public/v3` admits a repository only when its retained
+provider metadata has literal `private: false` and coherent `visibility: public`.
+Historical visibility-only rows remain unadmitted; a label cannot replace the
+missing boolean. The internal collector retains that boolean on complete and
+incomplete results.
+
+Public totals, finding severities, inspection counts and repository digests are
+recomputed from the closed public records. Internal population reconciliation,
+private counts and states, collector principals, raw error messages, finding
+details and unknown nested extensions are excluded. Public reconciliation stays
+unverified: a public subset cannot prove complete enumeration of the private
+estate. An empty subset or an unknown/error-bearing public state remains
+`INCOMPLETE`. Public omission does not change internal enforcement or its exit
+policy. Automated pattern findings require source triage; they are not verified
+vulnerabilities.
+
 Each new collection carries its original start/completion times, per-source
 observation windows, a unique collection ID, the exact source-data digest, and
 the collecting GitHub source/run/attempt. Cached reads preserve those fields.
