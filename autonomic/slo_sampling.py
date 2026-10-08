@@ -241,7 +241,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.summary:
             with args.summary.open("a", encoding="utf-8") as stream:
                 stream.write(summary + "\n")
-        if result:
+        if result == 2:
+            print("::error title=SLO reliability incident::The retained batch verdict is INCIDENT; see retained batch evidence.")
+        elif result == 1:
             print("::error title=SLO sampling failed closed::One or more observations failed; see retained batch evidence.")
         return result
     except (OSError, ValueError, TypeError, KeyError, AttributeError, ContractError):
