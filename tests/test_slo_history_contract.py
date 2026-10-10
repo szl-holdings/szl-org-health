@@ -38,11 +38,14 @@ class SloHistoryContractTests(unittest.TestCase):
             "/api/defend/status",
         )
 
-    def test_contract_digest_changes_when_required_paths_change(self) -> None:
+    def test_contract_digest_changes_only_when_the_predicate_changes(self) -> None:
         self.assertNotEqual(
             contract_digest(self.killinchu_old),
             contract_digest(self.killinchu_new),
         )
+        reordered = dict(self.killinchu_old)
+        reordered["required_paths"] = list(reversed(self.killinchu_old["required_paths"]))
+        self.assertEqual(contract_digest(self.killinchu_old), contract_digest(reordered))
         self.assertEqual(contract_digest(self.a11oy), contract_digest(dict(self.a11oy)))
 
     def test_migration_resets_only_changed_surface_history(self) -> None:
