@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Segment retained SLO history when a declared probe contract changes.
 
-Availability history is meaningful only for one stable monitoring predicate.  This
+Availability history is meaningful only for one stable monitoring predicate. This
 migration compares the exact previously admitted public-estate manifest with the
 current verified manifest and resets history only for surfaces whose monitored
-origin or required-path contract changed.  Unchanged surfaces retain every sample.
+origin or required-path contract changed. Unchanged surfaces retain every sample.
 
-The module mutates only the machine-managed SLO state issue.  It cannot restart a
+The module mutates only the machine-managed SLO state issue. It cannot restart a
 service, dispatch a workflow, modify product source, change DNS, or touch provider
 state.
 """
@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -47,7 +46,8 @@ def surface_contract(surface: Mapping[str, Any]) -> dict[str, Any]:
         "id": surface["id"],
         "hf_repository": surface["hf_repository"],
         "base_url": surface["base_url"],
-        "required_paths": list(surface["required_paths"]),
+        # Probe ordering does not change the measured availability predicate.
+        "required_paths": sorted(surface["required_paths"]),
         "build_info_path": surface["build_info_path"],
     }
 
@@ -151,6 +151,24 @@ def require_verified_commit(github: GitHubApi, repository: str, revision: str) -
     )
 
 
+def policy_for_historical_manifest(
+    policy: Mapping[str, Any], raw_manifest: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Validate an older asset set without weakening its normal surface checks."""
+    raw_surfaces = list(raw_manifest.get("platforms") or []) + list(
+        raw_manifest.get("public_products") or []
+    )
+    repositories: list[str] = []
+    for surface in raw_surfaces:
+        require(isinstance(surface, dict), "historical manifest surface is invalid")
+        repository = surface.get("hf_repository")
+        require(isinstance(repository, str) and repository, "historical HF repository is invalid")
+        repositories.append(repository)
+    historical = dict(policy)
+    historical["allowed_hf_repositories"] = sorted(repositories)
+    return historical
+
+
 def run_migration(*, policy_path: Path, output: Path, dry_run: bool) -> int:
     policy, policy_sha256 = load_policy(policy_path)
     token = (os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or "").strip() or None
@@ -226,7 +244,11 @@ def run_migration(*, policy_path: Path, output: Path, dry_run: bool) -> int:
         previous_raw = json.loads(previous_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ContractError("historical manifest is not valid UTF-8 JSON") from exc
-    previous_manifest = validate_manifest(previous_raw, policy=policy)
+    require(isinstance(previous_raw, dict), "historical manifest must be an object")
+    previous_manifest = validate_manifest(
+        previous_raw,
+        policy=policy_for_historical_manifest(policy, previous_raw),
+    )
     receipt["previous_manifest_sha256"] = sha256_hex(canonical_json(previous_raw))
 
     migrated, details = migrate_history(state, previous_manifest, current_manifest)
