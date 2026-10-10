@@ -1,0 +1,14 @@
+{
+  "schema": "szl.autonomic-slo-history-migrations/v1",
+  "migrations": [
+    {
+      "id": "killinchu-readiness-is-not-availability-20261010",
+      "from_manifest_revision": "6be0b1cbe37f7a0ce0c6a1f662c68182663b31e8",
+      "to_manifest_revision": "0860babc5da069dd713e4a81ef77d66eb214a24c",
+      "reset_surfaces": [
+        "killinchu"
+      ],
+      "reason": "Remove the intentionally fail-closed Killinchu readiness endpoint from the product-availability predicate without discarding any unaffected surface history."
+    }
+  ]
+}
