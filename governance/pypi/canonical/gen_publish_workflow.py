@@ -5,25 +5,33 @@ Usage: gen_workflow.py "name=dir[:env];name2=dir2[:env]"  -> prints YAML
 """
 import sys
 
-# SHA pins. The version is written on the comment line ABOVE each `uses:` so that
-# estate verifiers which require `uses:` lines to end at the 40-hex SHA still pass.
+# SHA pins: the ONLY definition of every action reference in the workflow. Each
+# `uses:` line, and the version comment written on the line ABOVE it (so estate
+# verifiers which require `uses:` lines to end at the 40-hex SHA still pass), is
+# rendered from this table by use(). Never write an action SHA or its version
+# comment as a literal in the template: both artifact uploads and every download
+# must move together when a pin changes.
 PINS = {
     "checkout": ("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "v7.0.1"),
     "setup_python": ("actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97", "v7.0.0"),
-    "upload": ("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "v7.0.1"),
-    "download": ("actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c", "v8.0.1"),
+    "upload": ("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9", "v7.0.2"),
+    "download": ("actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333", "v8.0.2"),
     "publish": ("pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33", "v1.14.2"),
 }
 
 
-def use(key: str, indent: int, name: str | None = None) -> str:
+def use(key: str, indent: int, name: str | None = None, condition: str | None = None) -> str:
     ref, ver = PINS[key]
     pad = " " * indent
     lines = [f"{pad}# {ref.split('@')[0]} {ver}"]
     if name:
         lines.append(f"{pad}- name: {name}")
+        if condition:
+            lines.append(f"{pad}  if: {condition}")
         lines.append(f"{pad}  uses: {ref}")
     else:
+        if condition:
+            raise ValueError("a conditional step must be named")
         lines.append(f"{pad}- uses: {ref}")
     return "\n".join(lines)
 
@@ -127,10 +135,7 @@ jobs:
           name: release-gate-receipt
           path: release-gate.json
           if-no-files-found: error
-      # actions/upload-artifact v7.0.1
-      - name: Upload distributions (release only)
-        if: github.event_name == 'release'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+{use('upload', 6, 'Upload distributions (release only)', "github.event_name == 'release'")}
         with:
           name: pypi-dists
           path: |
