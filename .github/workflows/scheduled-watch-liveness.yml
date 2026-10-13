@@ -1,0 +1,54 @@
+name: Scheduled watch liveness
+
+# Read-only supervisor for scheduled watch workflows in OTHER repositories.
+# GitHub disables schedules in public repositories after 60 days without
+# repository activity, and a cron that no longer fires cannot report its own
+# silence, so this check lives outside every target. For each entry in
+# governance/scheduled-watches.v1.json it requires: workflow state `active`;
+# a completed `schedule` run created within max_age_hours that concluded
+# `success`; and every declared job of that run concluded `success`.
+# Verdicts: HEALTHY | STALE | DISABLED | FAILED | UNKNOWN. UNKNOWN is never
+# healthy. The alert is this run turning red plus its step summary.
+#
+# GET requests only, with this run's token against public repositories. It
+# never re-enables a workflow, dispatches a run, or changes any repository.
+# Offline contracts: tests/test_scheduled_watch_liveness.py (run by ci.yml).
+
+on:
+  schedule:
+    - cron: "29 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: scheduled-watch-liveness
+  cancel-in-progress: false
+
+jobs:
+  liveness:
+    name: Supervise external scheduled watches
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Check external watch liveness (read-only)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -I -B tools/scheduled_watch_liveness.py --watchlist governance/scheduled-watches.v1.json
