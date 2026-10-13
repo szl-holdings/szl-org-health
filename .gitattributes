@@ -5,3 +5,4 @@
 /diligence/policy.json text eol=lf
 /schemas/series-a-diligence.schema.json text eol=lf
 /governance/pypi/canonical/publish-pypi.yml text eol=lf
+/.github/workflows/pypi-artifact-transport.yml text eol=lf

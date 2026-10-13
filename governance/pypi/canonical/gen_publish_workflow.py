@@ -2,6 +2,8 @@
 """Generate the canonical szl-holdings `publish-pypi.yml` for a repository.
 
 Usage: gen_workflow.py "name=dir[:env];name2=dir2[:env]"  -> prints YAML
+       gen_workflow.py --transport-probe  -> prints szl-org-health's own
+       .github/workflows/pypi-artifact-transport.yml (same PINS, never publishes)
 """
 import sys
 
@@ -178,5 +180,129 @@ jobs:
     return head + "".join(jobs)
 
 
+TRANSPORT_PROBE_PATH = ".github/workflows/pypi-artifact-transport.yml"
+
+
+def render_transport_probe() -> str:
+    """szl-org-health's own non-publishing check of the release artifact pins.
+
+    The canonical workflow uploads `pypi-dists` with PINS["upload"] and downloads it
+    with PINS["download"] only on `release: published`, so ordinary PR/push runs
+    never exercise the download pin. This workflow moves two inert files through the
+    same pins, with the same artifact name, paths and inputs, and checks the bytes.
+    """
+    return f"""name: PyPI artifact transport probe
+
+# Non-publishing qualification of the canonical publish-pypi.yml artifact pins.
+# Rendered by governance/pypi/canonical/gen_publish_workflow.py
+# (render_transport_probe) from the same PINS table as the canonical release
+# workflow; tests/test_pypi_artifact_transport.py fails on any hand edit.
+#
+# Two deterministic inert files (a dummy wheel and sdist classified
+# `Private :: Do Not Upload`) travel from `stage` to `fetch` as artifact
+# `pypi-dists`, exactly as the release job's distributions do. `fetch` requires
+# byte-identical SHA-256 before and after transport and rejects missing, extra
+# or altered files. No id-token, no secrets, no environment, no publish step.
+
+on:
+  pull_request:
+    paths:
+      - "governance/pypi/canonical/**"
+      - "tools/pypi_artifact_transport.py"
+      - "{TRANSPORT_PROBE_PATH}"
+  push:
+    branches: [main]
+    paths:
+      - "governance/pypi/canonical/**"
+      - "tools/pypi_artifact_transport.py"
+      - "{TRANSPORT_PROBE_PATH}"
+
+permissions: {{}}
+
+concurrency:
+  group: pypi-artifact-transport-${{{{ github.ref }}}}
+  cancel-in-progress: true
+
+jobs:
+  stage:
+    name: Stage inert distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      manifest: ${{{{ steps.stage.outputs.manifest }}}}
+    steps:
+{use('checkout', 6)}
+        with:
+          persist-credentials: false
+      - name: Build two inert files and record their SHA-256
+        id: stage
+        run: |
+          python3 -I tools/pypi_artifact_transport.py stage --outdir dist --manifest "$RUNNER_TEMP/transport-manifest.json"
+          echo "manifest=$(cat "$RUNNER_TEMP/transport-manifest.json")" >> "$GITHUB_OUTPUT"
+{use('upload', 6, 'Upload inert distributions')}
+        id: upload
+        with:
+          name: pypi-dists
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+      - name: Record the uploaded artifact digest
+        env:
+          ARTIFACT_ID: ${{{{ steps.upload.outputs.artifact-id }}}}
+          ARTIFACT_DIGEST: ${{{{ steps.upload.outputs.artifact-digest }}}}
+        run: |
+          echo "artifact-id=$ARTIFACT_ID"
+          echo "artifact-digest=sha256:$ARTIFACT_DIGEST"
+          test -n "$ARTIFACT_ID"
+          echo "$ARTIFACT_DIGEST" | grep -Eq '^[0-9a-f]{{64}}$'
+{use('upload', 6, 'Negative control - upload of a missing expected file is rejected')}
+        id: missing_upload
+        continue-on-error: true
+        with:
+          name: pypi-dists-missing-file-probe
+          path: dist/missing-expected-file.whl
+          if-no-files-found: error
+          retention-days: 1
+      - name: Assert the missing-file upload failed
+        env:
+          OUTCOME: ${{{{ steps.missing_upload.outcome }}}}
+        run: |
+          echo "missing-file upload outcome=$OUTCOME"
+          test "$OUTCOME" = failure
+
+  fetch:
+    name: Download and verify inert distributions
+    needs: stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+{use('checkout', 6)}
+        with:
+          persist-credentials: false
+{use('download', 6, 'Download inert distributions')}
+        with:
+          name: pypi-dists
+          path: dist/
+          digest-mismatch: error
+      - name: Verify pre/post SHA-256 equality
+        env:
+          MANIFEST: ${{{{ needs.stage.outputs.manifest }}}}
+        run: python3 -I tools/pypi_artifact_transport.py verify --dir dist --manifest-json "$MANIFEST"
+      - name: Negative controls - missing, extra and altered files are rejected
+        env:
+          MANIFEST: ${{{{ needs.stage.outputs.manifest }}}}
+        run: python3 -I tools/pypi_artifact_transport.py self-check --dir dist --manifest-json "$MANIFEST"
+"""
+
+
 if __name__ == "__main__":
-    sys.stdout.write(render(sys.argv[1]))
+    if sys.argv[1:] == ["--transport-probe"]:
+        sys.stdout.write(render_transport_probe())
+    else:
+        sys.stdout.write(render(sys.argv[1]))
