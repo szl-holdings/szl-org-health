@@ -276,6 +276,22 @@ deterministic healthy and historical-incident fixtures, plus missing, malformed,
 tampered, and contradictory evidence. A passing fixture or CI run proves the
 gate's behavior; only a scheduled live receipt proves that cycle's SLO verdict.
 
+## Scheduled watch liveness
+
+A cron inside a target repository cannot report its own disablement: GitHub
+disables schedules in public repositories after 60 days without repository
+activity. `.github/workflows/scheduled-watch-liveness.yml` therefore runs here
+every six hours (plus manual dispatch) and supervises the watch workflows
+declared in `governance/scheduled-watches.v1.json`. For each entry,
+`tools/scheduled_watch_liveness.py` requires the workflow `state` to be
+`active`, its newest completed `schedule` run to be younger than
+`max_age_hours` and green, and every declared job of that run to be green.
+Verdicts are `HEALTHY`, `STALE`, `DISABLED`, `FAILED`, or `UNKNOWN`; `UNKNOWN`
+is never healthy. The alert is the red run plus its step summary. The checker
+uses only GET requests with the run's `GITHUB_TOKEN` and never re-enables,
+dispatches, or writes to a target. This workflow is itself scheduled in a
+public repository, so it carries the same 60-day boundary.
+
 ## Tests
 
 ```bash
@@ -308,6 +324,8 @@ governance/policy.json  solo-maintainer fail-closed control policy
 diligence/policy.json  locked target roles and dated five-plus-one exception
 schemas/series-a-diligence.schema.json  public artifact structure contract
 autonomic/               fixed-origin state machine and recovery policy
+governance/scheduled-watches.v1.json  declared external scheduled watches
+tools/scheduled_watch_liveness.py  read-only watch liveness supervisor
 requirements-autonomic.lock hash-locked Hugging Face control closure
 tests/                  collector, governance, receipt, and leak contracts
 Dockerfile              pinned container runtime
