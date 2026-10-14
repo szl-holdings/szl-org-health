@@ -1,0 +1,147 @@
+name: Validate PS51 disk clean and resume
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/SZL_DISK_CLEAN_RESUME_PS51_V13.ps1'
+      - 'tools/SZL_PS51_PROCESS_LIBRARY.ps1'
+      - 'tools/SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1'
+      - 'tools/ps51-recovered-source.lineage.json'
+      - 'tests/Test-PS51RecoveredSource.ps1'
+      - 'tools/RUN_SZL_CTO_RATE_AWARE.ps1'
+      - 'tests/Test-PS51ProcessContracts.ps1'
+      - 'tests/fixtures/ps51/**'
+      - '.gitattributes'
+      - '.github/workflows/validate-ps51-disk-clean-resume.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parse-and-contract:
+    name: Windows PowerShell 5.1 parse and cleanup safety contract
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Parse and verify cleanup controller
+        shell: powershell
+        run: |
+          Set-StrictMode -Version 2.0
+          $ErrorActionPreference = 'Stop'
+
+          if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5) {
+              throw "Expected Windows PowerShell 5.1; observed $($PSVersionTable.PSVersion)."
+          }
+
+          $Path = 'tools/SZL_DISK_CLEAN_RESUME_PS51_V13.ps1'
+          $Tokens = $null
+          $Errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $Path,
+              [ref]$Tokens,
+              [ref]$Errors
+          )
+
+          $Errors = @($Errors)
+          if ($Errors.Count -gt 0) {
+              foreach ($ParserError in $Errors) {
+                  Write-Error ("Line {0}, column {1}: {2}" -f $ParserError.Extent.StartLineNumber, $ParserError.Extent.StartColumnNumber, $ParserError.Message)
+              }
+              throw 'Cleanup controller failed the Windows PowerShell 5.1 parser.'
+          }
+
+          $Bytes = [System.IO.File]::ReadAllBytes($Path)
+          if (@($Bytes | Where-Object { $_ -gt 127 }).Count -gt 0) {
+              throw 'Cleanup controller must remain ASCII-only.'
+          }
+
+          $Source = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::ASCII)
+
+          $Required = @(
+              '#requires -version 5.1',
+              'Global\SZL-Estate-Operator-PS51-V11',
+              'Global\SZL-Disk-Clean-Resume-V13',
+              '$MinimumFreeGB = 50',
+              '$PreferredFreeGB = 55',
+              "powercfg.exe /hibernate on",
+              "@('/hibernate','off')",
+              "@('/CompactOS:always')",
+              '$env:SZL_RESUME_LATEST = ''0''',
+              '$env:SZL_MAX_WRITES_PER_CYCLE = ''1''',
+              '$env:SZL_USE_CODEX = ''0''',
+              'user_documents_deleted = $false',
+              'source_repositories_deleted = $false',
+              'huggingface_cache_deleted = $false',
+              'docker_volumes_deleted = $false',
+              'credentials_touched = $false',
+              'manual_hf_upload = $false'
+          )
+
+          foreach ($Marker in $Required) {
+              if (-not $Source.Contains($Marker)) {
+                  throw "Required cleanup marker missing: $Marker"
+              }
+          }
+
+          $Forbidden = @(
+              '--admin',
+              'git push origin main',
+              'git push --force',
+              'git push -f',
+              'docker volume prune',
+              'Remove-DirectoryContents -Path (Join-Path $env:USERPROFILE ''Downloads'')',
+              'Remove-DirectoryContents -Path (Join-Path $env:USERPROFILE ''Documents'')',
+              'Remove-DirectoryContents -Path (Join-Path $env:USERPROFILE ''Desktop'')',
+              'Remove-Item -LiteralPath $env:USERPROFILE',
+              'upload_file(',
+              'upload_folder(',
+              'add_space_secret(',
+              'delete_repo(',
+              '/ResetBase'
+          )
+
+          foreach ($Marker in $Forbidden) {
+              if ($Source.IndexOf($Marker, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                  throw "Forbidden cleanup construct found: $Marker"
+              }
+          }
+
+          $Sha = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+          $Lines = [int]([System.IO.File]::ReadLines($Path) | Measure-Object).Count
+          Write-Host "PowerShell: $($PSVersionTable.PSVersion)"
+          Write-Host "Lines: $Lines"
+          Write-Host "Bytes: $($Bytes.Length)"
+          Write-Host "SHA256: $Sha"
+          Write-Host 'Windows PowerShell 5.1 parser: PASS'
+          Write-Host 'Cleanup safety contract: PASS'
+
+      - name: Qualify prospective shared and V13 definitions and source identity
+        shell: powershell
+        run: ./tests/Test-PS51ProcessContracts.ps1
+
+      - name: Qualify recovered V11 definitions and reject historical unbounded waits
+        if: success() || failure()
+        shell: powershell
+        run: ./tests/Test-PS51RecoveredSource.ps1
+
+      - name: Retain prospective receipts and unchanged historical replay evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ps51-disk-contracts-${{ github.run_id }}
+          path: artifacts/ps51/*.json
+          if-no-files-found: error
+          retention-days: 30

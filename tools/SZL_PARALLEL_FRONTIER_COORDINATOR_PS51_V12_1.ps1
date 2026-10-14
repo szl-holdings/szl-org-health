@@ -1,7 +1,11 @@
 #requires -version 5.1
 
+throw 'SZL_SOURCE_ADMISSION_HOLD'
+
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'SZL_PS51_PROCESS_LIBRARY.ps1')
+Assert-SzlExecutionPolicy
 $ProgressPreference = 'SilentlyContinue'
 
 if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5) {
@@ -14,8 +18,6 @@ $AdminRole = [Security.Principal.WindowsBuiltInRole]::Administrator
 if (-not $Principal.IsInRole($AdminRole)) {
     throw 'Open Windows PowerShell 5.1 with Run as administrator.'
 }
-
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
 
 $Org = 'szl-holdings'
 $HfOrg = 'SZLHOLDINGS'
@@ -80,27 +82,113 @@ function Get-LatestOperatorEventLog {
 }
 
 function Get-ResumeOperator {
-    $Runtime = Join-Path $EstateRoot 'Runtime'
-    if (-not (Test-Path -LiteralPath $Runtime -PathType Container)) { return $null }
-    $Patterns = @(
-        'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_HF_PREFLIGHT_ROBUST*.ps1',
-        'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_HF_PREFLIGHT_FIX*.ps1',
-        'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_NATIVEFIX*.ps1',
-        'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_PYTHONFIX*.ps1',
-        'SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_FIXED*.ps1'
+    param([string]$SourceRoot = $PSScriptRoot)
+    return Resolve-SzlPinnedOperator -SourceRoot $SourceRoot
+}
+
+function Read-SzlWorkerStates {
+    param([AllowNull()][AllowEmptyCollection()][object[]]$Jobs)
+    # Read only the supplied job objects; never discover, receive or stop jobs.
+    try {
+        $Rows = @()
+        foreach ($Job in $Jobs) {
+            if ($null -eq $Job) { throw 'WORKER_OBSERVATION_UNAVAILABLE' }
+            $Name=$Job.Name; $InstanceId=$Job.InstanceId; $State=$Job.State
+            if ($null -eq $Name -or $null -eq $InstanceId -or $null -eq $State) { throw 'WORKER_OBSERVATION_UNAVAILABLE' }
+            $Rows += [pscustomobject]@{ Name=$Name; InstanceId=$InstanceId; State=[string]$State }
+        }
+        return [pscustomobject]@{ Available=$true; Workers=$Rows }
+    }
+    catch { return [pscustomobject]@{ Available=$false; Workers=@() } }
+}
+
+function Get-SzlWorkerClassification {
+    param(
+        [AllowNull()][AllowEmptyCollection()][object[]]$ExpectedWorkers,
+        [AllowNull()][AllowEmptyCollection()][object[]]$ObservedWorkers
     )
-    foreach ($Pattern in $Patterns) {
-        $Candidate = Get-ChildItem -LiteralPath $Runtime -Filter $Pattern -File -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTimeUtc -Descending |
-            Select-Object -First 1
-        if ($Candidate) {
-            $Tokens = $null
-            $Errors = $null
-            [void][System.Management.Automation.Language.Parser]::ParseFile($Candidate.FullName, [ref]$Tokens, [ref]$Errors)
-            if (@($Errors).Count -eq 0) { return $Candidate.FullName }
+    # PENDING is internal to polling; the wait function never returns it.
+    try {
+        if ($null -eq $ExpectedWorkers -or $ExpectedWorkers.Count -eq 0 -or
+            $null -eq $ObservedWorkers -or $ObservedWorkers.Count -ne $ExpectedWorkers.Count) { return 'UNKNOWN' }
+        $Names=@(); $Ids=@()
+        foreach ($Expected in $ExpectedWorkers) {
+            if ($Expected.Name -isnot [string] -or [string]::IsNullOrWhiteSpace($Expected.Name) -or
+                $Expected.InstanceId -isnot [guid] -or $Expected.InstanceId -eq [guid]::Empty -or
+                $Names -ccontains $Expected.Name -or $Ids -contains $Expected.InstanceId) { return 'UNKNOWN' }
+            $Names += $Expected.Name; $Ids += $Expected.InstanceId
+        }
+        $SeenNames=@(); $SeenIds=@(); $Pending=$false; $Failed=$false; $Unknown=$false
+        foreach ($Observed in $ObservedWorkers) {
+            if ($Observed.Name -isnot [string] -or $Observed.InstanceId -isnot [guid] -or
+                $SeenNames -ccontains $Observed.Name -or $SeenIds -contains $Observed.InstanceId) { return 'UNKNOWN' }
+            $Match=@($ExpectedWorkers | Where-Object { $_.Name -ceq $Observed.Name -and $_.InstanceId -eq $Observed.InstanceId })
+            if ($Match.Count -ne 1) { return 'UNKNOWN' }
+            $SeenNames += $Observed.Name; $SeenIds += $Observed.InstanceId
+            if ($Observed.State -isnot [string]) { $Unknown=$true }
+            elseif ($Observed.State -ceq 'Completed') { }
+            elseif ($Observed.State -cin @('Failed','Stopped')) { $Failed=$true }
+            elseif ($Observed.State -cin @('NotStarted','Running')) { $Pending=$true }
+            else { $Unknown=$true }
+        }
+        # Incomplete or unsupported observations take precedence over other states.
+        if ($Unknown) { return 'UNKNOWN' }
+        if ($Failed) { return 'FAILED' }
+        if ($Pending) { return 'PENDING' }
+        return 'COMPLETED'
+    }
+    catch { return 'UNKNOWN' }
+}
+
+function Wait-SzlWorkerCompletion {
+    param(
+        [AllowNull()][AllowEmptyCollection()][object[]]$Jobs,
+        [AllowNull()][AllowEmptyCollection()][object[]]$ExpectedWorkerNames,
+        [ValidateRange(1,2147483)][int]$BudgetSeconds = 86400,
+        [ValidateRange(1,2147483)][int]$PollSeconds = 30,
+        $Clock = ([Diagnostics.Stopwatch]::StartNew())
+    )
+    try {
+        $null = Get-SzlRemainingMilliseconds -BudgetSeconds $BudgetSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds
+        if ($null -eq $ExpectedWorkerNames -or $ExpectedWorkerNames.Count -eq 0) { return 'UNKNOWN' }
+        $Names=@()
+        foreach ($Name in $ExpectedWorkerNames) {
+            if ($Name -isnot [string] -or [string]::IsNullOrWhiteSpace($Name) -or $Names -ccontains $Name) { return 'UNKNOWN' }
+            $Names += $Name
+        }
+        $Observation = Read-SzlWorkerStates -Jobs $Jobs
+        $null = Get-SzlRemainingMilliseconds -BudgetSeconds $BudgetSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds
+        if (-not $Observation.Available -or $Observation.Workers.Count -ne $Names.Count) { return 'UNKNOWN' }
+        # Freeze the identity associated with each declared name once. Subsequent
+        # observations must cover precisely this set, even if a job object changes.
+        $Expected=@()
+        foreach ($Name in $Names) {
+            $Match=@($Observation.Workers | Where-Object { $_.Name -ceq $Name })
+            if ($Match.Count -ne 1) { return 'UNKNOWN' }
+            $Expected += [pscustomobject]@{ Name=$Name; InstanceId=$Match[0].InstanceId }
+        }
+        while ($true) {
+            $null = Get-SzlRemainingMilliseconds -BudgetSeconds $BudgetSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds
+            if (-not $Observation.Available) { return 'UNKNOWN' }
+            $Classification = Get-SzlWorkerClassification -ExpectedWorkers $Expected -ObservedWorkers $Observation.Workers
+            $Remaining = Get-SzlRemainingMilliseconds -BudgetSeconds $BudgetSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds
+            if ($Classification -cne 'PENDING') { return $Classification }
+            Start-Sleep -Milliseconds ([int][Math]::Min($PollSeconds * 1000.0, $Remaining))
+            $null = Get-SzlRemainingMilliseconds -BudgetSeconds $BudgetSeconds -ElapsedMilliseconds $Clock.ElapsedMilliseconds
+            $Observation = Read-SzlWorkerStates -Jobs $Jobs
         }
     }
-    return $null
+    catch {
+        if ($_.Exception.Message -ceq 'SZL_DEADLINE_EXPIRED') { return 'TIMED_OUT' }
+        return 'UNKNOWN'
+    }
+}
+
+function Assert-SzlWorkerCompletion {
+    param([AllowNull()]$Outcome)
+    if ($Outcome -is [string] -and $Outcome -ceq 'COMPLETED') { return }
+    $Reason=if ($Outcome -is [string] -and $Outcome -cin @('FAILED','UNKNOWN','TIMED_OUT')) { $Outcome } else { 'UNKNOWN' }
+    throw ('SZL_WORKER_WAIT_HOLD: '+$Reason)
 }
 
 $CoordinatorMutex = New-Object -TypeName System.Threading.Mutex -ArgumentList $false, 'Global\SZL-Parallel-Frontier-Coordinator-V12-1'
@@ -303,15 +391,8 @@ try {
         free_gb = Get-FreeGB
     }
 
-    while (@($Jobs | Where-Object { $_.State -in @('NotStarted','Running') }).Count -gt 0) {
-        $Latest = Get-LatestOperatorEventLog
-        Write-Host ('[{0}] workers_active={1} writer_active={2} free_gb={3}' -f (Get-Date -Format 'HH:mm:ss'), @($Jobs | Where-Object { $_.State -in @('NotStarted','Running') }).Count, (Test-WriterActive), (Get-FreeGB)) -ForegroundColor DarkCyan
-        if ($Latest) {
-            $Tail = Get-Content -LiteralPath $Latest.FullName -Tail 1 -ErrorAction SilentlyContinue
-            if ($Tail) { Write-Host ('  latest operator event: ' + $Tail) -ForegroundColor DarkGray }
-        }
-        Start-Sleep -Seconds $PollSeconds
-    }
+    $WorkerWaitOutcome = Wait-SzlWorkerCompletion -Jobs $Jobs -ExpectedWorkerNames @('github-observer','hf-observer','domain-observer','safe-cleanup') -BudgetSeconds ($MaxHours * 3600) -PollSeconds $PollSeconds
+    Assert-SzlWorkerCompletion -Outcome $WorkerWaitOutcome
 
     $JobSummary = @()
     foreach ($Job in $Jobs) {
@@ -340,11 +421,14 @@ try {
         $ResumeDisposition = 'BLOCKED_DISK_FLOOR'
     }
     else {
-        $Operator = Get-ResumeOperator
-        if (-not $Operator) {
-            $ResumeDisposition = 'BLOCKED_NO_PARSE_CLEAN_OPERATOR'
+        $OperatorIdentity = $null
+        try { $OperatorIdentity = Get-ResumeOperator }
+        catch { Write-Event -Event 'operator_identity_rejected' -Message $_.Exception.Message }
+        if (-not $OperatorIdentity) {
+            $ResumeDisposition = 'BLOCKED_OPERATOR_IDENTITY'
         }
         else {
+            $Operator = $OperatorIdentity.Path
             $PythonExe = 'C:\Users\steph\AppData\Local\Programs\Python\Python312\python.exe'
             if (Test-Path -LiteralPath $PythonExe -PathType Leaf) {
                 $env:SZL_PYTHON_EXE = $PythonExe
@@ -369,7 +453,8 @@ try {
             $env:SZL_INSTALL_WATCHDOG = '0'
             Write-Event 'serialized_resume_started' 'Active writer finished and disk floor is met; starting exactly one convergence resume.' @{ operator = $Operator; free_gb = Get-FreeGB }
             try {
-                & $Operator
+                $OperatorIdentity = Get-ResumeOperator
+                Assert-SzlOperatorAdmission -Identity $OperatorIdentity
                 $ResumeDisposition = if ($?) { 'RETURNED_SUCCESS' } else { 'RETURNED_UNSUCCESSFUL' }
             }
             catch {

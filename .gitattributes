@@ -4,5 +4,13 @@
 /census/diligence.py text eol=lf
 /diligence/policy.json text eol=lf
 /schemas/series-a-diligence.schema.json text eol=lf
+/tests/fixtures/ps51/operator-23b1aaab.ps1.txt -text
+/tools/SZL_PS51_PROCESS_LIBRARY.ps1 text eol=lf
+/tests/Test-PS51ProcessContracts.ps1 text eol=lf
+/tests/fixtures/ps51/NativeProbe.cs text eol=lf
+/tools/SZL_ESTATE_ADMIN_OPERATOR_PS51_V11_RECOVERED_1.ps1 -text
+/tools/ps51-recovered-source.lineage.json text eol=lf
+/tests/Test-PS51RecoveredSource.ps1 text eol=lf
+/tests/fixtures/ps51/historical-replay-b1b1c5df.json -text
 /governance/pypi/canonical/publish-pypi.yml text eol=lf
 /.github/workflows/pypi-artifact-transport.yml text eol=lf
