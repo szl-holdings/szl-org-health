@@ -12,3 +12,5 @@
 /tools/ps51-recovered-source.lineage.json text eol=lf
 /tests/Test-PS51RecoveredSource.ps1 text eol=lf
 /tests/fixtures/ps51/historical-replay-b1b1c5df.json -text
+/governance/pypi/canonical/publish-pypi.yml text eol=lf
+/.github/workflows/pypi-artifact-transport.yml text eol=lf

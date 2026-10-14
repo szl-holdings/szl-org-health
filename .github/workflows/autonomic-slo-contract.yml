@@ -6,11 +6,14 @@ on:
       - "autonomic/slo_controller.py"
       - "autonomic/slo_evidence.py"
       - "autonomic/slo_sampling.py"
+      - "autonomic/slo_history_contract.py"
+      - "autonomic/slo_history_migrations.json"
       - "autonomic/slo_policy.json"
       - "tests/test_autonomic_slo.py"
       - "tests/test_slo_workflow_evidence.py"
       - "tests/test_slo_sampling.py"
       - "tests/test_slo_state_codec.py"
+      - "tests/test_slo_history_contract.py"
       - ".github/workflows/autonomic-slo.yml"
       - ".github/workflows/autonomic-slo-contract.yml"
   push:
@@ -19,11 +22,14 @@ on:
       - "autonomic/slo_controller.py"
       - "autonomic/slo_evidence.py"
       - "autonomic/slo_sampling.py"
+      - "autonomic/slo_history_contract.py"
+      - "autonomic/slo_history_migrations.json"
       - "autonomic/slo_policy.json"
       - "tests/test_autonomic_slo.py"
       - "tests/test_slo_workflow_evidence.py"
       - "tests/test_slo_sampling.py"
       - "tests/test_slo_state_codec.py"
+      - "tests/test_slo_history_contract.py"
       - ".github/workflows/autonomic-slo.yml"
       - ".github/workflows/autonomic-slo-contract.yml"
 
@@ -60,8 +66,8 @@ jobs:
       - name: Compile and run fail-closed SLO contracts
         run: |
           set -euo pipefail
-          python -m py_compile autonomic/slo_controller.py autonomic/slo_evidence.py autonomic/slo_sampling.py
-          python -m unittest tests.test_autonomic_slo tests.test_slo_workflow_evidence tests.test_slo_state_codec tests.test_slo_sampling -v
+          python -m py_compile autonomic/slo_controller.py autonomic/slo_evidence.py autonomic/slo_sampling.py autonomic/slo_history_contract.py
+          python -m unittest tests.test_autonomic_slo tests.test_slo_workflow_evidence tests.test_slo_state_codec tests.test_slo_sampling tests.test_slo_history_contract -v
           python -m autonomic.slo_controller \
             --offline-contract-only \
             --output reports/autonomic-slo-contract.json

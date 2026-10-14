@@ -50,12 +50,20 @@ jobs:
       - name: Re-prove the observational authority boundary
         run: |
           set -euo pipefail
-          python -m py_compile autonomic/slo_controller.py autonomic/slo_evidence.py autonomic/slo_sampling.py
-          python -m unittest tests.test_autonomic_slo tests.test_slo_workflow_evidence tests.test_slo_state_codec tests.test_slo_sampling -v
+          python -m py_compile autonomic/slo_controller.py autonomic/slo_evidence.py autonomic/slo_sampling.py autonomic/slo_history_contract.py
+          python -m unittest tests.test_autonomic_slo tests.test_slo_workflow_evidence tests.test_slo_state_codec tests.test_slo_sampling tests.test_slo_history_contract -v
           python -m autonomic.slo_controller \
             --offline-contract-only \
             --output reports/autonomic-slo-contract.json
           git diff --check
+
+      - name: Segment retained history across monitoring-contract changes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python -m autonomic.slo_history_contract \
+            --output reports/autonomic-slo-history-migration.json
 
       - name: Run the independent SLO controller
         id: slo
@@ -77,6 +85,7 @@ jobs:
           name: autonomic-slo-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             reports/autonomic-slo-contract.json
+            reports/autonomic-slo-history-migration.json
             reports/autonomic-slo-samples/
           if-no-files-found: error
           retention-days: 90

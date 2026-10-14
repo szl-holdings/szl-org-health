@@ -140,13 +140,65 @@ class GitHubCodeAlertPaginationTests(unittest.TestCase):
         self.assertEqual(request.call_count, 2)
 
     def test_page_cap_remains_fail_closed(self):
-        with mock.patch.object(github, "MAX_PAGES", 1):
+        with mock.patch.object(github, "MAX_ALERT_PAGES", 1):
             (items, error), request = self.observe_pages(
                 CANONICAL, [([ITEM], {"link": NEXT}, None)]
             )
         self.assertIsNone(items)
         self.assertEqual(error, "pagination exceeded 1 pages")
         self.assertEqual(request.call_count, 1)
+
+    def test_twenty_one_pages_complete_without_lifting_other_pagination_caps(self):
+        responses = [
+            (
+                [ITEM] * 100,
+                {"link": (
+                    f'<https://api.github.com{CANONICAL}&page={page + 1}>; rel="next"'
+                )},
+                None,
+            )
+            for page in range(1, 21)
+        ]
+        responses.append(([ITEM] * 91, {}, None))
+        (items, error), request = self.observe_pages(CANONICAL, responses)
+        self.assertIsNone(error)
+        self.assertEqual(len(items), 2091)
+        self.assertEqual(request.call_count, 21)
+        self.assertEqual(github.MAX_PAGES, 20)
+        self.assertEqual(github.MAX_ALERT_PAGES, 100)
+
+    def test_alert_page_cap_accepts_the_shared_ten_thousand_item_ceiling(self):
+        responses = [
+            (
+                [ITEM] * 100,
+                {"link": (
+                    f'<https://api.github.com{CANONICAL}&page={page + 1}>; rel="next"'
+                )},
+                None,
+            )
+            for page in range(1, github.MAX_ALERT_PAGES)
+        ]
+        responses.append(([ITEM] * 100, {}, None))
+        (items, error), request = self.observe_pages(CANONICAL, responses)
+        self.assertIsNone(error)
+        self.assertEqual(len(items), 10000)
+        self.assertEqual(request.call_count, 100)
+
+    def test_alert_specific_cap_rejects_page_101_without_a_partial_count(self):
+        responses = [
+            (
+                [ITEM] * 100,
+                {"link": (
+                    f'<https://api.github.com{CANONICAL}&page={page + 1}>; rel="next"'
+                )},
+                None,
+            )
+            for page in range(1, github.MAX_ALERT_PAGES + 1)
+        ]
+        (items, error), request = self.observe_pages(CANONICAL, responses)
+        self.assertIsNone(items)
+        self.assertEqual(error, "pagination exceeded 100 pages")
+        self.assertEqual(request.call_count, github.MAX_ALERT_PAGES)
 
     def test_pagination_cycle_remains_fail_closed(self):
         link = '<https://api.github.com' + CANONICAL + '>; rel="next"'

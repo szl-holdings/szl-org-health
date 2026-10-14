@@ -35,7 +35,7 @@ from .common import request_bytes, request_json, token_header
 from .github_inventory import discover_repositories
 
 SCHEMA = "szl.repository-file-audit/v2"
-PUBLIC_SCHEMA = "szl.repository-file-audit-public/v2"
+PUBLIC_SCHEMA = "szl.repository-file-audit-public/v3"
 GITHUB_API = "https://api.github.com"
 GITHUB_API_VERSION = "2022-11-28"
 DEFAULT_ORG = "szl-holdings"
@@ -759,6 +759,7 @@ def audit_repository(
     result: dict[str, Any] = {
         "repository": repository,
         "visibility": visibility,
+        "private": repo.get("private") if type(repo.get("private")) is bool else None,
         "archived": repo.get("archived") is True,
         "default_branch": default_branch or None,
         "state": "INCOMPLETE",
@@ -907,36 +908,95 @@ def summarize(repositories: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _public_fields(value: Mapping[str, Any], fields: Sequence[str]) -> dict[str, Any]:
+    """Copy only bounded scalar evidence; never arbitrary nested extensions."""
+    result = {}
+    for field in fields:
+        item = value.get(field)
+        numeric = field in {"entry_count", "file_count", "directory_count", "submodule_count",
+                            "bytes_tracked", "size", "line"}
+        if numeric:
+            if type(item) is int and item >= 0:
+                result[field] = item
+        elif item is None or type(item) is bool:
+            result[field] = item
+        elif type(item) is int and item >= 0:
+            result[field] = item
+        elif isinstance(item, str) and len(item) <= 4096:
+            result[field] = item
+    return result
+
+
+def _public_repository(repo: Mapping[str, Any]) -> dict[str, Any]:
+    value = _public_fields(repo, (
+        "repository", "visibility", "private", "archived", "default_branch",
+        "state", "commit_sha", "tree_sha", "tree_proof", "archive_sha256",
+        "entry_count", "file_count", "directory_count", "submodule_count", "bytes_tracked",
+    ))
+    for name, fields in (
+        ("files", ("path", "content_sha256", "git_blob_sha1", "inspection", "mode", "role", "size")),
+        ("submodules", ("path", "gitlink_commit_sha1", "mode", "content_audited")),
+        ("findings", ("path", "rule", "severity", "line")),
+    ):
+        value[name] = [
+            _public_fields(row, fields)
+            for row in repo.get(name) or [] if isinstance(row, Mapping)
+        ]
+    # Error messages and finding details may contain cross-repository identities.
+    value["errors"] = ["SOURCE_UNAVAILABLE"] if repo.get("errors") else []
+    if value.get("state") not in {"PASS", "WARN", "FAIL", "INCOMPLETE"} or value["errors"]:
+        value["state"] = "INCOMPLETE"
+    for field in ("entry_count", "file_count", "directory_count", "submodule_count", "bytes_tracked"):
+        if field in repo and (type(repo[field]) is not int or repo[field] < 0):
+            value["state"] = "INCOMPLETE"
+    roles: dict[str, int] = {}
+    for row in value["files"]:
+        role = row.get("role")
+        if isinstance(role, str):
+            roles[role] = roles.get(role, 0) + 1
+    value["role_counts"] = dict(sorted(roles.items()))
+    # Bind the public fields, rather than disclosing a digest of omitted fields.
+    value["repository_receipt_sha256"] = sha256_json(value)
+    return value
+
+
 def public_projection(report: Mapping[str, Any]) -> dict[str, Any]:
     public_repositories: list[dict[str, Any]] = []
-    private_state_counts: dict[str, int] = {}
     for repo in report.get("repositories") or []:
         if not isinstance(repo, Mapping):
             continue
-        if repo.get("visibility") != "public":
-            state = str(repo.get("state") or "INCOMPLETE")
-            private_state_counts[state] = private_state_counts.get(state, 0) + 1
+        if repo.get("private") is not False or repo.get("visibility") != "public":
             continue
-        public_repositories.append(dict(repo))
+        if not isinstance(repo.get("repository"), str) or not re.fullmatch(
+            r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo["repository"]
+        ):
+            continue
+        public_repositories.append(_public_repository(repo))
+    summary = summarize(public_repositories)
+    if not public_repositories:
+        summary["state"] = "INCOMPLETE"
     value: dict[str, Any] = {
         "schema": PUBLIC_SCHEMA,
-        "observed_at": report.get("observed_at"),
-        "organization": report.get("organization"),
-        "source": report.get("source"),
-        "inventory_reconciliation": report.get("inventory_reconciliation"),
-        "summary": report.get("summary"),
+        "observed_at": report.get("observed_at") if isinstance(report.get("observed_at"), str)
+            and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+                             report["observed_at"]) else None,
+        "organization": report.get("organization") if isinstance(report.get("organization"), str)
+            and re.fullmatch(r"[A-Za-z0-9-]{1,39}", report["organization"]) else None,
+        "source": {"scope": "PUBLIC_REPOSITORIES_ONLY", "organization_population": None,
+                   "verified_work_counts_are_population": False},
+        "inventory_reconciliation": {"authoritative_count_available": False,
+                                     "authoritative_expected_count": None, "matched": None},
+        "summary": summary,
         "public_repositories": public_repositories,
-        "private_repositories": {
-            "count": sum(private_state_counts.values()),
-            "state_counts": dict(sorted(private_state_counts.items())),
-            "names_paths_hashes_and_findings_disclosed": False,
-        },
         "claim_boundary": (
             "Coverage is described by inventory_reconciliation, summary, and per-repository evidence; "
             "this projection does not establish complete enumeration or byte verification. "
             "Missing authoritative inventory or an INCOMPLETE result cannot establish an organization-complete audit. "
             "UTF-8 source inspection remains separately labelled; "
             "submodule targets are external commit pointers and are not recursively trusted."
+            " Only literal private=false repositories contribute to this closed public projection; "
+            "private-derived counts, states, digests and unknown extensions are excluded. "
+            "Pattern findings require source triage and are not verified vulnerabilities."
         ),
     }
     value["receipt_sha256"] = sha256_json(value)

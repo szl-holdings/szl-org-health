@@ -301,6 +301,19 @@ class SamplingTests(unittest.TestCase):
         self.assertIn("exit code disagrees", summary.read_text())
         self.assertIn("SLO sampling failed closed", result.stdout)
 
+    def test_cli_gate_preserves_incident_without_failed_evidence_label(self):
+        self.collect((2, 0, 0))
+        summary = self.directory.parent / "incident-summary.md"
+        result = subprocess.run([
+            sys.executable, "-B", "-m", "autonomic.slo_sampling", "--verify-only",
+            "--policy", str(POLICY), "--output-dir", str(self.directory),
+            "--exit-code", "2", "--summary", str(summary),
+        ], cwd=ROOT, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("SLO reliability incident", result.stdout)
+        self.assertNotIn("SLO sampling failed closed", result.stdout)
+        self.assertIn("Batch result: `INCIDENT`", summary.read_text())
+
     def test_receipt_timestamps_must_independently_support_cadence(self):
         self.collect()
         second = self.directory / "sample-2.json"

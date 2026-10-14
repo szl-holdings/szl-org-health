@@ -1,0 +1,26 @@
+{
+  "schema": "szl.scheduled-watch-liveness.v1",
+  "watches": [
+    {
+      "repo": "szl-holdings/the-grid",
+      "workflow": "hf-space-drift.yml",
+      "required_jobs": [
+        {"id": "credential", "name": "Hub credential census (read-only metadata)"},
+        {"id": "drift", "name": "Public Space serves main"}
+      ],
+      "max_age_hours": 48,
+      "accept_workflow_dispatch": false,
+      "note": "Daily cron 41 6 * * *; 48h tolerates one missed or delayed schedule event."
+    },
+    {
+      "repo": "szl-holdings/szl-router",
+      "workflow": "hf-space-drift-check.yml",
+      "required_jobs": [
+        {"id": "drift-check", "name": "drift-check"}
+      ],
+      "max_age_hours": 48,
+      "accept_workflow_dispatch": false,
+      "note": "Daily cron 17 6 * * * (also runs after deploys via workflow_run, which is not counted); 48h is 2x the schedule interval."
+    }
+  ]
+}

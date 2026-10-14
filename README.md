@@ -1,5 +1,18 @@
 # szl-org-health
 
+<!-- szl:header v1 -->
+<!-- Native identity: szl-brand@4309f6fce89179331b0b3ed8c99494e76c5be256; Orbit v2 icon. -->
+<p>
+  <a href="https://github.com/szl-holdings">
+    <img src="https://raw.githubusercontent.com/szl-holdings/szl-brand/4309f6fce89179331b0b3ed8c99494e76c5be256/kit/logos/orbit-v2/suite/szl-icon-32.svg" alt="SZL Holdings — Orbit v2" width="32" height="32" />
+  </a>
+</p>
+
+**Control before action. Evidence after.**
+
+[Product](https://a-11-oy.com) · [Proof](https://a11oy.net) · [GitHub organization](https://github.com/szl-holdings)
+<!-- /szl:header -->
+
 Live, fail-closed census and health dashboard for the SZL Holdings GitHub and Hugging Face estates.
 
 Every displayed value is either a reading collected during the current request or an explicit `UNKNOWN`. Authorization failures, timeouts, incomplete pagination, and unavailable APIs are never converted into zero, healthy, protected, or operational states.
@@ -79,6 +92,24 @@ The collectors may use read-only credentials to evaluate evidence that is not pu
 The public report is constructed from a closed, versioned allowlist. Unknown fields are dropped. GitHub repositories must be explicitly public, Hugging Face assets must have `private` set to the literal boolean `false`, collection membership is removed, credential posture is reduced to a public scope marker, and governance is recomputed from the projected evidence. Raw errors, paths, principals, grants, private identifiers, revisions, filenames, runtime URLs, and private-derived counts stay internal.
 
 A scheduled refresh creates `census-internal.json` only as an ephemeral, gitignored input to the fail-closed receipt gate. The workflow artifact contains only the public projection and the sanitized receipt; it never contains the internal census.
+
+### Public repository file-audit projection
+
+`szl.repository-file-audit-public/v3` admits a repository only when its retained
+provider metadata has literal `private: false` and coherent `visibility: public`.
+Historical visibility-only rows remain unadmitted; a label cannot replace the
+missing boolean. The internal collector retains that boolean on complete and
+incomplete results.
+
+Public totals, finding severities, inspection counts and repository digests are
+recomputed from the closed public records. Internal population reconciliation,
+private counts and states, collector principals, raw error messages, finding
+details and unknown nested extensions are excluded. Public reconciliation stays
+unverified: a public subset cannot prove complete enumeration of the private
+estate. An empty subset or an unknown/error-bearing public state remains
+`INCOMPLETE`. Public omission does not change internal enforcement or its exit
+policy. Automated pattern findings require source triage; they are not verified
+vulnerabilities.
 
 Each new collection carries its original start/completion times, per-source
 observation windows, a unique collection ID, the exact source-data digest, and
@@ -245,6 +276,22 @@ deterministic healthy and historical-incident fixtures, plus missing, malformed,
 tampered, and contradictory evidence. A passing fixture or CI run proves the
 gate's behavior; only a scheduled live receipt proves that cycle's SLO verdict.
 
+## Scheduled watch liveness
+
+A cron inside a target repository cannot report its own disablement: GitHub
+disables schedules in public repositories after 60 days without repository
+activity. `.github/workflows/scheduled-watch-liveness.yml` therefore runs here
+every six hours (plus manual dispatch) and supervises the watch workflows
+declared in `governance/scheduled-watches.v1.json`. For each entry,
+`tools/scheduled_watch_liveness.py` requires the workflow `state` to be
+`active`, its newest completed `schedule` run to be younger than
+`max_age_hours` and green, and every declared job of that run to be green.
+Verdicts are `HEALTHY`, `STALE`, `DISABLED`, `FAILED`, or `UNKNOWN`; `UNKNOWN`
+is never healthy. The alert is the red run plus its step summary. The checker
+uses only GET requests with the run's `GITHUB_TOKEN` and never re-enables,
+dispatches, or writes to a target. This workflow is itself scheduled in a
+public repository, so it carries the same 60-day boundary.
+
 ## Tests
 
 ```bash
@@ -277,6 +324,8 @@ governance/policy.json  solo-maintainer fail-closed control policy
 diligence/policy.json  locked target roles and dated five-plus-one exception
 schemas/series-a-diligence.schema.json  public artifact structure contract
 autonomic/               fixed-origin state machine and recovery policy
+governance/scheduled-watches.v1.json  declared external scheduled watches
+tools/scheduled_watch_liveness.py  read-only watch liveness supervisor
 requirements-autonomic.lock hash-locked Hugging Face control closure
 tests/                  collector, governance, receipt, and leak contracts
 Dockerfile              pinned container runtime
