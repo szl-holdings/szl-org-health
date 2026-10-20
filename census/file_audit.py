@@ -182,29 +182,61 @@ def list_repositories(org: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         "matched": None,
         "error": None,
     }
-    if isinstance(org_value, dict):
-        public_count = org_value.get("public_repos")
-        private_count = org_value.get("total_private_repos")
-        if private_count is None:
-            private_count = org_value.get("owned_private_repos")
-        if (
-            isinstance(public_count, int)
-            and not isinstance(public_count, bool)
-            and public_count >= 0
-            and isinstance(private_count, int)
-            and not isinstance(private_count, bool)
-            and private_count >= 0
-        ):
-            expected = public_count + private_count
-            reconciliation.update(
-                {
-                    "authoritative_count_available": True,
-                    "authoritative_expected_count": expected,
-                    "matched": expected == len(repositories),
-                    "error": None,
-                }
-            )
+    reconciliation.update(_reconcile_counts(org_value, len(repositories)))
     return repositories, reconciliation
+
+
+def _nonneg_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _reconcile_counts(org_value: Any, observed: int) -> dict[str, Any]:
+    """Reconcile an owned-repository enumeration against the org's own counters.
+
+    GitHub exposes two private-repository counters that can legitimately disagree:
+    ``owned_private_repos`` (repositories the org owns) and ``total_private_repos``
+    (plan-quota shaped). A ``type=all`` enumeration returns owned repositories, so
+    ``owned_private_repos`` is the apples-to-apples counter and is preferred. The
+    other is still evaluated: a match against either counter is a match, so a
+    counter-semantics difference alone can no longer manufacture a mismatch, while a
+    genuine inventory gap -- an observation matching neither -- still fails closed.
+    """
+    out: dict[str, Any] = {
+        "authoritative_count_available": False,
+        "authoritative_expected_count": None,
+        "authoritative_expected_counts": None,
+        "authoritative_counter_used": None,
+        "counters_disagree": None,
+        "matched": None,
+        "error": None,
+    }
+    if not isinstance(org_value, dict):
+        return out
+    public_count = org_value.get("public_repos")
+    if not _nonneg_int(public_count):
+        return out
+    expectations = {
+        name: public_count + org_value[name]
+        for name in ("owned_private_repos", "total_private_repos")
+        if _nonneg_int(org_value.get(name))
+    }
+    if not expectations:
+        return out
+    preferred = "owned_private_repos" if "owned_private_repos" in expectations else "total_private_repos"
+    matching = [name for name in ("owned_private_repos", "total_private_repos")
+                if expectations.get(name) == observed]
+    out.update(
+        {
+            "authoritative_count_available": True,
+            "authoritative_expected_count": expectations[matching[0]] if matching else expectations[preferred],
+            "authoritative_expected_counts": dict(expectations),
+            "authoritative_counter_used": matching[0] if matching else None,
+            "counters_disagree": len(set(expectations.values())) > 1,
+            "matched": bool(matching),
+            "error": None,
+        }
+    )
+    return out
 
 
 def _validate_tree_entry(entry: Mapping[str, Any], repository: str) -> dict[str, Any]:
