@@ -555,22 +555,28 @@ class GitHubApi:
         }
 
     def find_open_issue(self, title: str) -> dict[str, Any] | None:
-        query = urllib.parse.urlencode(
-            {"q": f'repo:{self.repository} is:issue is:open in:title "{title}"', "per_page": "100"}
-        )
-        value = self.request("GET", f"/search/issues?{query}")
-        require(isinstance(value, dict), "issue search response must be an object")
-        items = value.get("items")
-        require(isinstance(items, list), "issue search items must be a list")
-        matches = [
-            item
-            for item in items
-            if isinstance(item, dict)
-            and "pull_request" not in item
-            and item.get("title") == title
-        ]
+        # Search indexing can omit existing durable state. Enumerate the repository
+        # directly, in creation order, and never treat incomplete coverage as absence.
+        matches: dict[int, dict[str, Any]] = {}
+        for page in range(1, 11):
+            query = urllib.parse.urlencode(
+                {"state": "open", "sort": "created", "direction": "asc", "per_page": 100, "page": page}
+            )
+            items = self.request("GET", f"/repos/{self.repository}/issues?{query}")
+            require(isinstance(items, list) and len(items) <= 100, "issue listing must be a bounded list")
+            for item in items:
+                require(isinstance(item, dict), "issue listing entry must be an object")
+                number = item.get("number")
+                require(type(number) is int and number > 0, "issue listing number is invalid")
+                require(isinstance(item.get("title"), str), "issue listing title is invalid")
+                if "pull_request" not in item and item["title"] == title:
+                    matches[number] = item
+            if len(items) < 100:
+                break
+        else:
+            raise ContractError("issue listing reached the pagination limit")
         require(len(matches) <= 1, f"multiple open issues exist for {title}")
-        return dict(matches[0]) if matches else None
+        return dict(next(iter(matches.values()))) if matches else None
 
     def ensure_label(self, label: str) -> None:
         require(bool(self.token), "GITHUB_TOKEN is required for issue writes")

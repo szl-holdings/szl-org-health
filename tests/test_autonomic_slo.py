@@ -544,9 +544,9 @@ class FailureDiagnosticTests(unittest.TestCase):
 
     def test_duplicate_issue_failure_identifies_guard_without_echoing_title(self) -> None:
         client = GitHubApi(token=self.sensitive_text, repository="szl-holdings/szl-org-health", timeout=8)
-        with patch.object(client, "request", return_value={
-            "items": [{"number": number, "title": self.sensitive_text} for number in (1, 2)],
-        }):
+        with patch.object(client, "request", return_value=[
+            {"number": number, "title": self.sensitive_text} for number in (1, 2)
+        ]):
             receipt = self.failure_receipt(lambda: client.find_open_issue(self.sensitive_text))
         self.assert_origin(receipt, "find_open_issue", "multiple open issues exist")
 
@@ -702,6 +702,63 @@ class LiveReceiptBindingTests(unittest.TestCase):
                         state_write = next(item for item in github.writes if item["number"] == 44)
                         retained = extract_state(state_write["body"])["surface_history"]["a11oy"]["buckets"]
                         self.assertEqual(sum(bucket[2] for bucket in retained), 2)
+
+
+class IssueLookupTests(unittest.TestCase):
+    title = "[AUTONOMIC-SLO] Public estate reliability state"
+
+    def client(self):
+        return GitHubApi(token=None, repository="szl-holdings/szl-org-health", timeout=8)
+
+    def test_existing_state_does_not_depend_on_search_index(self):
+        client = self.client()
+        existing = {"number": 44, "title": self.title, "body": "retained history"}
+
+        def provider(method, path):
+            if path.startswith("/search/"):
+                return {"items": []}  # An incomplete search index must not create state.
+            self.assertEqual(method, "GET")
+            self.assertTrue(path.startswith("/repos/szl-holdings/szl-org-health/issues?"))
+            return [existing]
+
+        with patch.object(client, "request", side_effect=provider):
+            self.assertEqual(client.find_open_issue(self.title), existing)
+
+    def test_complete_pagination_ignores_pull_requests_and_partial_titles(self):
+        client = self.client()
+        page = [{"number": n, "title": "other"} for n in range(1, 99)]
+        page += [{"number": 99, "title": self.title, "pull_request": {}},
+                 {"number": 100, "title": self.title + " notes"}]
+        target = {"number": 101, "title": self.title}
+        with patch.object(client, "request", side_effect=[page, [target]]) as request:
+            self.assertEqual(client.find_open_issue(self.title), target)
+            self.assertIn("page=2", request.call_args_list[1].args[1])
+            self.assertIn("sort=created", request.call_args_list[0].args[1])
+
+    def test_duplicate_title_on_later_page_still_blocks(self):
+        client = self.client()
+        page = [{"number": n, "title": "other"} for n in range(1, 100)]
+        page.append({"number": 100, "title": self.title})
+        with patch.object(client, "request", side_effect=[page, [{"number": 101, "title": self.title}]]):
+            with self.assertRaisesRegex(ContractError, "multiple open issues"):
+                client.find_open_issue(self.title)
+
+    def test_incomplete_or_malformed_listing_never_means_absent(self):
+        client = self.client()
+        for response in ({"items": []}, [None], [{"title": self.title}]):
+            with self.subTest(response=response), patch.object(client, "request", return_value=response):
+                with self.assertRaises(ContractError):
+                    client.find_open_issue(self.title)
+        full_page = [{"number": n, "title": "other"} for n in range(1, 101)]
+        with patch.object(client, "request", return_value=full_page) as request:
+            with self.assertRaisesRegex(ContractError, "pagination limit"):
+                client.find_open_issue(self.title)
+            self.assertEqual(request.call_count, 10)
+
+    def test_empty_complete_listing_is_absent(self):
+        client = self.client()
+        with patch.object(client, "request", return_value=[]):
+            self.assertIsNone(client.find_open_issue(self.title))
 
 
 if __name__ == "__main__":
