@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import datetime as dt
+import io
+import json
+import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from autonomic import controller as base
 from autonomic import controller_v2 as v2
+from tests.test_autonomic_controller import policy_payload
 
 
 def exact_surface() -> dict:
@@ -265,6 +272,77 @@ class TokenSelectionTests(unittest.TestCase):
             ("fallback", "HUGGING_FACE_HUB_TOKEN"),
         )
         self.assertEqual(v2.select_hf_token({}), (None, None))
+
+
+class FailureDiagnosticTests(unittest.TestCase):
+    sensitive_text = "test-secret-value C:\\private\\credential.txt https://private.invalid/?token=secret"
+
+    def branch(self, verified=True):
+        return {"commit": {"sha": "a" * 40, "commit": {"verification": {"verified": verified}}}}
+
+    def failure_receipt(self, responses, workflow_sha="a" * 40):
+        client = v2.GitHubApi(
+            token=self.sensitive_text, controller_repository="szl-holdings/szl-org-health",
+            timeout=8, max_response_bytes=1_048_576,
+        )
+        payload = policy_payload()
+        payload["state_issue"]["title"] = self.sensitive_text
+        with tempfile.TemporaryDirectory() as temporary:
+            policy_path = Path(temporary) / "policy.json"
+            policy_path.write_text(json.dumps(payload), encoding="utf-8")
+            output = Path(temporary) / "receipt.json"
+            stderr = io.StringIO()
+            with (
+                patch.dict(os.environ, {"GITHUB_TOKEN": self.sensitive_text, "GITHUB_SHA": workflow_sha}, clear=True),
+                patch.object(v2, "GitHubApi", return_value=client),
+                patch.object(client, "_request", side_effect=responses) as requests,
+                patch.object(base, "load_signed_manifest", return_value=({}, "a" * 40, "0" * 64)),
+                patch.object(client, "upsert_state_issue") as write,
+                patch.object(v2, "probe_surface") as probe,
+                patch("sys.stderr", stderr),
+            ):
+                result = v2.main(["--policy", str(policy_path), "--output", str(output)])
+            receipt = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(result, 1)
+            self.assertFalse(receipt["ok"])
+            self.assertFalse(receipt["secret_values_recorded"])
+            self.assertEqual(receipt["error"], base.REDACTED_ERROR)
+            self.assertEqual(json.loads(stderr.getvalue()), receipt)
+            for marker in ("test-secret-value", "credential.txt", "private.invalid", str(Path(base.__file__).parent)):
+                self.assertNotIn(marker, stderr.getvalue())
+            self.assertTrue(all(call.args[0] == "GET" for call in requests.call_args_list))
+            write.assert_not_called()
+            probe.assert_not_called()
+            return receipt
+
+    def assert_origin(self, receipt, module, function, fragment):
+        origin = receipt["error_origin"]
+        self.assertEqual(set(origin), {"module", "function", "line"})
+        self.assertEqual(origin["module"], f"autonomic.{module}")
+        self.assertEqual(origin["function"], function)
+        source = Path(base.__file__).with_name(f"{module}.py").read_text(encoding="utf-8").splitlines()
+        self.assertIn(fragment, source[origin["line"] - 1])
+
+    def test_unverified_tip_identifies_signature_guard_without_probing_or_writing(self):
+        receipt = self.failure_receipt([self.branch(verified=False)])
+        self.assertEqual(receipt["error_kind"], "CONTRACTERROR")
+        self.assert_origin(receipt, "controller", "verified_tip", "require(")
+
+    def test_stale_schedule_identifies_exact_head_guard_without_probing_or_writing(self):
+        receipt = self.failure_receipt([self.branch()], workflow_sha="b" * 40)
+        self.assert_origin(receipt, "controller_v2", "run_live", "base.require(")
+
+    def test_duplicate_state_identifies_guard_without_exposing_title(self):
+        receipt = self.failure_receipt([
+            self.branch(),
+            {"items": [{"number": number, "title": self.sensitive_text} for number in (1, 2)]},
+        ])
+        self.assert_origin(receipt, "controller", "find_state_issue", "multiple autonomic state issues")
+
+    def test_foreign_error_records_only_trusted_callsite(self):
+        receipt = self.failure_receipt([RuntimeError(self.sensitive_text)])
+        self.assertEqual(receipt["error_kind"], "RUNTIMEERROR")
+        self.assert_origin(receipt, "controller", "branch", "self._request(")
 
 
 class OfflineContractTests(unittest.TestCase):

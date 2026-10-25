@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from autonomic import slo_history_contract as migration
 from autonomic.slo_controller import ContractError, STATE_BEGIN, STATE_END, extract_state
+from tests.test_autonomic_slo import policy_payload
 from autonomic.slo_history_contract import (
     MARKER_SCHEMA,
     apply_registered_migration,
@@ -211,6 +216,81 @@ class SloHistoryContractTests(unittest.TestCase):
         self.assertTrue(updated.startswith("# Header\n\n" + STATE_BEGIN))
         self.assertTrue(updated.endswith(STATE_END + "\nTail\n"))
         self.assertEqual(extract_state(updated), replacement)
+
+
+class FailureDiagnosticTests(unittest.TestCase):
+    sensitive_text = "test-secret-value C:\\private\\credential.txt https://private.invalid/?token=secret"
+
+    def branch(self, verified=True):
+        return {"commit": {"sha": "a" * 40, "commit": {"verification": {"verified": verified}}}}
+
+    def failure_receipt(self, responses, workflow_sha="a" * 40):
+        client = migration.GitHubApi(
+            token=self.sensitive_text, repository="szl-holdings/szl-org-health", timeout=8,
+        )
+        payload = policy_payload()
+        payload["state_issue"]["title"] = self.sensitive_text
+        with tempfile.TemporaryDirectory() as temporary:
+            policy_path = Path(temporary) / "policy.json"
+            policy_path.write_text(json.dumps(payload), encoding="utf-8")
+            registry = Path(temporary) / "registry.json"
+            registry.write_text(json.dumps({"schema": migration.REGISTRY_SCHEMA, "migrations": []}), encoding="utf-8")
+            output = Path(temporary) / "receipt.json"
+            stderr = io.StringIO()
+            with (
+                patch.dict(os.environ, {"GITHUB_TOKEN": self.sensitive_text, "GITHUB_SHA": workflow_sha}, clear=True),
+                patch.object(migration, "GitHubApi", return_value=client),
+                patch.object(client, "request", side_effect=responses) as requests,
+                patch.object(migration, "load_signed_manifest", return_value=({}, "a" * 40, "0" * 64)),
+                patch.object(client, "update_issue") as update,
+                patch.object(client, "create_issue") as create,
+                patch("sys.stderr", stderr),
+            ):
+                result = migration.main([
+                    "--policy", str(policy_path), "--registry", str(registry), "--output", str(output),
+                ])
+            receipt = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(result, 1)
+            self.assertEqual(receipt["status"], "FAILED")
+            self.assertEqual(receipt["error"], "history migration failed closed")
+            self.assertFalse(receipt["mutation_performed"])
+            self.assertFalse(receipt["secret_values_recorded"])
+            self.assertEqual(json.loads(stderr.getvalue()), receipt)
+            for marker in ("test-secret-value", "credential.txt", "private.invalid", str(Path(migration.__file__).parent)):
+                self.assertNotIn(marker, stderr.getvalue())
+            self.assertTrue(all(call.args[0] == "GET" for call in requests.call_args_list))
+            update.assert_not_called()
+            create.assert_not_called()
+            return receipt
+
+    def assert_origin(self, receipt, module, function, fragment):
+        origin = receipt["error_origin"]
+        self.assertEqual(set(origin), {"module", "function", "line"})
+        self.assertEqual(origin["module"], f"autonomic.{module}")
+        self.assertEqual(origin["function"], function)
+        source = Path(migration.__file__).with_name(f"{module}.py").read_text(encoding="utf-8").splitlines()
+        self.assertIn(fragment, source[origin["line"] - 1])
+
+    def test_unverified_tip_identifies_signature_guard_without_writes(self):
+        receipt = self.failure_receipt([self.branch(verified=False)])
+        self.assertEqual(receipt["error_kind"], "CONTRACTERROR")
+        self.assert_origin(receipt, "slo_controller", "verified_tip", "require(")
+
+    def test_stale_schedule_identifies_exact_head_guard_without_writes(self):
+        receipt = self.failure_receipt([self.branch()], workflow_sha="b" * 40)
+        self.assert_origin(receipt, "slo_history_contract", "run_migration", "migration is not running from exact verified main")
+
+    def test_duplicate_state_identifies_guard_without_exposing_title(self):
+        receipt = self.failure_receipt([
+            self.branch(),
+            [{"number": number, "title": self.sensitive_text} for number in (1, 2)],
+        ])
+        self.assert_origin(receipt, "slo_controller", "find_open_issue", "multiple open issues exist")
+
+    def test_foreign_error_records_only_trusted_callsite(self):
+        receipt = self.failure_receipt([RuntimeError(self.sensitive_text)])
+        self.assertEqual(receipt["error_kind"], "RUNTIMEERROR")
+        self.assert_origin(receipt, "slo_controller", "branch", "self.request(")
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ from build_series_a_diligence import (
 from census.diligence import (
     SOURCE_BOUND_PATHS,
     DiligenceError,
+    _as_of,
     _load_policy,
     _parse_timestamp,
     _verify_compiler_source_revision,
@@ -898,7 +899,16 @@ class SeriesADiligenceHardeningTests(unittest.TestCase):
                 self.assertEqual(main([*common, "--as-of", AS_OF]), 0)
             stored = strict_load_json(output)
             stderr = io.StringIO()
-            with contextlib.redirect_stderr(stderr):
+            # Isolate snapshot staleness from the conditional policy's expiry.
+            with (
+                contextlib.redirect_stderr(stderr),
+                mock.patch(
+                    "census.diligence._as_of",
+                    side_effect=lambda value: _as_of(
+                        value if value is not None else "2026-08-13T12:00:00Z"
+                    ),
+                ),
+            ):
                 self.assertEqual(main([*common, "--check"]), 4)
             result = json.loads(stderr.getvalue())
             self.assertEqual(result["digest_sha256"], stored["digest_sha256"])
@@ -944,6 +954,12 @@ class SeriesADiligenceHardeningTests(unittest.TestCase):
             with (
                 contextlib.redirect_stdout(stdout),
                 contextlib.redirect_stderr(stderr),
+                mock.patch(
+                    "census.diligence._as_of",
+                    side_effect=lambda value: _as_of(
+                        value if value is not None else "2026-08-13T12:00:00Z"
+                    ),
+                ),
             ):
                 self.assertEqual(
                     main([*common, "--check", "--require-source-bound"]),
