@@ -221,17 +221,21 @@ def safe_error_kind(exc: BaseException) -> str:
 
 def safe_error_origin(exc: BaseException) -> dict[str, Any] | None:
     """Locate the controller callsite without recording messages, paths, or locals."""
+    modules = {
+        str(Path(__file__).with_name(f"{name}.py")): f"autonomic.{name}"
+        for name in ("controller", "controller_v2", "slo_controller", "slo_history_contract")
+    }
     origin = None
     frame = exc.__traceback__
     while frame is not None:
         code = frame.tb_frame.f_code
         if (
-            code.co_filename == __file__
+            code.co_filename in modules
             and code.co_name != "require"
             and not code.co_name.startswith("require_")
         ):
             origin = {
-                "module": "autonomic.slo_controller",
+                "module": modules[code.co_filename],
                 "function": code.co_name,
                 "line": frame.tb_lineno,
             }

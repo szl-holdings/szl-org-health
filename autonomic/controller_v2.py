@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from autonomic import controller as base
+from autonomic.slo_controller import safe_error_origin
 
 CONTROLLER_SCHEMA = "szl.autonomic-sre-controller/v2"
 OFFLINE_SCHEMA = "szl.autonomic-sre-contract/v2"
@@ -771,6 +772,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "generated_at": base.utc_now(),
             "ok": False,
             "error_kind": base.safe_error_kind(exc),
+            "error_origin": safe_error_origin(exc),
             "error": base.REDACTED_ERROR,
             "secret_values_recorded": False,
         }
