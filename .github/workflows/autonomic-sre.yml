@@ -54,6 +54,7 @@ jobs:
           python -m unittest \
             tests.test_autonomic_controller \
             tests.test_autonomic_controller_v2 \
+            tests.test_payload_equivalence \
             tests.test_secret_workflow_boundary \
             -v
           python -m autonomic.controller_v2 \

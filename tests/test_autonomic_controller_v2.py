@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from autonomic import controller as base
 from autonomic import controller_v2 as v2
-from tests.test_autonomic_controller import policy_payload
+from tests.test_autonomic_controller import manifest_payload, policy_payload
 
 
 def exact_surface() -> dict:
@@ -362,6 +362,129 @@ class OfflineContractTests(unittest.TestCase):
         self.assertTrue(receipt["declared_commit_verification_required"])
         self.assertEqual(receipt["secret_values_recorded"], False)
         self.assertNotIn("org-writer", json_string(receipt))
+
+
+class PayloadPolicyIntegrationTests(unittest.TestCase):
+    def surface(self):
+        surface = exact_surface()
+        surface["revision_policy"] = "payload-equivalent-default-branch"
+        return surface
+
+    def test_manifest_policy_is_restricted_to_canonical_a11oy(self):
+        raw = manifest_payload()
+        raw["platforms"][0]["revision_policy"] = "payload-equivalent-default-branch"
+        self.assertEqual(base.validate_manifest(raw, policy=policy_payload())["surfaces"][0]["id"], "a11oy")
+        for key, value in (("id", "other"), ("deployment_source_repository", "szl-holdings/other"),
+                           ("default_branch", "other")):
+            with self.subTest(key=key):
+                changed = json.loads(json.dumps(raw))
+                changed["platforms"][0][key] = value
+                with self.assertRaises(base.ContractError):
+                    base.validate_manifest(changed, policy=policy_payload())
+        raw["public_products"][0]["revision_policy"] = "payload-equivalent-default-branch"
+        raw["public_products"][0]["default_branch"] = "main"
+        with self.assertRaises(base.ContractError):
+            base.validate_manifest(raw, policy=policy_payload())
+
+    def probe(self, controller=v2, *, source=None, available=True, changed_payload=False, policy_name=None):
+        from tests.test_payload_equivalence import EXPECTED, OBSERVED, GitHubFixture, payload_files
+
+        after = payload_files()
+        after["app.py" if changed_payload else "docs/notes.md"] = ("100644", b"changed\n")
+        github = GitHubFixture(after=after)
+        github.verified_tip = lambda *_: EXPECTED
+        payload = source or {"source_repository": "szl-holdings/a11oy", "source_revision": OBSERVED}
+        surface = self.surface()
+        if policy_name:
+            surface["revision_policy"] = policy_name
+
+        def path_probe(_opener, *, path, **_kwargs):
+            body = json.dumps(payload).encode()
+            ok = available or path == "/api/build-info"
+            return base.PathObservation(path, 200 if ok else 503, 1, "application/json",
+                                        base.sha256_hex(body), len(body), ok,
+                                        None if ok else "HTTP_503"), body
+
+        with patch.object(base, "probe_path", side_effect=path_probe):
+            result = controller.probe_surface(surface, opener=None, github=github,
+                                              timeout=8, max_response_bytes=262144, parallelism=2)
+        return result, github
+
+    def test_v1_and_v2_retain_actual_revision_and_payload_proof(self):
+        from tests.test_payload_equivalence import EXPECTED, OBSERVED
+
+        for controller in (base, v2):
+            with self.subTest(controller=controller.__name__):
+                result, _ = self.probe(controller)
+                self.assertTrue(result.healthy)
+                self.assertEqual(result.source_status, "PAYLOAD_EQUIVALENT")
+                self.assertEqual(result.source_revision, OBSERVED)
+                self.assertEqual(result.expected_revision, EXPECTED)
+                self.assertEqual(result.receipt()["source_verification"]["match"], "PAYLOAD_EQUIVALENT")
+
+    def test_trusted_runtime_identity_remains_required_for_implicit_repository(self):
+        from tests.test_payload_equivalence import OBSERVED
+
+        for service, revision_source, accepted in (("a11oy", "env:A11OY_GIT_SHA", True),
+                                                    ("a11oy", "git:HEAD", False),
+                                                    ("other", "env:A11OY_GIT_SHA", False)):
+            with self.subTest(service=service, revision_source=revision_source):
+                result, _ = self.probe(source={"service": service, "build": {
+                    "revision": OBSERVED, "revision_source": revision_source}})
+                self.assertEqual(result.source_ok, accepted)
+
+    def test_exact_match_needs_no_equivalence_api_requests(self):
+        from tests.test_payload_equivalence import EXPECTED
+
+        result, github = self.probe(source={"source_repository": "szl-holdings/a11oy",
+                                           "source_revision": EXPECTED})
+        self.assertEqual(result.source_status, "EXACT")
+        self.assertIsNone(result.source_verification)
+        self.assertEqual(github.requests, [])
+
+    def test_failed_equivalence_stays_unhealthy_and_cannot_request_restart(self):
+        result, _ = self.probe(changed_payload=True)
+        self.assertFalse(result.source_ok)
+        self.assertFalse(result.healthy)
+        self.assertEqual(result.source_verification["match"], "NONE")
+        self.assertEqual(result.source_verification["error_origin"]["module"], "autonomic.payload_equivalence")
+        self.assertEqual(result.source_verification["error_origin"]["function"], "verified_payload_equivalence")
+        plan = v2.plan_recovery(observation=result, previous={"consecutive_failures": 3},
+                                hf_stage="RUNNING", policy=policy(),
+                                now=dt.datetime(2026, 10, 28, tzinfo=dt.timezone.utc),
+                                action_budget_available=True)
+        self.assertIsNone(plan.action)
+        self.assertEqual(plan.state, "INCIDENT")
+
+    def test_failed_proof_redacts_foreign_error_text(self):
+        from autonomic.payload_equivalence import failed_verification
+        sensitive = "token=secret /private/credential.txt"
+        proof = failed_verification(sensitive, None, RuntimeError(sensitive))
+        self.assertEqual(proof["match"], "NONE")
+        self.assertIsNone(proof["observed_revision"])
+        self.assertIsNone(proof["error_origin"])
+        self.assertNotIn(sensitive, json.dumps(proof))
+
+    def test_exact_policy_is_not_silently_broadened(self):
+        result, github = self.probe(policy_name="exact-default-branch")
+        self.assertFalse(result.source_ok)
+        self.assertEqual(result.source_status, "DRIFT")
+        self.assertEqual(github.requests, [])
+
+    def test_payload_equivalence_does_not_mask_failed_route_and_proof_survives_state(self):
+        result, _ = self.probe(available=False)
+        self.assertTrue(result.source_ok)
+        self.assertFalse(result.healthy)
+        now = dt.datetime(2026, 10, 28, tzinfo=dt.timezone.utc)
+        plan = v2.plan_recovery(observation=result, previous={}, hf_stage="RUNNING",
+                                policy=policy(), now=now, action_budget_available=False)
+        state = v2.make_surface_state(previous={}, observation=result, plan=plan, stage="RUNNING",
+                                      action_result=None, now_text=now.isoformat())
+        projected = state["source_verification"]
+        self.assertEqual(projected["observed_revision"], result.source_revision)
+        self.assertEqual(projected["expected_revision"], result.expected_revision)
+        self.assertEqual(projected["proof_sha256"], base.sha256_hex(base.canonical_json(result.source_verification)))
+        self.assertNotIn("copy_sources", projected)
 
 
 def json_string(value) -> str:
