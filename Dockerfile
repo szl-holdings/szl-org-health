@@ -12,6 +12,7 @@ COPY census/governance.py /app/census/governance.py
 COPY census/huggingface.py /app/census/huggingface.py
 COPY census/space_readiness.py /app/census/space_readiness.py
 COPY census/report.py /app/census/report.py
+COPY census/portal_projection.py /app/census/portal_projection.py
 COPY census/sites.py /app/census/sites.py
 COPY governance/policy.json /app/governance/policy.json
 COPY static/index.html /app/static/index.html

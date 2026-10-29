@@ -168,6 +168,7 @@ Endpoints:
 
 - `GET /` — responsive estate dashboard.
 - `GET /api/health` — cached, versioned public projection; never the credential-derived internal census.
+- `GET /api/portal` — a small public-only investor/developer index derived from the same cached projection. It labels collection age and HTTP transport separately from source parity, runtime readiness, evaluation, and release authority; a missing or older-than-24-hour collection leaves current observations `UNKNOWN`.
 - `GET /healthz` — service liveness and schema version.
 
 ## Static snapshot mode
