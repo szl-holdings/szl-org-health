@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from census import SCHEMA_VERSION, build_report
 from census.common import resolve_txt as _resolve_txt
+from census.portal_projection import project_portal_index
 from census.sites import DOMAINS
 
 
@@ -45,6 +46,13 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/api/health":
             self._send(200, json.dumps(build_report(), separators=(",", ":")))
+        elif path == "/api/portal":
+            try:
+                portal = project_portal_index(build_report())
+            except (TypeError, ValueError):
+                self._send(503, '{"error":"UNAVAILABLE"}')
+            else:
+                self._send(200, json.dumps(portal, separators=(",", ":")))
         elif path in ("/", "/index.html"):
             try:
                 with open("static/index.html", "rb") as source:
