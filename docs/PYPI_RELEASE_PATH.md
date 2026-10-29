@@ -39,6 +39,12 @@ The Source, Repository, or Source Code URL must be a string equal to the canonic
 repository root. The gate and live audit accept case differences and trailing slashes, but reject
 lookalike repository suffixes, extra paths, queries, fragments, and non-string values.
 
+The wheel's venv installer, distribution-version check, and import probes use Python's `-I`
+isolated mode. Checkout files, `PYTHONPATH`, and user-site modules cannot mask missing or broken
+installed-wheel code. The audit reads its UTF-8 manifest and canonical workflow explicitly so
+Windows locale defaults do not change the exact canonical-text comparison. Canonical gate
+changes still require reviewed propagation to each consumer; the audit continues to flag old bytes.
+
 ## GitHub controls (per publishing repository)
 
 - Environment `pypi` (or the declared name): custom deployment policy, release tags only (`v*`).
