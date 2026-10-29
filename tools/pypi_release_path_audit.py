@@ -633,13 +633,13 @@ def main() -> int:
     ap.add_argument("--only", nargs="*", help="limit to these package names")
     args = ap.parse_args()
 
-    manifest = json.loads(Path(args.manifest).read_text())
+    manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     org = manifest["owner"]["github_org"]
     canon_dir = Path(args.canonical_dir)
     sys.path.insert(0, str(canon_dir))
     from gen_publish_workflow import render  # canonical generator shipped next to the canonical copies
 
-    if render("PACKAGE=.:pypi") != (canon_dir / "publish-pypi.yml").read_text():
+    if render("PACKAGE=.:pypi") != (canon_dir / "publish-pypi.yml").read_text(encoding="utf-8"):
         print("::error::canonical publish-pypi.yml does not match its generator; regenerate before auditing")
         return 1
     canon = {
