@@ -59,6 +59,7 @@ class SurfaceObservation:
     source_evidence: str
     paths: tuple[base.PathObservation, ...]
     failures: tuple[str, ...]
+    source_verification: Mapping[str, Any] | None = None
 
     @property
     def healthy(self) -> bool:
@@ -76,6 +77,7 @@ class SurfaceObservation:
             "source_revision": self.source_revision,
             "expected_revision": self.expected_revision,
             "source_evidence": self.source_evidence,
+            "source_verification": self.source_verification,
             "paths": [item.receipt() for item in self.paths],
             "failures": list(self.failures),
         }
@@ -125,7 +127,7 @@ def select_source_identity(
     """Select one source identity without inventing missing provider evidence.
 
     Explicit repository fields remain authoritative. A runtime may omit the
-    repository only when the manifest uses exact-default-branch policy and the
+    repository only when the manifest uses an admitted default-branch policy and the
     build reports a trusted deployment-injected SHA source plus the exact service
     identity. ``git:HEAD`` and generic repository-local observations are not
     deployment source binding.
@@ -159,7 +161,7 @@ def select_source_identity(
         evidence = "EXPLICIT_REPOSITORY_AND_REVISION"
     else:
         base.require(
-            surface["revision_policy"] == "exact-default-branch",
+            surface["revision_policy"] in {"exact-default-branch", "payload-equivalent-default-branch"},
             "declared-commit surfaces require an explicit source repository",
         )
         base.require(
@@ -240,6 +242,7 @@ def probe_surface(
     source_revision: str | None = None
     expected_revision: str | None = None
     source_evidence = "UNAVAILABLE"
+    source_verification = None
 
     build_body = rows[surface["build_info_path"]][1]
     build_observation = rows[surface["build_info_path"]][0]
@@ -253,13 +256,19 @@ def probe_surface(
             source_repository = identity["source_repository"]
             source_revision = identity["source_revision"]
             source_evidence = identity["evidence"]
-            if surface["revision_policy"] == "exact-default-branch":
+            if surface["revision_policy"] in {"exact-default-branch", "payload-equivalent-default-branch"}:
                 expected_revision = github.verified_tip(
                     source_repository,
                     surface["default_branch"],
                 )
                 source_ok = source_revision == expected_revision
                 source_status = "EXACT" if source_ok else "DRIFT"
+                if not source_ok and surface["revision_policy"] == "payload-equivalent-default-branch":
+                    from autonomic.payload_equivalence import verified_payload_equivalence
+                    source_verification = verified_payload_equivalence(
+                        github, source_repository, source_revision, expected_revision)
+                    source_ok = True
+                    source_status = "PAYLOAD_EQUIVALENT"
                 if not source_ok:
                     failures.append("source:revision-drift")
             else:
@@ -273,6 +282,9 @@ def probe_surface(
                     failures.append("source:declared-commit-drift")
         except Exception as exc:
             source_status = "INVALID"
+            if surface["revision_policy"] == "payload-equivalent-default-branch":
+                from autonomic.payload_equivalence import failed_verification
+                source_verification = failed_verification(source_revision, expected_revision, exc)
             failures.append(f"source:{base.safe_error_kind(exc)}")
 
     return SurfaceObservation(
@@ -286,6 +298,7 @@ def probe_surface(
         source_revision=source_revision,
         expected_revision=expected_revision,
         source_evidence=source_evidence,
+        source_verification=source_verification,
         paths=observations,
         failures=tuple(sorted(set(failures))),
     )
@@ -422,6 +435,8 @@ def make_surface_state(
     now_text: str,
 ) -> dict[str, Any]:
     old = normalized_previous(previous)
+    from autonomic.payload_equivalence import state_verification
+
     result = dict(old)
     result.update(
         {
@@ -431,6 +446,7 @@ def make_surface_state(
             "last_hf_stage": stage,
             "last_reason": plan.reason,
             "source_status": observation.source_status,
+            "source_verification": state_verification(observation.source_verification),
             "source_evidence": observation.source_evidence,
             "last_probe_ok": observation.healthy,
         }

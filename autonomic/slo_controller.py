@@ -223,7 +223,8 @@ def safe_error_origin(exc: BaseException) -> dict[str, Any] | None:
     """Locate the controller callsite without recording messages, paths, or locals."""
     modules = {
         str(Path(__file__).with_name(f"{name}.py")): f"autonomic.{name}"
-        for name in ("controller", "controller_v2", "slo_controller", "slo_history_contract")
+        for name in ("controller", "controller_v2", "slo_controller", "slo_history_contract",
+                     "payload_equivalence")
     }
     origin = None
     frame = exc.__traceback__

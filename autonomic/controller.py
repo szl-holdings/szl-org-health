@@ -95,6 +95,7 @@ class SurfaceObservation:
     expected_revision: str | None
     paths: tuple[PathObservation, ...]
     failures: tuple[str, ...]
+    source_verification: Mapping[str, Any] | None = None
 
     @property
     def healthy(self) -> bool:
@@ -110,6 +111,7 @@ class SurfaceObservation:
             "source_status": self.source_status,
             "source_revision": self.source_revision,
             "expected_revision": self.expected_revision,
+            "source_verification": self.source_verification,
             "paths": [item.receipt() for item in self.paths],
             "failures": list(self.failures),
         }
@@ -364,8 +366,13 @@ class GitHubApi:
         method: str,
         path: str,
         payload: Mapping[str, Any] | None = None,
+        *,
+        max_response_bytes: int | None = None,
     ) -> Any:
         require(path.startswith("/"), "GitHub API path must begin with /")
+        limit = self.max_response_bytes if max_response_bytes is None else max_response_bytes
+        require(type(limit) is int and 0 < limit <= 8 * 1024 * 1024,
+                "GitHub response limit is invalid")
         url = f"https://api.github.com{path}"
         headers = {
             "Accept": "application/vnd.github+json",
@@ -380,8 +387,8 @@ class GitHubApi:
             headers["Content-Type"] = "application/json"
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         with self._opener.open(request, timeout=self.timeout) as response:
-            body = response.read(self.max_response_bytes + 1)
-            if len(body) > self.max_response_bytes:
+            body = response.read(limit + 1)
+            if len(body) > limit:
                 raise ContractError("GitHub response exceeded the controller limit")
             if not body:
                 return None
@@ -561,12 +568,17 @@ def validate_manifest(
             surface.get("revision_policy"), f"{surface_id}.revision_policy"
         )
         require(
-            policy_name in {"exact-default-branch", "declared-commit"},
+            policy_name in {"exact-default-branch", "declared-commit",
+                            "payload-equivalent-default-branch"},
             f"{surface_id} revision policy is unknown",
         )
         default_branch = surface.get("default_branch")
-        if policy_name == "exact-default-branch":
+        if policy_name in {"exact-default-branch", "payload-equivalent-default-branch"}:
             default_branch = require_string(default_branch, f"{surface_id}.default_branch")
+        if policy_name == "payload-equivalent-default-branch":
+            require(surface_id == "a11oy" and repo_id == "SZLHOLDINGS/a11oy"
+                    and source_repo == "szl-holdings/a11oy" and default_branch == "main",
+                    "payload equivalence is restricted to canonical A11oy main")
         required_raw = surface.get("required_paths")
         require(
             isinstance(required_raw, list) and required_raw,
@@ -788,6 +800,7 @@ def probe_surface(
     source_ok = False
     source_revision: str | None = None
     expected_revision: str | None = None
+    source_verification = None
     build_body = rows[surface["build_info_path"]][1]
     build_observation = rows[surface["build_info_path"]][0]
     if build_body is None or not build_observation.ok:
@@ -807,13 +820,19 @@ def probe_surface(
                 source_revision_raw, "build-info source revision"
             ).lower()
             require(bool(SHA40.fullmatch(source_revision)), "build-info source revision is invalid")
-            if surface["revision_policy"] == "exact-default-branch":
+            if surface["revision_policy"] in {"exact-default-branch", "payload-equivalent-default-branch"}:
                 expected_revision = github.verified_tip(
                     surface["deployment_source_repository"],
                     surface["default_branch"],
                 )
                 source_ok = source_revision == expected_revision
                 source_status = "EXACT" if source_ok else "DRIFT"
+                if not source_ok and surface["revision_policy"] == "payload-equivalent-default-branch":
+                    from autonomic.payload_equivalence import verified_payload_equivalence
+                    source_verification = verified_payload_equivalence(
+                        github, source_repository, source_revision, expected_revision)
+                    source_ok = True
+                    source_status = "PAYLOAD_EQUIVALENT"
                 if not source_ok:
                     failures.append("source:revision-drift")
             else:
@@ -821,6 +840,9 @@ def probe_surface(
                 source_status = "DECLARED_COMMIT"
         except Exception as exc:
             source_status = "INVALID"
+            if surface["revision_policy"] == "payload-equivalent-default-branch":
+                from autonomic.payload_equivalence import failed_verification
+                source_verification = failed_verification(source_revision, expected_revision, exc)
             failures.append(f"source:{safe_error_kind(exc)}")
 
     return SurfaceObservation(
@@ -832,6 +854,7 @@ def probe_surface(
         source_status=source_status,
         source_revision=source_revision,
         expected_revision=expected_revision,
+        source_verification=source_verification,
         paths=observations,
         failures=tuple(sorted(set(failures))),
     )
@@ -1099,6 +1122,8 @@ def make_surface_state(
     now_text: str,
 ) -> dict[str, Any]:
     old = {**default_surface_state(), **dict(previous or {})}
+    from autonomic.payload_equivalence import state_verification
+
     result = dict(old)
     result.update(
         {
@@ -1108,6 +1133,7 @@ def make_surface_state(
             "last_hf_stage": stage,
             "last_reason": plan.reason,
             "source_status": observation.source_status,
+            "source_verification": state_verification(observation.source_verification),
             "last_probe_ok": observation.healthy,
         }
     )
