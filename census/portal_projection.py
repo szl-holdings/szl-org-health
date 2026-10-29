@@ -47,7 +47,7 @@ def _age_seconds(report: Mapping[str, Any], now: dt.datetime) -> int | None:
     if (
         started is None
         or completed is None
-        or collection.get("started_at") != report.get("generated_at")
+        or collection.get("completed_at") != report.get("generated_at")
         or started > completed
         or completed > now
     ):

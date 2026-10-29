@@ -19,11 +19,11 @@ def fresh_public_report(now: dt.datetime) -> dict:
     report = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
     started = now - dt.timedelta(seconds=2)
     completed = now - dt.timedelta(seconds=1)
-    report["generated_at"] = started.isoformat().replace("+00:00", "Z")
+    report["generated_at"] = completed.isoformat().replace("+00:00", "Z")
     report["collection"] = {
         "schema": "szl.census-collection/v1",
         "id": "a" * 32,
-        "started_at": report["generated_at"],
+        "started_at": started.isoformat().replace("+00:00", "Z"),
         "completed_at": completed.isoformat().replace("+00:00", "Z"),
     }
     return report
