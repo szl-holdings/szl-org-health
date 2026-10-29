@@ -100,8 +100,16 @@ def project_portal_index(
     recent = age is not None and age <= MAX_OBSERVATION_AGE_SECONDS
 
     github = _source(report, "github")
+    original_github = _source(public_report, "github")
     repos = _data(github).get("repos")
-    github_observed = recent and github.get("diagnostic_state") == "PUBLIC_SUBSET" and isinstance(repos, Mapping)
+    github_observed = (
+        recent
+        and original_github.get("ok") is False
+        and original_github.get("diagnostic_state") == "PUBLIC_SUBSET"
+        and original_github.get("error") is None
+        and github.get("diagnostic_state") == "PUBLIC_SUBSET"
+        and isinstance(repos, Mapping)
+    )
     github_count = len(repos) if github_observed else None
 
     huggingface = _source(report, "huggingface")

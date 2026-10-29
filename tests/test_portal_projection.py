@@ -55,6 +55,13 @@ class PortalProjectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             project_portal_index(internal, as_of=self.now)
 
+    def test_error_bearing_github_subset_is_not_measured(self) -> None:
+        contradictory = copy.deepcopy(self.report)
+        contradictory["sources"]["github"]["error"] = "SOURCE_UNAVAILABLE"
+        index = project_portal_index(contradictory, as_of=self.now)
+        self.assertEqual(index["layers"]["github"]["evidence_class"], "UNKNOWN")
+        self.assertIsNone(index["layers"]["github"]["public_repositories"])
+
     def test_stale_or_absent_collection_cannot_claim_current_observation(self) -> None:
         stale = project_portal_index(
             self.report, as_of=self.now + dt.timedelta(days=2)
