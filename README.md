@@ -39,6 +39,38 @@ The GitHub collector follows pagination instead of maintaining a hand-written re
 - Preliminary repository classifications are deterministic and visible. Anything not proven by the current policy is `unclassified`, not guessed.
 - No credential values are returned by the API or rendered by the interface.
 
+### Bounded GitHub CI coverage
+
+For each active repository, the collector reads default-branch `push` runs in
+pages of 100, stopping at ten pages (1,000 runs). Requests retain the same query
+filters and lock redirects to the GitHub API origin and run-list path. Existing
+transport timeouts and retry limits still apply to each request.
+
+`ci_coverage: COMPLETE` means the returned unique run IDs match a stable API
+`total_count` within that bound. It covers retained runs for this query, not a
+catalog of every workflow, deleted history, other trigger events, or proof that
+CI passed for the current branch head. `run_window_observed` and
+`default_branch_push_runs_total` retain the observed denominator and provider
+total; the collection timestamps retain the observation window. An empty
+complete query remains CI `unknown`.
+
+A page-cap limit is `INCOMPLETE`; a first-page total above 1,000 stops further
+requests because those requests could not establish completeness within budget.
+An API error, changed total, overlapping page,
+or malformed/short page is `UNAVAILABLE`. Either condition prevents green CI
+and a `GH-ACTIVE-CI` pass. Already observed workflow failures remain failures.
+The public projection retains only controlled coverage labels and counts; it
+never copies raw provider errors, run IDs, workflow names, or URLs. Historical
+green rows without coverage evidence become `unknown` on projection.
+
+A normal later collection can recover after a transient API failure or a
+moving pagination window stabilizes, and collections with 101–1,000 retained
+runs now read the remaining pages automatically. Histories above the cap stay
+incomplete: resolving those requires a separately reviewed bounded collection
+strategy or budget change, not deleting history or treating a truncated view
+as complete. No workflow rerun, configuration change, or new credential is
+performed by this reader.
+
 ### Space source-binding evidence
 
 Source binding is a separate reading from reachability. A v1 claim requires both

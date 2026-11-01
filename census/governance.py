@@ -12,6 +12,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .github_ci import ci_evidence
+
 DEFAULT_POLICY = Path(__file__).resolve().parents[1] / "governance" / "policy.json"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 VALID_STATUSES = {"PASS", "FAIL", "UNKNOWN", "NOT_APPLICABLE"}
@@ -54,7 +56,9 @@ def _source(report: dict[str, Any], name: str) -> tuple[bool, dict[str, Any]]:
     if not isinstance(raw, dict):
         return False, {}
     data = raw.get("data")
-    return raw.get("ok") is True and isinstance(data, dict), data if isinstance(
+    error = raw.get("error")
+    no_error = error is None or (isinstance(error, (str, list, tuple, dict)) and not error)
+    return raw.get("ok") is True and isinstance(data, dict) and no_error, data if isinstance(
         data, dict
     ) else {}
 
@@ -114,7 +118,11 @@ def _github_ci(report: dict[str, Any], _policy: dict[str, Any]) -> dict[str, Any
     uncertain = [
         name
         for name, value in active.items()
-        if value.get("ci") in {None, "unknown", "pending"}
+        if value.get("ci") != "failure" and (
+            value.get("ci") != "success"
+            or ci_evidence(value)["ci_coverage"] != "COMPLETE"
+            or ci_evidence(value)["run_window_observed"] == 0
+        )
     ]
     if failed:
         return _control(
@@ -137,7 +145,7 @@ def _github_ci(report: dict[str, Any], _policy: dict[str, Any]) -> dict[str, Any
     return _control(
         "GH-ACTIVE-CI",
         "PASS",
-        "Every observed active repository has terminal green latest-per-workflow evidence.",
+        "Every observed active repository has terminal green evidence across its complete returned push-run history.",
         {"active_count": len(active)},
     )
 
