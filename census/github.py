@@ -10,11 +10,11 @@ from typing import Any
 
 from .common import paginate_json, request_json, token_header
 from .github_inventory import discover_repositories
+from .github_ci import CI_SCOPE, MAX_CI_RUN_PAGES, MAX_CI_RUNS, RUN_WINDOW
 
 ORG = "szl-holdings"
 GH = "https://api.github.com"
 API_VERSION = "2022-11-28"
-RUN_WINDOW = 100
 MAX_PAGES = 20
 # Alert reads use 100-item API pages and the shared 10,000-item ceiling.
 MAX_ALERT_PAGES = 100
@@ -672,6 +672,78 @@ def _branch_governance(
     )
 
 
+def _workflow_census(
+    name: str, default: str, *, request_timeout: float, retries: int,
+) -> dict[str, Any]:
+    """Read at most ten stable, uniquely identified pages; retain partial red."""
+    path = f"/repos/{ORG}/{urllib.parse.quote(name, safe='')}/actions/runs"
+    observed: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    total: int | None = None
+    state, error = "UNAVAILABLE", None
+    pages_observed = 0
+    for page in range(1, MAX_CI_RUN_PAGES + 1):
+        query = urllib.parse.urlencode({"branch": default, "event": "push",
+                                       "per_page": RUN_WINDOW, "page": page})
+        payload, _, request_error = request_json(
+            f"{GH}{path}?{query}", headers=github_headers(),
+            timeout=request_timeout, retries=retries,
+            redirect_origin=("https", "api.github.com", 443), redirect_path=path,
+        )
+        if request_error:
+            error = "workflow run page unavailable"
+            break
+        rows = payload.get("workflow_runs") if isinstance(payload, dict) else None
+        reported = payload.get("total_count") if isinstance(payload, dict) else None
+        if not isinstance(rows, list) or len(rows) > RUN_WINDOW:
+            error = "workflow run page malformed"
+            break
+        pages_observed += 1
+        malformed = False
+        for row in rows:
+            # Run identity is needed to detect shifting/overlapping API pages.
+            identifier = row.get("id") if isinstance(row, dict) else None
+            if type(identifier) is not int or identifier <= 0 or identifier in seen:
+                malformed = True
+                continue
+            seen.add(identifier)
+            observed.append(row)
+        if malformed:
+            error = "workflow run page has missing or duplicate identity"
+            break
+        if type(reported) is not int or reported < 0:
+            error = "workflow run total unavailable"
+            break
+        if total is None:
+            total = reported
+        if reported != total or total < len(observed):
+            error = "workflow run total changed or contradicts observed rows"
+            break
+        if len(observed) == total:
+            state = "COMPLETE"
+            break
+        if len(rows) < RUN_WINDOW:
+            error = "workflow run page ended before its reported total"
+            break
+        if total > MAX_CI_RUNS:
+            # Do not spend nine more requests on a history that cannot close
+            # within this reader's fixed budget.
+            state, error = "INCOMPLETE", "workflow run page cap reached"
+            break
+        if page == MAX_CI_RUN_PAGES:
+            state, error = "INCOMPLETE", "workflow run page cap reached"
+
+    aggregate = aggregate_workflow_runs(observed)
+    if not observed and state != "COMPLETE":
+        aggregate["workflow_count"] = None
+    if state != "COMPLETE" and aggregate["ci"] != "failure":
+        aggregate["ci"] = "unknown"
+    aggregate.update({"error": error, "ci_scope": CI_SCOPE,
+                      "ci_coverage": state, "run_window_observed": len(observed) if pages_observed else None,
+                      "default_branch_push_runs_total": total})
+    return aggregate
+
+
 def _repo_census(
     repo: dict[str, Any],
     *,
@@ -691,39 +763,13 @@ def _repo_census(
             "unknown_workflows": [],
             "error": None,
             "ci_scope": "archived",
-            "run_window_observed": 0,
-            "default_branch_push_runs_total": 0,
+            "ci_coverage": "NOT_APPLICABLE",
+            "run_window_observed": None,
+            "default_branch_push_runs_total": None,
         }
     else:
-        runs, run_error = gh(
-            f"/repos/{ORG}/{urllib.parse.quote(name)}/actions/runs"
-            f"?branch={urllib.parse.quote(default)}&event=push&per_page={RUN_WINDOW}",
-            timeout=request_timeout,
-            retries=retries,
-        )
-        if isinstance(runs, dict) and isinstance(runs.get("workflow_runs"), list):
-            observed = runs["workflow_runs"]
-            aggregate = aggregate_workflow_runs(observed)
-            aggregate.update(
-                {
-                    "error": None,
-                    "ci_scope": "latest-per-workflow-within-recent-default-branch-push-window",
-                    "run_window_observed": len(observed),
-                    "default_branch_push_runs_total": runs.get("total_count"),
-                }
-            )
-        else:
-            aggregate = {
-                "ci": "unknown",
-                "workflow_count": None,
-                "failing_workflows": [],
-                "pending_workflows": [],
-                "unknown_workflows": [],
-                "error": run_error or "workflow runs unavailable",
-                "ci_scope": "unavailable",
-                "run_window_observed": None,
-                "default_branch_push_runs_total": None,
-            }
+        aggregate = _workflow_census(name, default, request_timeout=request_timeout,
+                                     retries=retries)
 
     branch_governance = _branch_governance_result(
         protected=None,

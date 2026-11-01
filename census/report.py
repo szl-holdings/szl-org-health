@@ -19,6 +19,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from .github import collect_github
+from .github_ci import ci_evidence
 from .governance import evaluate_report
 from .huggingface import collect_huggingface
 from .sites import collect_dns, collect_sites
@@ -491,11 +492,19 @@ def _public_github_repo(name: Any, value: Any) -> dict[str, Any] | None:
     protected = value.get("protected")
     classification = value.get("classification")
     ci = value.get("ci")
+    coverage = ci_evidence(value)
+    if ci not in {"failure", "archived"} and coverage["ci_coverage"] != "COMPLETE":
+        ci = "unknown"
+    if ci == "success" and coverage["run_window_observed"] == 0:
+        ci = "unknown"
+    if ci == "archived" and archived is not True:
+        ci = "unknown"
     return {
         "visibility": "public",
         "archived": archived if isinstance(archived, bool) else None,
         "fork": fork if isinstance(fork, bool) else None,
         "ci": ci if ci in _GITHUB_CI_STATES else "unknown",
+        **coverage,
         "protected": protected if isinstance(protected, bool) else None,
         "classification": (
             classification
@@ -610,9 +619,12 @@ def _public_source(
         # organization-wide alert totals, so it cannot be a complete source for
         # controls that require the whole estate. Observed failures remain in
         # the projected data and governance can still fail closed on them.
-        subset_observed = raw.get("ok") is True or (
-            raw.get("diagnostic_state") == "PUBLIC_SUBSET"
-            and isinstance(raw.get("data"), Mapping)
+        subset_observed = (not _error_present(raw.get("error"))
+                          and isinstance(raw.get("data"), Mapping)) and (
+            raw.get("ok") is True or (
+                raw.get("diagnostic_state") == "PUBLIC_SUBSET"
+                and isinstance(raw.get("data"), Mapping)
+            )
         )
         return {
             "ok": False,
@@ -623,7 +635,8 @@ def _public_source(
             "data": projector(data),
         }
 
-    ok = raw.get("ok") is True and isinstance(raw.get("data"), Mapping)
+    ok = (raw.get("ok") is True and isinstance(raw.get("data"), Mapping)
+          and not _error_present(raw.get("error")))
     return {
         "ok": ok,
         "diagnostic_state": "AVAILABLE" if ok else "SOURCE_UNAVAILABLE",

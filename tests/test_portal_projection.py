@@ -46,7 +46,7 @@ class PortalProjectionTests(unittest.TestCase):
             {"id": "SZLHOLDINGS/" + SENTINEL, "private": True, "message": SENTINEL}
         )
         tainted["sources"]["sites"]["data"]["a-11-oy.com"]["message"] = SENTINEL
-        tainted["sources"]["sites"]["error"] = SENTINEL
+        tainted["sources"]["sites"]["unknown_extension"] = SENTINEL
         index = project_portal_index(tainted, as_of=self.now)
         self.assertNotIn(SENTINEL, json.dumps(index))
         self.assertEqual(index["layers"], clean["layers"])
@@ -61,6 +61,20 @@ class PortalProjectionTests(unittest.TestCase):
         index = project_portal_index(contradictory, as_of=self.now)
         self.assertEqual(index["layers"]["github"]["evidence_class"], "UNKNOWN")
         self.assertIsNone(index["layers"]["github"]["public_repositories"])
+
+    def test_error_bearing_sources_stay_unknown_after_reprojection(self) -> None:
+        from census.report import project_public_report
+
+        for name, layers in (("github", ("github",)),
+                             ("huggingface", ("huggingface",)),
+                             ("sites", ("product", "proof"))):
+            contradictory = copy.deepcopy(self.report)
+            contradictory["sources"][name]["error"] = SENTINEL
+            for source in (contradictory, project_public_report(contradictory)):
+                index = project_portal_index(source, as_of=self.now)
+                for layer in layers:
+                    self.assertEqual(index["layers"][layer]["evidence_class"], "UNKNOWN")
+                self.assertNotIn(SENTINEL, json.dumps(index))
 
     def test_stale_or_absent_collection_cannot_claim_current_observation(self) -> None:
         stale = project_portal_index(
