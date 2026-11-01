@@ -30,6 +30,10 @@ def github_data() -> dict:
                 "visibility": "public",
                 "archived": False,
                 "ci": "success",
+                "ci_coverage": "COMPLETE",
+                "ci_scope": "latest-per-workflow-within-recent-default-branch-push-window",
+                "run_window_observed": 1,
+                "default_branch_push_runs_total": 1,
                 "protected": True,
                 "classification": "control-plane",
             }
