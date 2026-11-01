@@ -12,7 +12,18 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .github_ci import ci_evidence
+if __package__:
+    from .github_ci import ci_evidence
+else:  # receipt.py loads this sibling module during direct isolated execution
+    import importlib.util
+
+    ci_path = Path(__file__).with_name("github_ci.py")
+    ci_spec = importlib.util.spec_from_file_location("szl_governance_github_ci", ci_path)
+    if ci_spec is None or ci_spec.loader is None:
+        raise RuntimeError("GitHub CI evidence module could not be loaded")
+    ci_module = importlib.util.module_from_spec(ci_spec)
+    ci_spec.loader.exec_module(ci_module)
+    ci_evidence = ci_module.ci_evidence
 
 DEFAULT_POLICY = Path(__file__).resolve().parents[1] / "governance" / "policy.json"
 SHA40 = re.compile(r"^[0-9a-f]{40}$")

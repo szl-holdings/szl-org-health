@@ -489,6 +489,10 @@ class ReceiptContractTests(unittest.TestCase):
                 root / "census" / "governance.py",
             )
             shutil.copy2(
+                REPO_ROOT / "census" / "github_ci.py",
+                root / "census" / "github_ci.py",
+            )
+            shutil.copy2(
                 REPO_ROOT / "governance" / "policy.json",
                 root / "governance" / "policy.json",
             )
@@ -529,6 +533,22 @@ class ReceiptContractTests(unittest.TestCase):
 
         self.assertEqual(receipt["status"], "FAIL_CLOSED")
         self.assertIs(receipt["observations"]["governance_recomputed_matches"], False)
+
+    def test_isolated_workflow_without_ci_helper_cannot_emit_a_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "census").mkdir()
+            for name in ("receipt.py", "governance.py"):
+                shutil.copy2(REPO_ROOT / "census" / name, root / "census" / name)
+            completed = subprocess.run(
+                [sys.executable, "-I", "-B", "census/receipt.py",
+                 "--snapshot", "census-internal.json"],
+                cwd=root, capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertFalse((root / "census-receipt.json").exists())
+            self.assertIn("github_ci.py", completed.stderr)
+            self.assertIn("FileNotFoundError", completed.stderr)
 
     def test_cli_writes_fail_closed_receipt_for_invalid_minimum(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
