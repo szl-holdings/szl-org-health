@@ -107,16 +107,20 @@ class PortalProjectionTests(unittest.TestCase):
         self.assertTrue(all(value == "UNKNOWN" for value in index["claim_boundaries"].values()))
         self.assertNotIn("source_snapshot_sha256", index)
 
-    def test_route_reuses_one_public_report_without_new_provider_call(self) -> None:
+    def test_route_reuses_precomputed_public_response_without_provider_call(self) -> None:
         current = dt.datetime.now(dt.UTC).replace(microsecond=0)
         handler = object.__new__(app.Handler)
         handler.path = "/api/portal?test=1"
         with (
-            mock.patch.object(app, "build_report", return_value=fresh_public_report(current)) as report,
+            mock.patch.object(app, "build_report") as report,
+            mock.patch.object(app.PUBLIC_RESPONSES, "get", return_value=json.dumps(
+                project_portal_index(fresh_public_report(current))
+            ).encode()) as responses,
             mock.patch.object(app.Handler, "_send") as send,
         ):
             handler.do_GET()
-        report.assert_called_once_with()
+        report.assert_not_called()
+        responses.assert_called_once_with("/api/portal")
         self.assertEqual(send.call_args.args[0], 200)
         body = json.loads(send.call_args.args[1])
         self.assertEqual(body["schema"], SCHEMA)
