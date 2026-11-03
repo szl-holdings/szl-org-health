@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Select a GitHub credential only after proving complete organization coverage.
+"""Select a GitHub credential after bounded inventory/count validation.
 
 A non-empty secret is not evidence that the credential is valid. This runner
-probes each configured candidate without printing its value, requires exact
-agreement between the paginated organization inventory and GitHub's
-authoritative public/private totals, then executes one bounded child command
-with only the selected credential exposed through canonical environment names.
+probes each configured candidate without printing its value and requires exact
+agreement with valid owned public/private counts when available. The legacy
+quota-counter fallback applies only when owned-private data is unavailable or
+invalid; it proves count agreement, not independent full owned authority or
+confidential content access. One bounded child command receives only the
+selected credential through canonical environment names.
 """
 
 from __future__ import annotations
@@ -115,7 +117,7 @@ def validate_github_reader(
     minimum_repositories: int,
     request_json: RequestJson = _default_request_json,
 ) -> ValidatedReader:
-    """Require exact authoritative public plus private organization coverage."""
+    """Prefer owned counts; quota-only fallback cannot prove owned authority."""
 
     encoded_org = urllib.parse.quote(org, safe="")
     metadata = request_json(f"{GITHUB_API}/orgs/{encoded_org}", token)
@@ -125,9 +127,13 @@ def validate_github_reader(
     public_count = _nonnegative_integer(
         metadata.get("public_repos"), "PUBLIC_TOTAL_UNAVAILABLE"
     )
-    private_value = metadata.get("total_private_repos")
-    if private_value is None:
-        private_value = metadata.get("owned_private_repos")
+    private_value = metadata.get("owned_private_repos")
+    if (
+        isinstance(private_value, bool)
+        or not isinstance(private_value, int)
+        or private_value < 0
+    ):
+        private_value = metadata.get("total_private_repos")
     private_count = _nonnegative_integer(
         private_value, "PRIVATE_TOTAL_UNAVAILABLE"
     )

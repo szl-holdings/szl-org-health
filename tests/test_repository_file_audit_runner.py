@@ -104,6 +104,47 @@ class InventoryGateTests(unittest.TestCase):
 
 
 class ReceiptTests(unittest.TestCase):
+    def test_quota_only_match_stops_before_audit_and_retains_failure_receipts(self) -> None:
+        inventory = _inventory(3, 1)
+        reconciliation = _reconciliation(public=3, private=1)
+        reconciliation.update(
+            runner.audit._reconcile_counts(
+                {"public_repos": 3, "owned_private_repos": 2, "total_private_repos": 1},
+                len(inventory),
+            )
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            private_path = Path(folder) / "private.json"
+            public_path = Path(folder) / "public.json"
+            with (
+                mock.patch.object(
+                    runner.audit,
+                    "list_repositories",
+                    return_value=(inventory, reconciliation),
+                ),
+                mock.patch.object(
+                    runner.audit,
+                    "run_audit",
+                    side_effect=AssertionError("incomplete inventory reached blob collection"),
+                ) as run_audit,
+            ):
+                code = runner.run(
+                    [
+                        "--output", str(private_path),
+                        "--public-output", str(public_path),
+                        "--minimum-repositories", "4",
+                    ]
+                )
+            self.assertEqual(code, 2)
+            run_audit.assert_not_called()
+            private = json.loads(private_path.read_text(encoding="utf-8"))
+            public = json.loads(public_path.read_text(encoding="utf-8"))
+            self.assertEqual(private["summary"]["state"], "INCOMPLETE")
+            self.assertFalse(private["inventory_reconciliation"]["matched"])
+            self.assertEqual(public["summary"]["state"], "INCOMPLETE")
+            self.assertEqual(public["public_repositories"], [])
+            self.assertNotIn("private-0", json.dumps(public))
+
     def test_failure_receipt_contains_no_private_identity_or_secret(self) -> None:
         report = runner.failure_report(
             org="szl-holdings",

@@ -196,10 +196,10 @@ def _reconcile_counts(org_value: Any, observed: int) -> dict[str, Any]:
     GitHub exposes two private-repository counters that can legitimately disagree:
     ``owned_private_repos`` (repositories the org owns) and ``total_private_repos``
     (plan-quota shaped). A ``type=all`` enumeration returns owned repositories, so
-    ``owned_private_repos`` is the apples-to-apples counter and is preferred. The
-    other is still evaluated: a match against either counter is a match, so a
-    counter-semantics difference alone can no longer manufacture a mismatch, while a
-    genuine inventory gap -- an observation matching neither -- still fails closed.
+    ``owned_private_repos`` is authoritative whenever available. A quota-counter
+    match must not override a known owned-population mismatch. Retain the quota
+    counter as a fallback only when the owned counter is unavailable, and record
+    both expectations so disagreement remains explicit.
     """
     out: dict[str, Any] = {
         "authoritative_count_available": False,
@@ -223,16 +223,15 @@ def _reconcile_counts(org_value: Any, observed: int) -> dict[str, Any]:
     if not expectations:
         return out
     preferred = "owned_private_repos" if "owned_private_repos" in expectations else "total_private_repos"
-    matching = [name for name in ("owned_private_repos", "total_private_repos")
-                if expectations.get(name) == observed]
+    matched = expectations[preferred] == observed
     out.update(
         {
             "authoritative_count_available": True,
-            "authoritative_expected_count": expectations[matching[0]] if matching else expectations[preferred],
+            "authoritative_expected_count": expectations[preferred],
             "authoritative_expected_counts": dict(expectations),
-            "authoritative_counter_used": matching[0] if matching else None,
+            "authoritative_counter_used": preferred if matched else None,
             "counters_disagree": len(set(expectations.values())) > 1,
-            "matched": bool(matching),
+            "matched": matched,
             "error": None,
         }
     )
