@@ -456,6 +456,18 @@ def _validate_governance(governance: Any) -> tuple[bool, list[str]]:
     return not errors, errors
 
 
+def _safe_governance_controls(value: Any) -> list[dict[str, str]] | None:
+    """Expose only fixed policy IDs and statuses from a valid evaluation."""
+    valid, _ = _validate_governance(value)
+    if not valid:
+        return None
+    statuses = {control["id"]: control["status"] for control in value["controls"]}
+    return [
+        {"id": control_id, "status": statuses[control_id]}
+        for control_id in REQUIRED_GOVERNANCE_CONTROL_IDS
+    ]
+
+
 def build_receipt(
     snapshot_bytes: bytes | None,
     *,
@@ -788,6 +800,7 @@ def build_receipt(
                 if snapshot_bytes is not None
                 else None
             ),
+            "sha256_verification": "REQUIRES_ORIGINAL_INPUT_BYTES",
             "generated_at": _safe_timestamp(snapshot_generated_at),
             "age_seconds": age_seconds,
             "schema_version": SNAPSHOT_SCHEMA_VERSION
@@ -799,6 +812,7 @@ def build_receipt(
             "required_sources": source_states,
             "governance_status": _safe_governance_status(governance_status),
             "governance_summary": _safe_governance_summary(governance_summary),
+            "governance_controls": _safe_governance_controls(governance),
             "governance_generated_at_from_census": _safe_timestamp(
                 governance_generated_at
             ),
@@ -809,6 +823,9 @@ def build_receipt(
             ),
             "governance_recomputed_summary": _safe_governance_summary(
                 recomputed_governance_summary
+            ),
+            "governance_recomputed_controls": _safe_governance_controls(
+                recomputed_governance
             ),
             "governance_recomputed_matches": governance_recomputed_matches,
             "subject_valid": subject_valid,
@@ -855,7 +872,8 @@ def render_summary(receipt: Mapping[str, Any]) -> str:
                 "## Scheduled estate census",
                 "",
                 f"- Status: `{receipt.get('status')}`",
-                f"- Snapshot SHA-256: `{snapshot.get('sha256')}`",
+                "- Input snapshot SHA-256 (requires original input bytes): "
+                f"`{snapshot.get('sha256')}`",
                 (
                     "- GitHub repositories observed: "
                     f"`{observations.get('github_repository_total')}`"

@@ -159,6 +159,25 @@ uploaded merely because a new scheduled run occurred. Missing collection
 metadata in historical snapshots remains unverified. A fresh partial collection
 can be retained as diagnostic evidence while the overall census gate fails.
 
+The scheduled census deliberately deletes `census-internal.json` before uploading
+the public snapshot and sanitized receipt. Do not retain that internal census to
+close a traceability gap: it contains private estate details. The receipt instead
+includes `observations.governance_controls` and
+`observations.governance_recomputed_controls`, each containing only the 15 fixed
+policy control IDs and their statuses. The first describes the embedded evaluation;
+the second describes source-data recomputation. A structurally invalid evaluation
+produces `null`, not inferred passing controls. Each valid list reconciles with its
+corresponding summary. No evidence text, repository names or arbitrary control IDs
+are copied into these lists, and all existing fail-closed checks remain in force.
+
+`snapshot.sha256` identifies the exact original input bytes. Its
+`sha256_verification=REQUIRES_ORIGINAL_INPUT_BYTES` explicitly limits verification:
+the scheduled census does not retain those private bytes, so that digest cannot
+be independently checked from the retained public projection. Verify the retained
+`census-public.json` bytes against `public_snapshot.sha256` instead. Neither that
+public-byte match nor the control lists establish a signature, a governance pass,
+or operational readiness.
+
 ## Solo-maintainer change control
 
 The governed operating model is intentionally `solo-maintainer`. It does not claim or require a second human, and it does not use DCO as the primary security control. Releases instead require:
