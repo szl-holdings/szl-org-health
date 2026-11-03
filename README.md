@@ -222,6 +222,23 @@ Endpoints:
 - `GET /api/portal` — a small public-only investor/developer index derived from the same cached projection. It labels collection age and HTTP transport separately from source parity, runtime readiness, evaluation, and release authority; a missing or older-than-24-hour collection leaves current observations `UNKNOWN`.
 - `GET /healthz` — service liveness and schema version.
 
+Public API requests never run or wait for provider collection. A cold or expired
+response schedules at most one background refresh shared by `/api/health` and
+`/api/portal`; until that refresh succeeds, both return HTTP 503 with
+`{"error":"UNAVAILABLE"}` and `Retry-After: 60`. The refresh precomputes both
+public response bodies. Successful responses are cached for 60 seconds from
+completion. A failed refresh backs off for 60 seconds and never serves expired
+data as a current observation. Provider timestamps, coverage states, public
+projection and governance rules are unchanged. `/healthz` remains a liveness
+check and does not trigger collection or assert estate readiness.
+
+The HTTP server admits at most eight request handlers, with a five-second socket
+inactivity timeout. Overflow connections are closed before allocating another
+handler; no waiting request queue or per-client refresh job is created. These
+are per-process bounds: multiple service processes each have their own cache
+and background collector. They do not claim a wall-clock deadline for the
+background census; the existing bounded provider reads still govern that work.
+
 ## Static snapshot mode
 
 When no live backend is available, the frontend falls back to the allowlisted public projection in `static/data.json` and labels the page `SNAPSHOT`. Regenerate it with the same collectors used by the live service:

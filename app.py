@@ -4,12 +4,105 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from census import SCHEMA_VERSION, build_report
 from census.common import resolve_txt as _resolve_txt
 from census.portal_projection import project_portal_index
 from census.sites import DOMAINS
+
+
+class ReportUnavailable(Exception):
+    """No fresh public response is available within the HTTP work budget."""
+
+
+class PublicResponses:
+    """One background collection; HTTP callers never wait on provider I/O.
+
+    Expired data is not served. Failures back off for a full refresh interval,
+    and timestamps/UNKNOWN states come from the collectors without alteration.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._responses = {}
+        self._expires_at = 0.0
+        self._retry_at = 0.0
+        self._refreshing = False
+
+    def get(self, path: str) -> bytes:
+        with self._lock:
+            now = time.monotonic()
+            if self._responses and now < self._expires_at:
+                return self._responses[path]
+            if not self._refreshing and now >= self._retry_at:
+                self._refreshing = True
+                try:
+                    threading.Thread(target=self._refresh, daemon=True).start()
+                except Exception:
+                    self._refreshing = False
+                    self._retry_at = now + 60
+            # No queued refresh, future.result(), or provider work in handlers.
+            raise ReportUnavailable
+
+    def _refresh(self):
+        responses = None
+        try:
+            report = build_report(exposure="public", use_cache=False)
+            portal = project_portal_index(report)
+            responses = {
+                path: json.dumps(value, separators=(",", ":"), allow_nan=False).encode()
+                for path, value in (("/api/health", report), ("/api/portal", portal))
+            }
+        except Exception:
+            # Do not expose provider exceptions or promote an old result.
+            pass
+        finally:
+            with self._lock:
+                finished = time.monotonic()
+                if responses is not None:
+                    self._responses = responses
+                    self._expires_at = finished + 60
+                self._retry_at = finished + 60
+                self._refreshing = False
+
+
+PUBLIC_RESPONSES = PublicResponses()
+
+
+class BoundedHTTPServer(ThreadingHTTPServer):
+    """Bound request threads before creating them; no overflow work queue."""
+
+    daemon_threads = True
+    max_handlers = 8
+    socket_timeout = 5.0
+
+    def __init__(self, *args, **kwargs):
+        self._slots = threading.BoundedSemaphore(self.max_handlers)
+        super().__init__(*args, **kwargs)
+
+    def get_request(self):
+        request, address = super().get_request()
+        request.settimeout(self.socket_timeout)
+        return request, address
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
 
 def collect_dns():
@@ -39,20 +132,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
+        if code == 503:
+            self.send_header("Retry-After", "60")
         self.end_headers()
         self.wfile.write(payload)
 
     def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
         path = self.path.split("?", 1)[0]
-        if path == "/api/health":
-            self._send(200, json.dumps(build_report(), separators=(",", ":")))
-        elif path == "/api/portal":
+        if path in ("/api/health", "/api/portal"):
             try:
-                portal = project_portal_index(build_report())
-            except (TypeError, ValueError):
+                payload = PUBLIC_RESPONSES.get(path)
+            except ReportUnavailable:
                 self._send(503, '{"error":"UNAVAILABLE"}')
             else:
-                self._send(200, json.dumps(portal, separators=(",", ":")))
+                self._send(200, payload)
         elif path in ("/", "/index.html"):
             try:
                 with open("static/index.html", "rb") as source:
@@ -80,7 +173,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     port = int(os.environ.get("PORT", "7860"))
-    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    server = BoundedHTTPServer(("0.0.0.0", port), Handler)
     print(f"szl-org-health serving on 0.0.0.0:{port}", flush=True)
     server.serve_forever()
 
