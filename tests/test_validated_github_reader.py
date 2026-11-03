@@ -46,6 +46,162 @@ class FixtureRequester:
 
 
 class ValidatedReaderTests(unittest.TestCase):
+    def _validate_counts(self, counters, observed, *, minimum=1, rows=None):
+        values = [
+            {"full_name": f"szl-holdings/synthetic-{i}",
+             "visibility": "public" if i < 3 else "private", "private": i >= 3}
+            for i in range(observed)
+        ] if rows is None else rows
+
+        def request(url, _token):
+            if "/repos?" not in url:
+                return counters
+            page = int(parse_qs(urlparse(url).query)["page"][0])
+            return values[(page - 1) * 100 : page * 100]
+
+        return subject.validate_github_reader(
+            "synthetic",
+            "",
+            org="szl-holdings",
+            minimum_repositories=minimum,
+            request_json=request,
+        )
+
+    def test_complete_owned_reader_wins_over_quota_in_both_directions(self):
+        for owned, quota in ((2, 1), (1, 2)):
+            with self.subTest(owned=owned, quota=quota):
+                reader = self._validate_counts(
+                    {"public_repos": 3, "owned_private_repos": owned,
+                     "total_private_repos": quota},
+                    3 + owned,
+                )
+                self.assertEqual(reader.repositories, 3 + owned)
+                self.assertEqual(reader.authoritative_total, 3 + owned)
+
+    def test_quota_only_match_is_rejected_in_both_directions(self):
+        for owned, quota in ((2, 1), (1, 2)):
+            with self.subTest(owned=owned, quota=quota):
+                with self.assertRaises(subject.ProbeError) as raised:
+                    self._validate_counts(
+                        {"public_repos": 3, "owned_private_repos": owned,
+                         "total_private_repos": quota},
+                        3 + quota,
+                    )
+                self.assertEqual(raised.exception.code, "INVENTORY_TOTAL_MISMATCH")
+
+    def test_owned_selection_preserves_counter_fallback_and_invalid_gates(self):
+        invalid = (None, True, -1, "2", 2.0)
+        for owned in invalid:
+            with self.subTest(fallback_owned=owned):
+                reader = self._validate_counts(
+                    {"public_repos": 3, "owned_private_repos": owned,
+                     "total_private_repos": 2},
+                    5,
+                )
+                self.assertEqual(reader.authoritative_total, 5)
+        for quota in invalid:
+            with self.subTest(unusable_quota=quota):
+                reader = self._validate_counts(
+                    {"public_repos": 3, "owned_private_repos": 2,
+                     "total_private_repos": quota},
+                    5,
+                )
+                self.assertEqual(reader.authoritative_total, 5)
+        for owned in invalid:
+            for quota in invalid:
+                with self.subTest(no_valid_private=(owned, quota)):
+                    with self.assertRaises(subject.ProbeError) as raised:
+                        self._validate_counts(
+                            {"public_repos": 3, "owned_private_repos": owned,
+                             "total_private_repos": quota},
+                            5,
+                        )
+                    self.assertEqual(raised.exception.code, "PRIVATE_TOTAL_UNAVAILABLE")
+        for public in invalid:
+            with self.subTest(invalid_public=public):
+                with self.assertRaises(subject.ProbeError) as raised:
+                    self._validate_counts(
+                        {"public_repos": public, "owned_private_repos": 2}, 5
+                    )
+                self.assertEqual(raised.exception.code, "PUBLIC_TOTAL_UNAVAILABLE")
+        self.assertEqual(
+            self._validate_counts(
+                {"public_repos": 3, "owned_private_repos": 2,
+                 "total_private_repos": 2}, 5
+            ).authoritative_total,
+            5,
+        )
+        self.assertEqual(
+            self._validate_counts({"public_repos": 3, "owned_private_repos": 2}, 5)
+            .authoritative_total,
+            5,
+        )
+        self.assertEqual(
+            self._validate_counts(
+                {"public_repos": 0, "owned_private_repos": 2,
+                 "total_private_repos": 1},
+                2,
+                rows=[{"full_name": f"szl-holdings/synthetic-private-{i}",
+                       "visibility": "private", "private": True} for i in range(2)],
+            ).authoritative_total,
+            2,
+        )
+
+    def test_selection_skips_quota_only_candidate_for_complete_owned_reader(self):
+        for owned, quota in ((2, 1), (1, 2)):
+            with self.subTest(owned=owned, quota=quota):
+                def request(url, token):
+                    if "/repos?" not in url:
+                        return {"public_repos": 3, "owned_private_repos": owned,
+                                "total_private_repos": quota}
+                    private_count = quota if token == "quota-only" else owned
+                    return [
+                        {"full_name": f"szl-holdings/synthetic-{i}",
+                         "visibility": "public" if i < 3 else "private"}
+                        for i in range(3 + private_count)
+                    ]
+
+                reader = subject.select_github_reader(
+                    {"GITHUB_READER_APP_TOKEN": "quota-only",
+                     "SZL_GITHUB_TOKEN": "owned-complete"},
+                    org="szl-holdings",
+                    minimum_repositories=1,
+                    request_json=request,
+                    log=io.StringIO(),
+                )
+                self.assertEqual(reader.source, "SZL_GITHUB_TOKEN")
+                self.assertEqual(reader.repositories, 3 + owned)
+
+    def test_owned_selection_preserves_identity_equality_floor_and_private_gates(self):
+        counters = {"public_repos": 3, "owned_private_repos": 2,
+                    "total_private_repos": 1}
+        duplicate = _repositories(5)
+        duplicate[1]["full_name"] = duplicate[0]["full_name"]
+        foreign = _repositories(5)
+        foreign[0]["full_name"] = "synthetic-foreign/repository"
+        public_only = [
+            {"full_name": f"szl-holdings/public-{i}", "visibility": "public",
+             "private": False}
+            for i in range(5)
+        ]
+        cases = (
+            (4, 1, None, counters, "INVENTORY_TOTAL_MISMATCH"),
+            (6, 1, None, counters, "INVENTORY_TOTAL_MISMATCH"),
+            (5, 6, None, counters, "AUTHORITATIVE_TOTAL_BELOW_FLOOR"),
+            (5, 1, duplicate, counters, "DUPLICATE_REPOSITORY_IDENTITY"),
+            (5, 1, foreign, counters, "FOREIGN_OR_EMPTY_INVENTORY"),
+            (5, 1, public_only, counters, "PRIVATE_REPOSITORY_NOT_OBSERVED"),
+            (3, 1, None, {"public_repos": 3, "owned_private_repos": 0,
+                          "total_private_repos": 2}, "PRIVATE_COVERAGE_UNPROVEN"),
+        )
+        for observed, minimum, rows, metadata, reason in cases:
+            with self.subTest(reason=reason, observed=observed):
+                with self.assertRaises(subject.ProbeError) as raised:
+                    self._validate_counts(
+                        metadata, observed, minimum=minimum, rows=rows
+                    )
+                self.assertEqual(raised.exception.code, reason)
+
     def test_invalid_first_candidate_does_not_mask_valid_second(self) -> None:
         requester = FixtureRequester({"stale": "invalid", "valid": "valid"})
         log = io.StringIO()

@@ -29,6 +29,32 @@ class ReconcileCounts(unittest.TestCase):
         self.assertEqual(out["authoritative_expected_counts"],
                          {"owned_private_repos": 148, "total_private_repos": 146})
 
+    def test_quota_counter_cannot_override_available_owned_counter(self):
+        for owned, quota in ((2, 1), (1, 2)):
+            with self.subTest(owned=owned, quota=quota):
+                out = _reconcile_counts(
+                    {"public_repos": 3, "owned_private_repos": owned,
+                     "total_private_repos": quota},
+                    3 + quota,
+                )
+                self.assertFalse(out["matched"])
+                self.assertEqual(out["authoritative_expected_count"], 3 + owned)
+                self.assertIsNone(out["authoritative_counter_used"])
+                self.assertTrue(out["counters_disagree"])
+
+    def test_owned_match_is_valid_despite_quota_counter_disagreement(self):
+        for owned, quota in ((2, 1), (1, 2)):
+            with self.subTest(owned=owned, quota=quota):
+                out = _reconcile_counts(
+                    {"public_repos": 3, "owned_private_repos": owned,
+                     "total_private_repos": quota},
+                    3 + owned,
+                )
+                self.assertTrue(out["matched"])
+                self.assertEqual(out["authoritative_counter_used"], "owned_private_repos")
+                self.assertEqual(out["authoritative_expected_count"], 3 + owned)
+                self.assertTrue(out["counters_disagree"])
+
     def test_genuine_gap_still_fails_closed(self):
         """An observation matching NEITHER counter must not pass."""
         out = _reconcile_counts(LIVE, 147)
