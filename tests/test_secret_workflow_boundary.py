@@ -32,7 +32,9 @@ def _uses_actions_secrets(source: str) -> bool:
 def _reader_permission_pairs(source: str, job: str) -> list[tuple[str, str]]:
     """Inspect one mint step independently, without conflating the two jobs."""
     job_tail = source.split(f"\n  {job}:\n", 1)[1]
-    job_source = re.split(r"(?m)^  [A-Za-z][A-Za-z0-9_-]*:\s*$", job_tail, 1)[0]
+    job_source = re.split(
+        r"(?m)^  [A-Za-z][A-Za-z0-9_-]*:\s*$", job_tail, maxsplit=1
+    )[0]
     step = re.search(
         r"(?ms)^      - name: Mint short-lived organization reader\n"
         r"(.*?)(?=^      - name:|\Z)",
