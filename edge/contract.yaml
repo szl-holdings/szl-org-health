@@ -1,0 +1,303 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Edge contract (C-33): what an UNPAID, unauthenticated client must receive
+# from the Cloudflare edge in front of the SZL estate. Checked every six hours
+# from a GitHub-hosted runner by .github/workflows/edge-contract.yml, using
+# edge/check_contract.py. Semantics, the outcome labels and the proof boundary
+# are documented in docs/EDGE_CONTRACT.md.
+#
+#   free      2xx, 3xx, or an origin authentication refusal (401/403). Never 402.
+#   paid      402 with an x402 v2 PAYMENT-REQUIRED header whose decoded amount,
+#             scheme, network, asset, payTo and resource URL equal the live rule.
+#   internal  403 that is not a bot challenge.
+#
+# Seeded on 2026-11-06 from the coordinator's read-only evidence:
+#   - the live Monetization Gateway rules (_cf/monetization_rules_1650.json)
+#     with the three rules the coordinator disabled at 16:27:21-25Z applied
+#     (_cf/monetization_changes_1655.json, each PATCH returned HTTP 200);
+#   - Cloudflare URL Scanner runs before (_cf/scans/run3.log) and after
+#     (_cf/scans/run4.log) that change, plus earlier runs where cited;
+#   - WAF custom rules and redirect rules (_cf/inspect_1610.json, _cf/cf_audit.json);
+#   - the owner's paywall decision and MONETIZATION_REPORT section 4.5.
+# This file restricts the YAML it accepts: see "Contract format" in
+# docs/EDGE_CONTRACT.md. Quote every value that is not a simple word, path,
+# hostname or integer.
+
+schema: szl.edge-contract/v1
+as_of: "2026-11-06"
+owner_decision: "2026-11-06 paywall decision: charge API/MCP hosts only; websites, /pricing, the proof site, health and /.well-known paths stay free."
+
+sources:
+  live_rules: "Monetization Gateway rules read at about 16:26Z (_cf/monetization_rules_1650.json), with the three 16:27Z disables (_cf/monetization_changes_1655.json) applied"
+  scans_before: "_cf/scans/run3.log (URL Scanner, before the 16:27Z change)"
+  scans_after: "_cf/scans/run4.log (URL Scanner, after the 16:27Z change)"
+  waf: "WAF custom rules in _cf/inspect_1610.json (16:10Z); redirect rules in _cf/cf_audit.json (15:06Z)"
+  verify_plan: "MONETIZATION_REPORT.md section 4.5 (free paths, paid-path header fields, blocked paths)"
+
+unpaid_client:
+  # The live rules exempt any User-Agent containing one of these substrings
+  # (each rule expression ends with "and not (http.user_agent contains ...)").
+  # The probe must never send one of them, or the paywall would not apply.
+  user_agent: "szl-edge-contract/1 (+https://github.com/szl-holdings/szl-org-health)"
+  exempt_user_agent_substrings:
+    - szl-readiness
+    - szl-mesh-orchestrator
+    - szl-energy-operator
+    - SZL-Estate-Release-Train
+    - SZL-Vigil-Anatomy-Probe
+    - Cloudflare-Healthchecks
+  timeout_seconds: 15
+  max_body_bytes: 65536
+  # An unpaid POST must never start a generation if it leaks past the paywall:
+  # "{}" fails the OpenAI-compatible request validators (no model, no prompt).
+  post_body: "{}"
+  post_content_type: application/json
+
+payment_terms:
+  # Decoded PAYMENT-REQUIRED header of scan ab7465a9 (run4,
+  # GET https://inference.a-11-oy.com/v1/completions, 16:34Z): x402Version 2,
+  # scheme exact, network eip155:8453 (Base), asset USDC, payTo equal to the
+  # address on every live rule.
+  x402_version: 2
+  scheme: exact
+  network: "eip155:8453"
+  asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+  pay_to: "0x50E9B335ac233fcc5e87404367E7De253A63D460"
+
+# Every rule that is enabled after the 16:27Z change. 13 rules are disabled
+# (10 were already disabled in the 16:26Z read, 3 were disabled at 16:27Z);
+# the szl-estate-os Cloudflare drift check watches their enabled flags.
+rules_inventory:
+  - zone: a-11-oy.com
+    rule_id: "6babfd10032746f7863cda066d95125d"
+    description: "Completions/Responses - Nemotron Estate flagship (everyone, x402) [2026-11-06 leak fix]"
+    price_atomic: 20000
+    audience: everyone
+    scope: "host inference.a-11-oy.com, path starts with /v1/completions or /v1/responses"
+  - zone: a-11-oy.com
+    rule_id: "41cee0f88822411baf864bb54e8b4727"
+    description: "Doctrine chat - Nemotron Estate flagship (everyone, x402)"
+    price_atomic: 20000
+    audience: everyone
+    scope: "any a-11-oy.com host (no host condition), path starts with /v1/chat/"
+  - zone: a-11-oy.com
+    rule_id: "94dc6d8169a84173bf0005bea66e50eb"
+    description: "Premium API mesh/frontier (bots)"
+    price_atomic: 50000
+    audience: verified-bots
+    scope: "path starts with /api/a11oy/v1/mesh/ or /api/a11oy/v1/frontier/, cf.client.bot"
+  - zone: a-11-oy.com
+    rule_id: "b8026fdb4f0d42c6ba734ddd77e75644"
+    description: "Premium attest/ledger APIs (bots)"
+    price_atomic: 25000
+    audience: verified-bots
+    scope: "path starts with /api/a11oy/v1/attest/ or /api/a11oy/v1/ledger, cf.client.bot"
+
+unprobed_rules:
+  - rule_id: "94dc6d8169a84173bf0005bea66e50eb"
+    reason: "Charges verified bots only (cf.client.bot). A GitHub-hosted runner is not a verified bot, so an unpaid probe cannot observe this charge (monetization_platform_a11oy C3: a runner got 200 where the scanner got 402)."
+  - rule_id: "b8026fdb4f0d42c6ba734ddd77e75644"
+    reason: "Charges verified bots only (cf.client.bot); not observable from an unverified runner."
+
+checks:
+  # ---------------------------------------------------------------- free
+  - id: apex-root
+    class: free
+    host: a-11-oy.com
+    path: /
+    methods: [GET]
+    evidence: "run3.log 402 'Payment required' -> run4.log 200 'a11oy — The Living Command Fabric' after rule 5303c2e1 was disabled at 16:27:21Z."
+  - id: apex-pricing
+    class: free
+    host: a-11-oy.com
+    path: /pricing
+    methods: [GET]
+    evidence: "run3.log 402 -> run4.log 200 'a11oy — Pricing'."
+  - id: apex-healthz
+    class: free
+    host: a-11-oy.com
+    path: /healthz
+    methods: [GET]
+    evidence: "run3.log 402 -> run4.log 200; WAF skip 'Allow health/readiness without bot challenge' covers /healthz."
+  - id: apex-api-healthz
+    class: free
+    host: a-11-oy.com
+    path: /api/a11oy/healthz
+    methods: [GET]
+    evidence: "run2.log 200 (an /api/ path, outside the old non-API catch-all); covered by the health skip rule."
+  - id: apex-robots
+    class: free
+    host: a-11-oy.com
+    path: /robots.txt
+    methods: [GET]
+    evidence: "run3.log 200 text/plain (scan ad639562); covered by the health skip rule."
+  - id: apex-security-txt
+    class: free
+    host: a-11-oy.com
+    path: /.well-known/security.txt
+    methods: [GET]
+    evidence: "a11oy .well-known/security.txt declares 'Canonical: https://a-11-oy.com/.well-known/security.txt'; /.well-known/ is in the health skip rule. Not yet observed live."
+  - id: www-redirect
+    class: free
+    host: www.a-11-oy.com
+    path: /
+    methods: [GET]
+    evidence: "Scan df2f59b7 (run3): 301 to https://a-11-oy.com/; cf_audit redirect rule 'Canonical www.a-11-oy.com → apex' (301)."
+  - id: holdings-root
+    class: free
+    host: holdings.a-11-oy.com
+    path: /
+    methods: [GET]
+    evidence: "run3.log 402 -> run4.log 200 'SZL Holdings — Proof infrastructure for consequential AI'."
+  - id: killinchu-root
+    class: free
+    host: killinchu.a-11-oy.com
+    path: /
+    methods: [GET]
+    evidence: "run.log 402 (15:12Z); run3.log 403 application/json (scan b29cc962), source of the 403 not established. Listed free in MONETIZATION_REPORT 4.5.1."
+  - id: gdw-root
+    class: free
+    host: gdw.a-11-oy.com
+    path: /
+    methods: [GET]
+    evidence: "run3.log 402 -> run4.log 401 application/json with www-authenticate from the gdw-frontier Space (scan 547d4e1a): origin authentication."
+  - id: agents-store-healthz
+    class: free
+    host: agents-store.a-11-oy.com
+    path: /healthz
+    methods: [GET]
+    evidence: "run3.log 402 -> run4.log 200."
+  - id: inference-health
+    class: free
+    host: inference.a-11-oy.com
+    path: /health
+    methods: [GET]
+    evidence: "The vLLM origin exposes /health (run4.log: /healthz is 404); no enabled rule matches; host is in the monetized-host bot-challenge skip. Not yet observed live."
+  - id: inference-models
+    class: free
+    host: inference.a-11-oy.com
+    path: /v1/models
+    methods: [GET]
+    evidence: "run3.log 402 under the verified-bot catch-all; no enabled rule matches since 16:27Z; MONETIZATION_REPORT 4.5.1 lists it free. Not yet observed after the change."
+  - id: mcp-root
+    class: free
+    host: mcp.a-11-oy.com
+    path: /
+    methods: [GET]
+    evidence: "run3.log 402 -> run4.log 200 'Hatun Gateway · governed context mesh'."
+  - id: mcp-healthz
+    class: free
+    host: mcp.a-11-oy.com
+    path: /healthz
+    methods: [GET]
+    evidence: "hatun-mcp hatun_mcp/server_http.py route /healthz (outside the /mcp auth middleware); MONETIZATION_REPORT 4.5.1."
+  - id: mcp-pubkey
+    class: free
+    host: mcp.a-11-oy.com
+    path: /pubkey
+    methods: [GET]
+    evidence: "hatun-mcp route /pubkey; MONETIZATION_REPORT 4.5.1."
+  - id: mcp-server-card
+    class: free
+    host: mcp.a-11-oy.com
+    path: /.well-known/mcp/server-card.json
+    methods: [GET]
+    evidence: "hatun-mcp route /.well-known/mcp/server-card.json; MONETIZATION_REPORT 4.5.1."
+  - id: proof-root
+    class: free
+    host: a11oy.net
+    path: /
+    methods: [GET]
+    evidence: "run3.log 402 -> run4.log 200 'a11oy Proof Registry | SZL Holdings' after rule 56a20485 was disabled at 16:27:24Z."
+  - id: proof-pricing
+    class: free
+    host: a11oy.net
+    path: /pricing/
+    methods: [GET]
+    evidence: "a11oy-net pricing/index.html (GitHub Pages); MONETIZATION_REPORT 4.5.1. Not yet observed live."
+  - id: proof-experiments
+    class: free
+    host: a11oy.net
+    path: /experiments/
+    methods: [GET]
+    evidence: "a11oy-net experiments/index.html; rule a539c1ed ('Proof experimental endpoints (bots)') disabled at 16:27:25Z. Not yet observed live."
+  - id: proof-www-redirect
+    class: free
+    host: www.a11oy.net
+    path: /
+    methods: [GET]
+    evidence: "cf_audit redirect rule 'Canonical www.a11oy.net → apex' (301). Not yet observed live."
+  - id: ntfy-root
+    class: free
+    host: ntfy.a11oy.net
+    path: /
+    methods: [GET]
+    evidence: "run3.log 402 -> run4.log 200 'ntfy.sh | Send push notifications to your phone via PUT/POST'."
+
+  # ---------------------------------------------------------------- paid
+  - id: inference-completions
+    class: paid
+    host: inference.a-11-oy.com
+    path: /v1/completions
+    methods: [GET, POST]
+    rule_id: "6babfd10032746f7863cda066d95125d"
+    price_atomic: 20000
+    evidence: "run4.log GET 402; decoded amount 20000 (scan ab7465a9). POST is unverified: the rules carry no method list and the Gateway charges GET by default (MONETIZATION_AUDIT G-09; THREAD_AUDIT D-20)."
+  - id: inference-responses
+    class: paid
+    host: inference.a-11-oy.com
+    path: /v1/responses
+    methods: [GET, POST]
+    rule_id: "6babfd10032746f7863cda066d95125d"
+    price_atomic: 20000
+    evidence: "Same rule as /v1/completions (path starts with /v1/responses). Not yet observed live."
+  - id: inference-chat
+    class: paid
+    host: inference.a-11-oy.com
+    path: /v1/chat/completions
+    methods: [GET, POST]
+    rule_id: "41cee0f88822411baf864bb54e8b4727"
+    price_atomic: 20000
+    evidence: "Rule 41cee0f8 charges /v1/chat/ for everyone. Not yet observed live."
+
+  # ---------------------------------------------------------------- internal
+  - id: inference-metrics
+    class: internal
+    host: inference.a-11-oy.com
+    path: /metrics
+    methods: [GET]
+    evidence: "WAF custom rule 'Block vLLM internals on inference host (/metrics /docs /openapi.json /redoc) except HQ Vigil [2026-11-06 leak fix]', action block (inspect_1610). Config verified (THREAD_AUDIT D-21); live response not yet observed."
+  - id: inference-docs
+    class: internal
+    host: inference.a-11-oy.com
+    path: /docs
+    methods: [GET]
+    evidence: "Same WAF block rule."
+  - id: inference-openapi
+    class: internal
+    host: inference.a-11-oy.com
+    path: /openapi.json
+    methods: [GET]
+    evidence: "Same WAF block rule."
+  - id: inference-redoc
+    class: internal
+    host: inference.a-11-oy.com
+    path: /redoc
+    methods: [GET]
+    evidence: "Same WAF block rule."
+
+not_covered:
+  - target: "api.a-11-oy.com, gateway.a-11-oy.com, meter.a-11-oy.com, gpu2.a-11-oy.com"
+    reason: "On the owner's chargeable-host list, but no enabled rule targets them except the zone-wide /v1/chat/ rule; the per-host contract is an open owner decision (MONETIZATION_REPORT G-03, THREAD_AUDIT C-37). run5.log: gateway 502, gpu2 403 Cloudflare Access."
+  - target: "gpu.a-11-oy.com, meter2.a-11-oy.com, gpu-cloud.a-11-oy.com"
+    reason: "Not covered by any owner decision. Latent exposure without an Access app (MONETIZATION_REPORT G-02; CLOUDFLARE_REPORT 17:05Z): gpu 502 and meter2 403 in run5.log."
+  - target: "a-11-oy.com /llms.txt, /favicon.ico, /.well-known/x402-pricing.json, /.webmcp/bridge.js"
+    reason: "Listed free in MONETIZATION_REPORT 4.5.1, but no evidence that the origin serves them; add each once a live run shows it is served."
+  - target: "/v1/chat/ on hosts other than inference."
+    reason: "Rule 41cee0f8 has no host condition, so it also charges /v1/chat/ on the apex website and every other a-11-oy.com host; the contract probes the inference host only (MONETIZATION_REPORT 4.3 R1 scopes the rule to inference)."
+  - target: "verified-bot-only rules, enabled or disabled"
+    reason: "An unverified runner is never charged by a cf.client.bot rule, so re-enabling one (for example the $0.10 catch-all 5303c2e1 or the a11oy.net $1.00 rule 56a20485) does not turn these checks red. The szl-estate-os Cloudflare drift check covers rule enabled flags."
+  - target: "showcase.a-11-oy.com, dev.a-11-oy.com, szlholdings.com"
+    reason: "showcase gave no response in run3.log; dev. is DNS-only GitHub Pages (no Cloudflare paywall can apply); szlholdings.com is pending its nameserver switch."
+  - target: "mcp.a-11-oy.com /mcp transport"
+    reason: "No enabled paywall rule (e610a927 and 2dac25fc are disabled); hatun-mcp answers 401 operator_key_required to anonymous calls. Not a paywall surface today."

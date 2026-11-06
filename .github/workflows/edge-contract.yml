@@ -1,0 +1,62 @@
+name: Edge contract
+
+# Continuous check that the Cloudflare edge does what the owner decided
+# (THREAD_AUDIT C-33): for every host and path in edge/contract.yaml, an
+# unpaid, unauthenticated client must receive the declared response. Free
+# surfaces: 2xx/3xx or an origin 401/403, never 402. Paid machine endpoints:
+# 402 with an x402 PAYMENT-REQUIRED header whose decoded amount, scheme,
+# network, asset, payTo and resource URL equal the live rule. Internal paths:
+# a 403 that is not a bot challenge. Messages distinguish 402-paywall,
+# 403-challenge, 5xx-origin and the other outcomes (docs/EDGE_CONTRACT.md).
+#
+# One GET (and, where declared, one POST with the invalid body "{}") per
+# check, no redirects followed, no retries, no credentials and no secrets.
+# The run turns red when any check fails; the receipt is uploaded either way.
+# Offline contracts: tests/test_edge_contract.py (run by ci.yml).
+
+on:
+  schedule:
+    - cron: "41 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edge-contract
+  cancel-in-progress: false
+
+jobs:
+  edge-contract:
+    name: Unpaid-client edge contract (live)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Check the live edge against edge/contract.yaml
+        run: python -I -B edge/check_contract.py --contract edge/contract.yaml --receipt reports/edge-contract-receipt.json
+
+      - name: Upload the edge contract receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: edge-contract-receipt
+          path: |
+            reports/edge-contract-receipt.json
+            reports/edge-contract-receipt.json.sha256
+          if-no-files-found: error
+          retention-days: 30
