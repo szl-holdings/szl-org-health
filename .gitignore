@@ -3,6 +3,10 @@
 /census-receipt.json
 /census-public.json
 
+# Local outputs of the documented diligence and offline-contract commands.
+/generated/
+/reports/
+
 # Python build and interpreter output is never source evidence.
 __pycache__/
 *.py[cod]
