@@ -244,9 +244,16 @@ background census; the existing bounded provider reads still govern that work.
 When no live backend is available, the frontend falls back to the allowlisted public projection in `static/data.json` and labels the page `SNAPSHOT`. Regenerate it with the same collectors used by the live service:
 
 ```bash
-python3 refresh_snapshot.py
-python3 refresh_snapshot.py --stdout
+python3 refresh_snapshot.py            # writes static/data.json and the gitignored census-internal.json
+python3 refresh_snapshot.py --stdout   # same writes, then also prints the public projection
 ```
+
+Both forms overwrite the tracked `static/data.json`, so run them only when you
+intend to replace the dated fallback. The deadline defaults to 120 seconds
+(`REFRESH_DEADLINE_S`). The printed `sources_ok` line describes the internal
+collection. The public projection always reports the GitHub source as
+`ok: false` (`PUBLIC_SUBSET` or `SOURCE_UNAVAILABLE`) because it omits private
+repositories and organization-wide alert totals.
 
 The snapshot refresh has a hard deadline, derives public output from the exact in-memory internal report, and replaces files atomically. If collection or projection cannot finish, it does not publish a partial file as a fresh complete census.
 
@@ -289,15 +296,28 @@ The target policy records the dated conditional Killinchu exception but does not
 
 ## Autonomic SRE control plane
 
-`.github/workflows/autonomic-sre.yml` runs a single-flight controller every five
-minutes. It reads the public-estate manifest only from the cryptographically
-verified `szl-holdings/a11oy` default-branch tip, probes every declared required
-route from its fixed HTTPS origin, and persists the state machine in one private
+`.github/workflows/autonomic-sre.yml` runs a single-flight controller
+(`python -m autonomic.controller_v2`) every five minutes. It reads the
+public-estate manifest only from the cryptographically verified
+`szl-holdings/a11oy` default-branch tip, probes every declared required route
+from its fixed HTTPS origin, and persists the state machine in one private
 machine-managed issue.
 
+**Automatic recovery is currently held.** Since 2026-10-04 (#231),
+`autonomic/policy.json` sets `recovery.enabled` to `false`; the reasons and the
+exit criteria are in
+[`docs/incident-recovery-hold-20261004.md`](docs/incident-recovery-hold-20261004.md).
+While the hold is in force the controller still validates the manifest, probes
+every route, persists state, and emits receipts, but it requests no Hugging Face
+mutation: an availability failure that would otherwise be eligible for recovery
+is recorded as `DEGRADED` with the reason `automatic recovery is disabled by
+policy`. The hold has no automatic expiry. The recovery rules below describe the
+planner, not what the scheduled job currently does.
+
 The states are `HEALTHY`, `SUSPECT`, `DEGRADED`, `RECOVERING`, and `INCIDENT`.
-Two consecutive availability failures are required before mutation. The
-controller then admits only one of three exact Hugging Face operations:
+Two consecutive availability failures are required before mutation. When
+recovery is enabled, the controller admits only one of three exact Hugging Face
+operations:
 `resume`, `soft-restart`, or `factory-restart`. One action is allowed per cycle,
 each surface has a 30-minute cooldown, and three failed recovery attempts
 terminalize to `INCIDENT` instead of creating a restart storm.
@@ -310,16 +330,19 @@ and asset deletion are outside this controller's authority.
 Each cycle emits a sanitized JSON receipt and SHA-256 artifact. Credential values
 are neither read back nor included in state, summaries, or artifacts.
 
-Offline contract check:
+Offline contract check (the scheduled workflow runs the v2 form; the v1
+`autonomic.controller` entry point accepts the same flags):
 
 ```bash
-python -m autonomic.controller --offline-contract-only \
+python -m autonomic.controller_v2 --offline-contract-only \
   --output reports/autonomic-sre-contract.json
 ```
 
-The workflow requires the existing `HF_TOKEN` secret for recovery. Without it,
-the controller remains fail-closed and records `HF_TOKEN_MISSING`; it never
-converts missing authority into a successful repair.
+For recovery, the v2 controller uses the first non-empty secret among
+`HF_ORG_TOKEN`, `HF_WRITE_TOKEN`, `HF_TOKEN`, `HUGGINGFACE_TOKEN`, and
+`HUGGING_FACE_HUB_TOKEN`, and records only the selected name, never the value.
+Without any of them, a planned recovery is `BLOCKED` with `HF_TOKEN_MISSING`; it
+never converts missing authority into a successful repair.
 
 ## Autonomic SLO verdict evidence
 
@@ -358,8 +381,11 @@ declared in `governance/scheduled-watches.v1.json`. For each entry,
 Verdicts are `HEALTHY`, `STALE`, `DISABLED`, `FAILED`, or `UNKNOWN`; `UNKNOWN`
 is never healthy. The alert is the red run plus its step summary. The checker
 uses only GET requests with the run's `GITHUB_TOKEN` and never re-enables,
-dispatches, or writes to a target. This workflow is itself scheduled in a
-public repository, so it carries the same 60-day boundary.
+dispatches, or writes to a target. That token can read other repositories only
+when they are public, so watched targets must be public. This repository is
+currently private, so the public-repository 60-day disablement does not apply
+to the supervisor itself; if the repository is made public, the supervisor
+carries the same boundary.
 
 ## Tests
 
@@ -386,6 +412,12 @@ census/huggingface.py   models, datasets, Spaces, collections, and buckets
 census/sites.py         site headers plus SPF/DMARC evidence
 census/report.py        isolated aggregation, cache, and public allowlist
 census/receipt.py       internal-source-bound sanitized receipt gate
+census/governance.py    fail-closed control evaluation (15 policy controls)
+census/github_ci.py     bounded default-branch CI coverage contract
+census/github_inventory.py  organization identity before repository pagination
+census/space_readiness.py   scoped GET witnesses for four documented Spaces
+census/portal_projection.py small public /api/portal view of the projection
+census/file_audit.py    complete default-branch repository and file audit
 refresh_snapshot.py    atomic internal/public snapshot writer
 static/index.html       responsive, searchable dashboard
 static/data.json        timestamped public fallback projection
@@ -395,6 +427,12 @@ schemas/series-a-diligence.schema.json  public artifact structure contract
 autonomic/               fixed-origin state machine and recovery policy
 governance/scheduled-watches.v1.json  declared external scheduled watches
 tools/scheduled_watch_liveness.py  read-only watch liveness supervisor
+tools/run_with_validated_github_reader.py  credential selection after inventory validation
+tools/run_repository_file_audit.py  organization file audit behind the inventory gate
+tools/pypi_release_path_audit.py  nightly fail-closed PyPI release-path audit
+governance/pypi/        package manifest and canonical publish workflow and gate
+scripts/verify_series_a_schema_contract.py  dependency-free Draft 2020-12 schema executor
+docs/                   design records, incident holds, and verification notes
 requirements-autonomic.lock hash-locked Hugging Face control closure
 tests/                  collector, governance, receipt, and leak contracts
 Dockerfile              pinned container runtime
