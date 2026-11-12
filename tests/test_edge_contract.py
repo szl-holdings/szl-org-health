@@ -19,7 +19,6 @@ import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from unittest import mock
 
 from edge.check_contract import (
     ContractError,
@@ -203,7 +202,7 @@ class _ContractRun(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.receipt_path = Path(self.tmp.name) / "receipt.json"
-        environment = mock.patch.dict(os.environ, {}, clear=False)
+        environment = unittest.mock.patch.dict(os.environ, {}, clear=False)
         environment.start()
         self.addCleanup(environment.stop)
         os.environ.pop("GITHUB_STEP_SUMMARY", None)
