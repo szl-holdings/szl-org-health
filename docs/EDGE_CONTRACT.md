@@ -21,8 +21,10 @@ secrets.
 | `paid` | A 402 whose `PAYMENT-REQUIRED` header decodes (x402 v2) to the live rule: `amount` equal to the rule price in atomic units, plus `scheme`, `network`, `asset`, `payTo`, `x402Version` and `resource.url` equal to the probed URL. | `402-paywall` with matching terms only |
 | `internal` | A 403 that is not a bot challenge. | `403-edge-block`, `403-access`, `403-origin-auth` |
 
-A check may narrow its accepted outcomes with `accept:`. No free or internal
-check may accept a 402, and a paid check always requires the exact terms.
+A check may narrow its accepted outcomes with `accept:`. Naming an outcome
+outside that class's default is a contract error, so a free or internal check
+cannot accept a 402 (`paywall` or `payment-unparsed`) or a `challenge`. A paid
+check always requires the exact terms and cannot set `accept`.
 
 ## Outcome labels
 

@@ -578,9 +578,18 @@ def _validate_check(raw: Any, index: int) -> Check:
             raise ContractError(f"{where}: rule_id and price_atomic are only valid on paid checks")
         if "accept" in data:
             accept = _require_str_list(data["accept"], f"{where}.accept")
-            unknown = [item for item in accept if item not in OUTCOMES or item == "paywall"]
+            unknown = [item for item in accept if item not in OUTCOMES]
             if unknown:
                 raise ContractError(f"{where}: accept has invalid outcomes {unknown}")
+            # accept narrows the class default. It cannot add a 402, a challenge,
+            # or any other outcome the class forbids.
+            allowed = DEFAULT_ACCEPT[cls]
+            widened = [item for item in accept if item not in allowed]
+            if widened:
+                raise ContractError(
+                    f"{where}: accept can only narrow the {cls} defaults "
+                    f"({', '.join(allowed)}); refused {widened}"
+                )
         else:
             accept = DEFAULT_ACCEPT[cls]
     return Check(
@@ -989,8 +998,12 @@ def evaluate(check: Check, method: str, observation: Observation, terms: Payment
     if outcome == "paywall":
         decoded, _ = decode_payment_required(observation.header("payment-required"))
     verdict = "FAIL"
+    # A per-check accept list can only drop defaults. Outcomes outside the class
+    # default (a 402 or a challenge on a free or internal check) never pass,
+    # even if a caller built the Check without the loader.
+    permitted = frozenset(DEFAULT_ACCEPT[check.cls]).intersection(check.accept)
     if check.cls == "free":
-        if outcome in check.accept:
+        if outcome in permitted:
             verdict = "PASS"
             message = f"{label}: free surface served to an unpaid client (HTTP {status})"
         elif outcome == "paywall":
@@ -1042,7 +1055,7 @@ def evaluate(check: Check, method: str, observation: Observation, terms: Payment
                 f"charge this {method} request"
             )
     else:  # internal
-        if outcome in check.accept and status == 403:
+        if outcome in permitted and status == 403:
             verdict = "PASS"
             message = f"{label}: internal path refused ({evidence})"
         elif outcome == "challenge":

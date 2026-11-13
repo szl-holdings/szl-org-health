@@ -21,10 +21,13 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from edge.check_contract import (
+    Check,
     ContractError,
     Observation,
+    PaymentTerms,
     classify,
     decode_payment_required,
+    evaluate,
     load_contract,
     main,
     parse_connect_to,
@@ -468,8 +471,67 @@ class ContractValidationTests(unittest.TestCase):
                 "    path: /pricing\n    methods: [GET]\n",
                 "    path: /pricing\n    methods: [GET]\n    accept: [ok, paywall]\n",
             ),
-            "accept has invalid outcomes ['paywall']",
+            "refused ['paywall']",
         )
+
+    def test_accept_cannot_add_outcomes_forbidden_for_the_class(self) -> None:
+        for outcome in ("payment-unparsed", "challenge"):
+            self.assert_invalid(
+                self.replace_once(
+                    "    path: /pricing\n    methods: [GET]\n",
+                    f"    path: /pricing\n    methods: [GET]\n    accept: [ok, {outcome}]\n",
+                ),
+                f"refused ['{outcome}']",
+            )
+        self.assert_invalid(
+            self.replace_once(
+                "    path: /metrics\n    methods: [GET]\n",
+                "    path: /metrics\n    methods: [GET]\n    accept: [edge-block, challenge]\n",
+            ),
+            "can only narrow the internal defaults",
+        )
+        narrowed = self.replace_once(
+            "    path: /pricing\n    methods: [GET]\n",
+            "    path: /pricing\n    methods: [GET]\n    accept: [ok]\n",
+        )
+        path = Path(self.tmp.name) / "narrow.yaml"
+        path.write_text(narrowed, encoding="utf-8")
+        pricing = next(check for check in load_contract(path).checks if check.id == "apex-pricing")
+        self.assertEqual(pricing.accept, ("ok",))
+
+    def test_forbidden_outcomes_never_pass_when_named_in_accept(self) -> None:
+        terms = PaymentTerms(2, "exact", "eip155:8453", USDC_BASE, PAY_TO)
+        free = Check(
+            "free-widened",
+            "free",
+            "a-11-oy.com",
+            "/pricing",
+            ("GET",),
+            "test",
+            ("ok", "payment-unparsed", "challenge"),
+        )
+        internal = Check(
+            "internal-widened",
+            "internal",
+            "inference.a-11-oy.com",
+            "/metrics",
+            ("GET",),
+            "test",
+            ("edge-block", "challenge", "payment-unparsed"),
+        )
+        unparsed = Observation(402, {}, b"pay")
+        challenged = Observation(403, {"cf-mitigated": ["challenge"]}, b"")
+        blocked = Observation(403, {}, b"Sorry, you have been blocked")
+        for check, observation in (
+            (free, unparsed),
+            (free, challenged),
+            (internal, unparsed),
+            (internal, challenged),
+        ):
+            row = evaluate(check, "GET", observation, terms)
+            self.assertEqual(row["verdict"], "FAIL", row["message"])
+        passed = evaluate(internal, "GET", blocked, terms)
+        self.assertEqual((passed["verdict"], passed["outcome"]), ("PASS", "edge-block"))
 
     def test_only_get_and_post_are_supported(self) -> None:
         self.assert_invalid(
