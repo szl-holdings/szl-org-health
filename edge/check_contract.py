@@ -818,9 +818,18 @@ def fetch(
 # Classification
 # --------------------------------------------------------------------------
 
+# A managed challenge is identified by the authoritative cf-mitigated header
+# or by the challenge interstitial itself (window._cf_chl_opt, the
+# "Just a moment..." title). The /cdn-cgi/challenge-platform/ script
+# reference is deliberately NOT a challenge marker: since 2026-11-14 the
+# Cloudflare WAF block page ("Attention Required! | Cloudflare", no
+# cf-mitigated header) also embeds it, so treating it as a challenge
+# misclassifies real edge blocks. Owner-device evidence 2026-11-14:
+# GET /metrics on inference.a-11-oy.com returned 403, cf-mitigated
+# absent, title "Attention Required! | Cloudflare", body containing
+# /cdn-cgi/challenge-platform/ — a block, not a challenge.
 _CHALLENGE_MARKERS = (
     (re.compile(rb"window\._cf_chl_opt"), "body marker window._cf_chl_opt"),
-    (re.compile(rb"/cdn-cgi/challenge-platform/"), "body marker /cdn-cgi/challenge-platform/"),
     (re.compile(rb"<title>Just a moment\.\.\.</title>", re.IGNORECASE), "body title 'Just a moment...'"),
 )
 _BLOCK_MARKERS = (

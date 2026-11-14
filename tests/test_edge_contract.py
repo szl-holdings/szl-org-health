@@ -596,6 +596,20 @@ class PaymentHeaderTests(unittest.TestCase):
             ({"status": 403, "headers": [], "body": b"<script>window._cf_chl_opt={}</script>"}, "challenge"),
             (edge_block(), "edge-block"),
             ({"status": 403, "headers": [], "body": b"<title>Attention Required! | Cloudflare</title>"}, "edge-block"),
+            # 2026-11-14: the WAF block page embeds the challenge-platform
+            # script, so the script alone is not a challenge marker.
+            (
+                {
+                    "status": 403,
+                    "headers": [("Content-Type", "text/html")],
+                    "body": b'<title>Attention Required! | Cloudflare</title><script src="/cdn-cgi/challenge-platform/hg/pat/vscript.js"></script>',
+                },
+                "edge-block",
+            ),
+            (
+                {"status": 403, "headers": [], "body": b'<script src="/cdn-cgi/challenge-platform/instrument.js"></script>'},
+                "origin-auth",
+            ),
             (access_refusal(), "access-denied"),
             (
                 {"status": 302, "headers": [("Location", "https://team.cloudflareaccess.com/cdn-cgi/access/login/x")]},

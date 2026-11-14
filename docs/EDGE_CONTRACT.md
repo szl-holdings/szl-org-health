@@ -34,7 +34,7 @@ Every message starts with one of these labels, so a red run says why:
 |---|---|
 | `402-paywall` | HTTP 402 with exactly one `PAYMENT-REQUIRED` header that decodes to an x402 object with an `accepts` list. |
 | `402-unparsed` | HTTP 402 without a decodable header. |
-| `403-challenge` | `cf-mitigated: challenge`, or a Cloudflare challenge page (`window._cf_chl_opt`, `/cdn-cgi/challenge-platform/`, "Just a moment..."). A challenge is bot protection, not the paywall, and never passes. |
+| `403-challenge` | `cf-mitigated: challenge`, or a Cloudflare challenge interstitial (`window._cf_chl_opt`, "Just a moment..."). The `/cdn-cgi/challenge-platform/` script reference also appears on WAF block pages since 2026-11-14 and is not a challenge marker. A challenge is bot protection, not the paywall, and never passes. |
 | `403-edge-block` | A Cloudflare block page or plain-text block (`error code: 10xx`, "Sorry, you have been blocked"). |
 | `403-access`, `302-access` | A Cloudflare Access refusal (`cf-access-aud` / `cf-access-domain` headers) or a redirect to a `*.cloudflareaccess.com` login. |
 | `401-origin-auth`, `403-origin-auth` | Any other 401 or 403. |
