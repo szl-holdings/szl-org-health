@@ -467,3 +467,9 @@ requirements-autonomic.lock hash-locked Hugging Face control closure
 tests/                  collector, governance, receipt, and leak contracts
 Dockerfile              pinned container runtime
 ```
+
+Estate on Hugging Face: models, datasets and Spaces are published under the [SZLHOLDINGS](https://huggingface.co/SZLHOLDINGS) org.
+
+## License
+
+Apache-2.0 — see [LICENSE](LICENSE).
