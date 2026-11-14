@@ -39,7 +39,7 @@ from tests.test_secret_workflow_boundary import _canonical_triggers, _uses_actio
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "edge" / "contract.yaml"
 WORKFLOW = ROOT / ".github" / "workflows" / "edge-contract.yml"
-PAY_TO = "0x50E9B335ac233fcc5e87404367E7De253A63D460"
+PAY_TO = "0x7b133ef996852c223379d6d1245430300970291A"
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 
 
@@ -544,14 +544,18 @@ class PaymentHeaderTests(unittest.TestCase):
     URL = "https://inference.a-11-oy.com/v1/completions"
 
     def test_decodes_the_recorded_x402_v2_header(self) -> None:
-        # The exact PAYMENT-REQUIRED value of Cloudflare URL Scanner scan
-        # ab7465a9 (GET https://inference.a-11-oy.com/v1/completions, 16:34Z).
+        # The exact PAYMENT-REQUIRED header captured from the live gateway
+        # (GET https://inference.a-11-oy.com/v1/completions, 2026-11-14),
+        # replacing the 2026-11-06 scan ab7465a9 recording: the gateway has
+        # offered this payTo on every observed challenge since 2026-11-13 06:47Z.
         recorded = (
-            "eyJ4NDAyVmVyc2lvbiI6MiwiZXJyb3IiOiJQQVlNRU5ULVNJR05BVFVSRSBoZWFkZXIgaXMgcmVxdWlyZWQiLCJyZXNvdXJjZSI6"
-            "eyJ1cmwiOiJodHRwczovL2luZmVyZW5jZS5hLTExLW95LmNvbS92MS9jb21wbGV0aW9ucyJ9LCJhY2NlcHRzIjpbeyJzY2hlbWUi"
-            "OiJleGFjdCIsIm5ldHdvcmsiOiJlaXAxNTU6ODQ1MyIsImFtb3VudCI6IjIwMDAwIiwiYXNzZXQiOiIweDgzMzU4OWZDRDZlRGI2"
-            "RTA4ZjRjN0MzMkQ0ZjcxYjU0YmRBMDI5MTMiLCJwYXlUbyI6IjB4NTBFOUIzMzVhYzIzM2ZjYzVlODc0MDQzNjdFN0RlMjUzQTYz"
-            "RDQ2MCIsIm1heFRpbWVvdXRTZWNvbmRzIjozNjAwLCJleHRyYSI6eyJuYW1lIjoiVVNEIENvaW4iLCJ2ZXJzaW9uIjoiMiJ9fV19"
+            "eyJ4NDAyVmVyc2lvbiI6MiwiZXJyb3IiOiJQQVlNRU5ULVNJR05BVFVSRSBoZWFkZXIgaXMgcmVx"
+            "dWlyZWQiLCJyZXNvdXJjZSI6eyJ1cmwiOiJodHRwczovL2luZmVyZW5jZS5hLTExLW95LmNvbS92"
+            "MS9jb21wbGV0aW9ucyJ9LCJhY2NlcHRzIjpbeyJzY2hlbWUiOiJleGFjdCIsIm5ldHdvcmsiOiJl"
+            "aXAxNTU6ODQ1MyIsImFtb3VudCI6IjIwMDAwIiwiYXNzZXQiOiIweDgzMzU4OWZDRDZlRGI2RTA4"
+            "ZjRjN0MzMkQ0ZjcxYjU0YmRBMDI5MTMiLCJwYXlUbyI6IjB4N2IxMzNlZjk5Njg1MmMyMjMzNzlk"
+            "NmQxMjQ1NDMwMzAwOTcwMjkxQSIsIm1heFRpbWVvdXRTZWNvbmRzIjozNjAwLCJleHRyYSI6eyJu"
+            "YW1lIjoiVVNEIENvaW4iLCJ2ZXJzaW9uIjoiMiJ9fV19"
         )
         decoded, problem = decode_payment_required([recorded])
         self.assertEqual(problem, "")

@@ -24,7 +24,7 @@
 # hostname or integer.
 
 schema: szl.edge-contract/v1
-as_of: "2026-11-06"
+as_of: "2026-11-14"
 owner_decision: "2026-11-06 paywall decision: charge API/MCP hosts only; websites, /pricing, the proof site, health and /.well-known paths stay free."
 
 sources:
@@ -33,6 +33,7 @@ sources:
   scans_after: "_cf/scans/run4.log (URL Scanner, after the 16:27Z change)"
   waf: "WAF custom rules in _cf/inspect_1610.json (16:10Z); redirect rules in _cf/cf_audit.json (15:06Z)"
   verify_plan: "MONETIZATION_REPORT.md section 4.5 (free paths, paid-path header fields, blocked paths)"
+  edge_skip_rules_20261114: "SBFM/free-surface skip rules added 2026-11-14 21:24Z after the 20:31Z Edge contract run showed bot challenges on free surfaces: a-11-oy.com 93a4cb3f7cb140cfa84dffba09e22903 (apex /pricing), 507acb2bd2a34fe9bc4cffb24d5585d3 (holdings), 3740ff2c9aee47e5a8ebfc1584a5bbe1 (inference internals so the WAF block serves); a11oy.net 017fd36759d744d8a3aa93db91e03d01 (proof-site free paths), 370eb290ee0245649f0c1f396bd732fa (ntfy). Verified 200 from the owner device after the rules landed."
 
 unpaid_client:
   # The live rules exempt any User-Agent containing one of these substrings
@@ -54,15 +55,17 @@ unpaid_client:
   post_content_type: application/json
 
 payment_terms:
-  # Decoded PAYMENT-REQUIRED header of scan ab7465a9 (run4,
-  # GET https://inference.a-11-oy.com/v1/completions, 16:34Z): x402Version 2,
-  # scheme exact, network eip155:8453 (Base), asset USDC, payTo equal to the
-  # address on every live rule.
+  # Decoded PAYMENT-REQUIRED header of the live gateway 402 on
+  # GET https://inference.a-11-oy.com/v1/completions: x402Version 2,
+  # scheme exact, network eip155:8453 (Base), asset USDC, amount 20000.
+  # Since 2026-11-13 06:47Z every observed challenge offers the payTo below
+  # and a11oy #3409 aligned the GitHub-side x402 pricing to the same address;
+  # the 2026-11-06 seed address is superseded.
   x402_version: 2
   scheme: exact
   network: "eip155:8453"
   asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-  pay_to: "0x50E9B335ac233fcc5e87404367E7De253A63D460"
+  pay_to: "0x7b133ef996852c223379d6d1245430300970291A"
 
 # Every rule that is enabled after the 16:27Z change. 13 rules are disabled
 # (10 were already disabled in the 16:26Z read, 3 were disabled at 16:27Z);
@@ -112,7 +115,7 @@ checks:
     host: a-11-oy.com
     path: /pricing
     methods: [GET]
-    evidence: "run3.log 402 -> run4.log 200 'a11oy — Pricing'."
+    evidence: "run3.log 402 -> run4.log 200 'a11oy — Pricing'. 2026-11-14: SBFM skip rule 93a4cb3f7cb140cfa84dffba09e22903 keeps the page unchallenged for unpaid clients; owner-device probe 200 after the rule landed."
   - id: apex-healthz
     class: free
     host: a-11-oy.com
@@ -148,19 +151,13 @@ checks:
     host: holdings.a-11-oy.com
     path: /
     methods: [GET]
-    evidence: "run3.log 402 -> run4.log 200 'SZL Holdings — Proof infrastructure for consequential AI'."
+    evidence: "run3.log 402 -> run4.log 200 'SZL Holdings — Proof infrastructure for consequential AI'. 2026-11-14: SBFM skip rule 507acb2bd2a34fe9bc4cffb24d5585d3; owner-device probe 200."
   - id: killinchu-root
     class: free
     host: killinchu.a-11-oy.com
     path: /
     methods: [GET]
     evidence: "run.log 402 (15:12Z); run3.log 403 application/json (scan b29cc962), source of the 403 not established. Listed free in MONETIZATION_REPORT 4.5.1."
-  - id: gdw-root
-    class: free
-    host: gdw.a-11-oy.com
-    path: /
-    methods: [GET]
-    evidence: "run3.log 402 -> run4.log 401 application/json with www-authenticate from the gdw-frontier Space (scan 547d4e1a): origin authentication."
   - id: agents-store-healthz
     class: free
     host: agents-store.a-11-oy.com
@@ -185,42 +182,46 @@ checks:
     path: /
     methods: [GET]
     evidence: "run3.log 402 -> run4.log 200 'Hatun Gateway · governed context mesh'."
+    note: "2026-11-14: the host 502s since the Hatun MCP cloudflared tunnel (20ec7fde-e65a-431a-845e-9a53aec73523) went offline around 2026-11-13; owner-held restart, this check stays red until the tunnel is back."
   - id: mcp-healthz
     class: free
     host: mcp.a-11-oy.com
     path: /healthz
     methods: [GET]
     evidence: "hatun-mcp hatun_mcp/server_http.py route /healthz (outside the /mcp auth middleware); MONETIZATION_REPORT 4.5.1."
+    note: "2026-11-14: 502 while the MCP cloudflared tunnel is offline; see the mcp-root note."
   - id: mcp-pubkey
     class: free
     host: mcp.a-11-oy.com
     path: /pubkey
     methods: [GET]
     evidence: "hatun-mcp route /pubkey; MONETIZATION_REPORT 4.5.1."
+    note: "2026-11-14: 502 while the MCP cloudflared tunnel is offline; see the mcp-root note."
   - id: mcp-server-card
     class: free
     host: mcp.a-11-oy.com
     path: /.well-known/mcp/server-card.json
     methods: [GET]
     evidence: "hatun-mcp route /.well-known/mcp/server-card.json; MONETIZATION_REPORT 4.5.1."
+    note: "2026-11-14: 502 while the MCP cloudflared tunnel is offline; see the mcp-root note."
   - id: proof-root
     class: free
     host: a11oy.net
     path: /
     methods: [GET]
-    evidence: "run3.log 402 -> run4.log 200 'a11oy Proof Registry | SZL Holdings' after rule 56a20485 was disabled at 16:27:24Z."
+    evidence: "run3.log 402 -> run4.log 200 'a11oy Proof Registry | SZL Holdings' after rule 56a20485 was disabled at 16:27:24Z. 2026-11-14: SBFM skip rule 017fd36759d744d8a3aa93db91e03d01 on the proof-site free paths; owner-device probe 200."
   - id: proof-pricing
     class: free
     host: a11oy.net
     path: /pricing/
     methods: [GET]
-    evidence: "a11oy-net pricing/index.html (GitHub Pages); MONETIZATION_REPORT 4.5.1. Not yet observed live."
+    evidence: "a11oy-net pricing/index.html (GitHub Pages); MONETIZATION_REPORT 4.5.1. Not yet observed live. 2026-11-14: SBFM skip rule 017fd36759d744d8a3aa93db91e03d01; owner-device probe 200."
   - id: proof-experiments
     class: free
     host: a11oy.net
     path: /experiments/
     methods: [GET]
-    evidence: "a11oy-net experiments/index.html; rule a539c1ed ('Proof experimental endpoints (bots)') disabled at 16:27:25Z. Not yet observed live."
+    evidence: "a11oy-net experiments/index.html; rule a539c1ed ('Proof experimental endpoints (bots)') disabled at 16:27:25Z. Not yet observed live. 2026-11-14: SBFM skip rule 017fd36759d744d8a3aa93db91e03d01; owner-device probe 200."
   - id: proof-www-redirect
     class: free
     host: www.a11oy.net
@@ -232,7 +233,7 @@ checks:
     host: ntfy.a11oy.net
     path: /
     methods: [GET]
-    evidence: "run3.log 402 -> run4.log 200 'ntfy.sh | Send push notifications to your phone via PUT/POST'."
+    evidence: "run3.log 402 -> run4.log 200 'ntfy.sh | Send push notifications to your phone via PUT/POST'. 2026-11-14: SBFM skip rule 370eb290ee0245649f0c1f396bd732fa; owner-device probe 200."
 
   # ---------------------------------------------------------------- paid
   - id: inference-completions
@@ -266,25 +267,25 @@ checks:
     host: inference.a-11-oy.com
     path: /metrics
     methods: [GET]
-    evidence: "WAF custom rule 'Block vLLM internals on inference host (/metrics /docs /openapi.json /redoc) except HQ Vigil [2026-11-06 leak fix]', action block (inspect_1610). Config verified (THREAD_AUDIT D-21); live response not yet observed."
+    evidence: "WAF custom rule 'Block vLLM internals on inference host (/metrics /docs /openapi.json /redoc) except HQ Vigil [2026-11-06 leak fix]', action block (inspect_1610). Config verified (THREAD_AUDIT D-21); live response not yet observed. 2026-11-14: SBFM skip rule 3740ff2c9aee47e5a8ebfc1584a5bbe1 lets the WAF block (not a bot challenge) serve this path; owner-device probe returned the plain block 403."
   - id: inference-docs
     class: internal
     host: inference.a-11-oy.com
     path: /docs
     methods: [GET]
-    evidence: "Same WAF block rule."
+    evidence: "Same WAF block rule. 2026-11-14: SBFM skip rule 3740ff2c9aee47e5a8ebfc1584a5bbe1; the WAF block (not a bot challenge) serves the 403."
   - id: inference-openapi
     class: internal
     host: inference.a-11-oy.com
     path: /openapi.json
     methods: [GET]
-    evidence: "Same WAF block rule."
+    evidence: "Same WAF block rule. 2026-11-14: SBFM skip rule 3740ff2c9aee47e5a8ebfc1584a5bbe1; the WAF block (not a bot challenge) serves the 403."
   - id: inference-redoc
     class: internal
     host: inference.a-11-oy.com
     path: /redoc
     methods: [GET]
-    evidence: "Same WAF block rule."
+    evidence: "Same WAF block rule. 2026-11-14: SBFM skip rule 3740ff2c9aee47e5a8ebfc1584a5bbe1; the WAF block (not a bot challenge) serves the 403."
 
 not_covered:
   - target: "api.a-11-oy.com, gateway.a-11-oy.com, meter.a-11-oy.com, gpu2.a-11-oy.com"
@@ -301,3 +302,5 @@ not_covered:
     reason: "showcase gave no response in run3.log; dev. is DNS-only GitHub Pages (no Cloudflare paywall can apply); szlholdings.com is pending its nameserver switch."
   - target: "mcp.a-11-oy.com /mcp transport"
     reason: "No enabled paywall rule (e610a927 and 2dac25fc are disabled); hatun-mcp answers 401 operator_key_required to anonymous calls. Not a paywall surface today."
+  - target: "gdw.a-11-oy.com /"
+    reason: "Removed from checks on 2026-11-14: the gdw-frontier Space was folded private (a11oy #3420) and the DNS-only hostname now answers 404, so the old origin-authentication outcome is gone; re-add a check only when the fold is reversed or the hostname is repointed."
