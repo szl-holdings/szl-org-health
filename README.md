@@ -387,6 +387,34 @@ currently private, so the public-repository 60-day disablement does not apply
 to the supervisor itself; if the repository is made public, the supervisor
 carries the same boundary.
 
+## Edge contract
+
+`.github/workflows/edge-contract.yml` checks every six hours (plus manual
+dispatch) that the Cloudflare edge gives an **unpaid, unauthenticated** client
+what the owner decided. [`edge/contract.yaml`](edge/contract.yaml) declares,
+per host and path: free surfaces get 2xx, 3xx or an origin 401/403 and never
+402; paid machine endpoints get 402 with an x402 `PAYMENT-REQUIRED` header
+whose decoded amount, scheme, network, asset, payTo and resource URL equal the
+live rule; internal paths get a 403 that is not a bot challenge.
+[`edge/check_contract.py`](edge/check_contract.py) (standard library only)
+sends one GET, and on paid endpoints also one POST with the invalid body `{}`,
+follows no redirects, labels each answer (`402-paywall`, `403-challenge`,
+`5xx-origin` and so on), writes `reports/edge-contract-receipt.json` with a
+`.sha256` sidecar, and exits 1 on any violation. The job needs no secrets and
+only `contents: read`.
+
+```bash
+python -I -B edge/check_contract.py --validate-only
+python -m unittest tests.test_edge_contract -v
+```
+
+The tests run against a local `http.server` stub, so they prove the checker's
+behaviour, not the edge's; only a scheduled or dispatched run's receipt says
+what the edge did. A GitHub-hosted runner is not a verified bot, so rules that
+charge verified bots only are outside what this check can see. Semantics,
+the seed evidence and the proof boundary are in
+[`docs/EDGE_CONTRACT.md`](docs/EDGE_CONTRACT.md).
+
 ## Tests
 
 ```bash
@@ -427,6 +455,8 @@ schemas/series-a-diligence.schema.json  public artifact structure contract
 autonomic/               fixed-origin state machine and recovery policy
 governance/scheduled-watches.v1.json  declared external scheduled watches
 tools/scheduled_watch_liveness.py  read-only watch liveness supervisor
+edge/contract.yaml     unpaid-client edge contract (free, paid, internal)
+edge/check_contract.py stdlib edge contract checker and receipt writer
 tools/run_with_validated_github_reader.py  credential selection after inventory validation
 tools/run_repository_file_audit.py  organization file audit behind the inventory gate
 tools/pypi_release_path_audit.py  nightly fail-closed PyPI release-path audit
