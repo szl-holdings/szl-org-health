@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [{ name = "Stephen Lutar", email = "stephen@szlholdings.com" }]
-dependencies = ["dnspython==2.9.0"]
+dependencies = ["dnspython==2.9.2"]
 
 [project.urls]
 Homepage = "https://a-11-oy.com"
