@@ -227,6 +227,9 @@ The archive fixture is 9886 bytes with SHA-256
 `1c4956b577bfc43e6e341551f1347b902f0c90d77b4063f86acfbf2c7c16efcb`.
 It came from [coordinator artifact 11389074520](https://github.com/szl-holdings/szl-org-health/actions/runs/37412426623/artifacts/11389074520),
 whose ZIP SHA-256 is `08d55482659fae7f998a809d7349a984bc50025d9119b0dce1f8989d2d3db50e`.
+That artifact has since expired under the Actions retention policy (the run now
+lists no artifacts), so the link no longer resolves; the committed fixture and
+the digests recorded here are the durable evidence.
 The original run `37412426623`, job `112103605426`, tested head
 `b1b1c5dfcaf5fd5ec21ac21ad9cf149ec10bcc92` through merge
 `cc5c9d2618d31a821bdab5326fec205093d159b4` with main
