@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please credit SZL Holdings."
+title: "szl-org-health - Live org-health dashboard â€” real GitHub CI/security, Hugging Face Space health, and DNS/email-auth posture. Honest UNKNOWN over fabricated green (SZL Holdings governed-AI estate)"
+authors:
+  - name: SZL Holdings
+type: software
+license: Apache-2.0
+repository-code: "https://github.com/szl-holdings/szl-org-health"
+keywords:
+  - governed-ai
+  - provenance
+  - szl-holdings
