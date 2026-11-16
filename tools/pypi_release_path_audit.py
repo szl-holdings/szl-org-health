@@ -14,9 +14,11 @@ For every package in governance/pypi/pypi-packages.v1.json this checks, from liv
           * project URLs point at the GitHub source (what PyPI verifies against the Trusted Publisher)
   Internal/never pyproject files carry the `Private :: Do Not Upload` classifier.
 
-Attestation fields are inspected for consistency, but signatures, certificate chains, and
-transparency proofs are not cryptographically verified. Provenance, publisher identity,
-and certificate-derived tag identity therefore remain UNKNOWN even when metadata agrees.
+Without --verify-attestations this stays a stdlib-only metadata audit: signatures,
+chains and transparency are not verified. Explicit verification downloads and hashes
+all observed release artifacts and verifies their existing publish attestations. It
+can resolve provenance, source-tag identity and signed deployment-environment
+identity. Missing signed claims and opaque rulesets remain UNKNOWN.
 Outcomes are PASS | FAIL | UNKNOWN per check; UNKNOWN is never PASS. Exit code 1 if any
 FAIL or UNKNOWN remains. Writes a JSON report and a Markdown summary.
 """
@@ -277,7 +279,7 @@ def check(results: list, pkg: str, name: str, status: str, detail: str = "") -> 
     print(f"[{status:7}] {pkg:28} {name:40} {detail}", flush=True)
 
 
-def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], results: list, repo_cache: dict) -> None:
+def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], results: list, repo_cache: dict, *, verify_attestations: bool = False) -> None:
     pkg, repo = m["name"], m["repo"]
     env_name = m.get("github_environment", "pypi")
     # --- canonical workflow + gate bytes
@@ -486,6 +488,7 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
         failures.append(f"missing from Simple API={missing_files}")
     if missing_links:
         failures.append(f"missing or noncanonical per-file PyPI provenance link={missing_links}")
+    observed_provenances = {}
     expected_publisher = ("GitHub", f"{org}/{repo}", "publish-pypi.yml", env_name)
     for name in sorted(latest - set(missing_files) - set(missing_links)):
         json_hash = release_files[name].get("digests")
@@ -506,6 +509,7 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
         if not isinstance(prov, dict) or not isinstance(prov.get("attestation_bundles"), list) or not prov["attestation_bundles"]:
             unknowns.append(f"{name}: no readable attestation bundles")
             continue
+        observed_provenances[name] = prov
         for b in prov["attestation_bundles"]:
             if not isinstance(b, dict) or not isinstance(b.get("publisher"), dict):
                 unknowns.append(f"{name}: malformed attestation bundle")
@@ -553,14 +557,55 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
     metadata_status = "FAIL" if failures else "UNKNOWN" if unknowns else "PASS"
     check(results, pkg, "pypi:distribution-metadata", metadata_status,
           evidence or f"{len(latest)}/{len(latest)} release files have matching URLs, hashes, and statement subjects (unverified metadata)")
-    check(results, pkg, "pypi:provenance", "FAIL" if failures else "UNKNOWN",
+    crypto = {"status": "UNKNOWN", "detail": "cryptographic verification not requested"}
+    if verify_attestations and metadata_status == "PASS" and not publisher_failures and not publisher_unknowns:
+        if __package__:
+            from .pypi_distribution_verification import verify_release
+        else:
+            from pypi_distribution_verification import verify_release
+        crypto = verify_release(pkg, version, release_files, observed_provenances, expected_publisher)
+        if crypto.get("status") == "VERIFIED" and (
+            set(crypto.get("files", {})) != latest
+            or set(crypto.get("source_digests", [])) != digests
+            or len(digests) != 1
+            or crypto.get("publisher_environment_cryptographically_verified") is not True
+            or crypto.get("publisher_environment") != env_name
+            or crypto.get("publisher_environment_evidence") != "FULCIO_CERTIFICATE_DEPLOYMENT_ENVIRONMENT"
+            or any(
+                not isinstance(crypto["files"][name], dict)
+                or crypto["files"][name].get("status") != "VERIFIED"
+                or crypto["files"][name].get("sha256") != release_files[name]["digests"]["sha256"].lower()
+                or type(crypto["files"][name].get("bytes")) is not int
+                or crypto["files"][name]["bytes"] <= 0
+                or type(crypto["files"][name].get("attestations_verified")) is not int
+                or crypto["files"][name]["attestations_verified"] <= 0
+                or crypto["files"][name].get("source_digest") not in digests
+                or crypto["files"][name].get("publisher_environment") != env_name
+                or crypto["files"][name].get("publisher_environment_evidence") != "FULCIO_CERTIFICATE_DEPLOYMENT_ENVIRONMENT"
+                for name in latest
+            )
+        ):
+            crypto = {"status": "FAILED", "detail": "live cryptographic evidence does not bind the observed release"}
+    crypto_verified = crypto.get("status") == "VERIFIED"
+    provenance_status = "FAIL" if failures or crypto.get("status") == "FAILED" else "PASS" if crypto_verified else "UNKNOWN"
+    check(results, pkg, "pypi:provenance", provenance_status,
+          evidence or crypto["detail"] if verify_attestations else
           evidence or "metadata is consistent; DSSE signatures, certificates, and transparency not cryptographically verified")
-    if publisher_failures:
-        check(results, pkg, "pypi:publisher-identity", "FAIL", "; ".join(publisher_failures))
+    if verify_attestations:
+        results[-1]["live_verification"] = crypto
+        check(results, pkg, "pypi:publisher-repository-workflow",
+              "PASS" if crypto_verified else "FAIL" if publisher_failures or crypto.get("status") == "FAILED" else "UNKNOWN",
+              crypto["detail"])
+    if publisher_failures or crypto.get("status") == "FAILED":
+        check(results, pkg, "pypi:publisher-identity", "FAIL", "; ".join(publisher_failures) or crypto["detail"])
+    elif crypto_verified:
+        check(results, pkg, "pypi:publisher-identity", "PASS",
+              f"repository/workflow identity and environment={env_name!r} verified from every signed release certificate")
     else:
         reason = "; ".join(publisher_unknowns + unknowns + failures)
         check(results, pkg, "pypi:publisher-identity", "UNKNOWN",
-              reason or f"reported publisher={expected_publisher!r}; cryptographic identity not verified")
+              reason or (crypto["detail"] if verify_attestations else
+                         f"reported publisher={expected_publisher!r}; cryptographic identity not verified"))
     if metadata_status != "PASS":
         check(results, pkg, "github:release-tag", "UNKNOWN", f"per-file source digest unverified: {evidence}")
         return
@@ -595,7 +640,9 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
         commit = target["sha"]
     exc = m.get("tag_exception") or {}
     if commit == digest:
-        check(results, pkg, "github:release-tag", "UNKNOWN", f"{tag} -> {commit[:12]} matches unverified certificate metadata; signature and certificate chain unverified")
+        check(results, pkg, "github:release-tag", "PASS" if crypto_verified else "UNKNOWN",
+              f"{tag} -> {commit[:12]} matches the source digest from every cryptographically verified release artifact"
+              if crypto_verified else f"{tag} -> {commit[:12]} matches unverified certificate metadata; signature and certificate chain unverified")
     elif exc.get("tag") == tag and exc.get("tag_commit") == commit and exc.get("attested_commit") == digest:
         check(results, pkg, "github:release-tag", "UNKNOWN", f"{tag} -> {commit[:12]} matches recorded exception, but certificate metadata is unverified: {exc.get('reason', '')[:80]}")
     else:
@@ -631,9 +678,14 @@ def main() -> int:
     ap.add_argument("--report", default="pypi-release-path-report.json")
     ap.add_argument("--summary", default="pypi-release-path-summary.md")
     ap.add_argument("--only", nargs="*", help="limit to these package names")
+    ap.add_argument("--verify-attestations", action="store_true", help="verify observed artifact bytes and publish signatures live; does not waive environment or ruleset UNKNOWN")
     args = ap.parse_args()
 
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+    if args.only:
+        unknown_packages = set(args.only) - {m.get("name") for m in manifest["packages"]}
+        if unknown_packages:
+            ap.error("unknown selected package(s): " + ", ".join(sorted(unknown_packages)))
     org = manifest["owner"]["github_org"]
     canon_dir = Path(args.canonical_dir)
     sys.path.insert(0, str(canon_dir))
@@ -655,27 +707,29 @@ def main() -> int:
         if args.only and m.get("name") not in args.only:
             continue
         if m["status"] in ("published", "queued"):
-            audit_release_repo(http, org, m, canon, results, repo_cache)
+            audit_release_repo(http, org, m, canon, results, repo_cache, verify_attestations=args.verify_attestations)
         elif m["status"] in ("internal", "never"):
             audit_private_marker(http, org, m, results, published_names)
         else:  # hold / third-party: informational only
             check(results, m.get("name") or m["path"], "manifest:hold", "PASS", m.get("reason", ""))
 
     counts = {s: sum(1 for r in results if r["status"] == s) for s in ("PASS", "FAIL", "UNKNOWN")}
-    verdict = "PASS" if counts["FAIL"] == 0 and counts["UNKNOWN"] == 0 else "FAIL"
+    verdict = "PASS" if results and counts["FAIL"] == 0 and counts["UNKNOWN"] == 0 else "FAIL"
     report = {"schema": "szl.pypi-release-path-audit.v1", "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-              "manifest_generated_at": manifest.get("generated_at"), "canonical": {k: v for k, v in canon.items() if k != "render"}, "counts": counts, "verdict": verdict, "results": results}
-    Path(args.report).write_text(json.dumps(report, indent=1))
-    lines = [f"# PyPI release-path audit — {verdict}", "", f"Generated {report['generated_at']} · PASS {counts['PASS']} · FAIL {counts['FAIL']} · UNKNOWN {counts['UNKNOWN']}", ""]
+              "cryptographic_verification_requested": args.verify_attestations, "manifest_generated_at": manifest.get("generated_at"), "canonical": {k: v for k, v in canon.items() if k != "render"}, "counts": counts, "verdict": verdict, "results": results}
+    Path(args.report).write_text(json.dumps(report, indent=1), encoding="utf-8")
+    lines = [f"# PyPI release-path audit - {verdict}", "", f"Generated {report['generated_at']} - PASS {counts['PASS']} - FAIL {counts['FAIL']} - UNKNOWN {counts['UNKNOWN']}", ""]
     bad = [r for r in results if r["status"] != "PASS"]
     if bad:
         lines += ["| package | check | status | detail |", "|---|---|---|---|"]
         lines += [f"| {r['package']} | {r['check']} | {r['status']} | {r['detail'][:120]} |" for r in bad]
-    else:
+    elif results:
         lines.append("Every check passed against live GitHub and PyPI state.")
-    Path(args.summary).write_text("\n".join(lines) + "\n")
+    else:
+        lines.append("No eligible evidence checks were performed; audit fails closed.")
+    Path(args.summary).write_text("\n".join(lines) + "\n", encoding="utf-8")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
     print(json.dumps(counts), verdict)
     return 0 if verdict == "PASS" else 1
