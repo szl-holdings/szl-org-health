@@ -83,3 +83,21 @@ changes still require reviewed propagation to each consumer; the audit continues
 See `reason` fields in the manifest: `szl-forge-inference` (layout),
 `szl-brand` (assets, CC-BY-4.0), `gdw-frontier` and `defensive-control-plane` (private sources),
 `nexus-dynamics` (lab binding). Each needs a decision, not a workaround.
+
+
+## Explicit canonical security profiles
+
+The renderer preserves repository-specific release controls for the root packages
+`szl-provctl` and `szl-evidence-mandate`, in the `pypi` environment. Both install
+build tools using the committed `requirements/ci/pypi-release.txt` hash lock.
+The evidence-mandate profile additionally executes its existing gated-wheel
+CycloneDX helper and uploads `sbom/` as a separate, required, 90-day artifact.
+No SBOM is included in `pypi-dists`. The shared action pins, release-only publication,
+OIDC permissions, package versions and gate script are unchanged.
+
+The profile follows parsed package identity, including whitespace-normalized
+specifications. A profiled package in an unadmitted multi-package layout, directory
+or environment fails generation rather than losing controls. Other consumers and
+the generic canonical copy render exactly as before. The release-path auditor
+already calls this renderer, so regenerated profiled consumers remain canonical.
+The profiles do not authorize a release or establish SBOM completeness.

@@ -47,6 +47,64 @@ def parse(spec):
     return pkgs
 
 
+# Repository-specific security contracts are canonical, not disposable hand edits.
+# Unknown ordinary packages retain the byte-identical default release path.
+RELEASE_PROFILES = {
+    "szl-provctl": {"build_lock": "requirements/ci/pypi-release.txt", "sbom": False},
+    "szl-evidence-mandate": {"build_lock": "requirements/ci/pypi-release.txt", "sbom": True},
+}
+
+
+def apply_release_profile(workflow: str, packages: list[dict]) -> str:
+    """Preserve admitted release controls for the two explicit consumers.
+
+    No arbitrary shell/YAML extension is accepted. A recognized package in a
+    different layout/environment or a changed template fails closed rather than
+    silently dropping its security requirements. Other renders stay unchanged.
+    """
+    matches = [p for p in packages if p["name"] in RELEASE_PROFILES]
+    if not matches:
+        return workflow
+    if len(packages) != 1 or packages[0]["dir"] != "." or packages[0]["environment"] != "pypi":
+        raise ValueError("release security profile requires one root package in pypi")
+    profile = RELEASE_PROFILES[matches[0]["name"]]
+    install = 'python -m pip install --disable-pip-version-check --upgrade "build>=1.2" "twine>=6.1"'
+    if workflow.count(install) != 1:
+        raise ValueError("canonical build-tooling anchor changed")
+    workflow = workflow.replace(
+        install,
+        "python -m pip install --disable-pip-version-check --require-hashes -r " + profile["build_lock"],
+        1,
+    )
+    anchor = '      - ".github/scripts/szl_pypi_release_gate.py"\n'
+    if workflow.count(anchor) != 2:
+        raise ValueError("canonical release trigger anchors changed")
+    paths = ["requirements/ci/pypi-release.in", profile["build_lock"]]
+    if profile["sbom"]:
+        paths.append(".github/scripts/szl_pypi_sbom.py")
+    workflow = workflow.replace(anchor, anchor + "".join(f'      - "{path}"\n' for path in paths))
+    if profile["sbom"]:
+        marker = "\n  publish:\n"
+        if workflow.count(marker) != 1:
+            raise ValueError("canonical single-package publish anchor changed")
+        steps = """      - name: Generate CycloneDX SBOM
+        run: >-
+          python .github/scripts/szl_pypi_sbom.py generate
+          --dist dist
+          --pyproject pyproject.toml
+          --outdir sbom
+          --venv "$RUNNER_TEMP/sbom-venv"
+""" + use("upload", 6, "Upload CycloneDX SBOM") + """
+        with:
+          name: cyclonedx-sbom
+          path: sbom/
+          if-no-files-found: error
+          retention-days: 90
+"""
+        workflow = workflow.replace(marker, steps + marker, 1)
+    return workflow
+
+
 def render(spec: str) -> str:
     pkgs = parse(spec)
     multi = len(pkgs) > 1
@@ -177,7 +235,7 @@ jobs:
           skip-existing: false   # a duplicate version is a release error, never a silent skip
           print-hash: true
 """)
-    return head + "".join(jobs)
+    return apply_release_profile(head + "".join(jobs), pkgs)
 
 
 TRANSPORT_PROBE_PATH = ".github/workflows/pypi-artifact-transport.yml"
