@@ -1,11 +1,13 @@
 """Every PyPI publisher mapping, rendered by the REAL canonical generator.
 
-governance/pypi/pypi-packages.v1.json declares 39 releasable packages (all 39
-published after the 2026-11-15 release wave) in 38 repositories, each releasing through exactly one
+governance/pypi/pypi-packages.v1.json declares 41 releasable packages (all 41
+published: the 2026-11-15 release wave plus szl-atelier and szl-drift,
+measured live on PyPI on 2026-11-16) in 40 repositories, each releasing through exactly one
 `.github/workflows/publish-pypi.yml`. CONSUMER_SPECS is the exact SZL_PACKAGES
-line of each of those 38 committed workflows, read at each repository's HEAD (36 on
+line of each of those 40 committed workflows, read at each repository's HEAD (36 on
 2026-10-14, all then byte-identical to this renderer at org-health 9bf5447;
-szl-formulas and szl-provctl on 2026-11-16, both byte-identical to this renderer). The table and the manifest are bound in both directions, so a package
+szl-formulas and szl-provctl on 2026-11-16, both byte-identical to this renderer;
+szl-atelier and szl-drift on 2026-11-16, both byte-identical to this renderer). The table and the manifest are bound in both directions, so a package
 cannot be queued, published or moved without its workflow mapping being stated.
 
 For every mapping the shipped generator renders the workflow and the shipped
@@ -71,9 +73,11 @@ CONSUMER_SPECS = {
     "khipu-consensus": "khipu-consensus=python:pypi",
     "khipu-x1": "khipu-x1=.:pypi",
     "lyte-services": "szl-lyte-enterprise=.:pypi",
+    "szl-atelier": "szl-atelier=.:pypi",
     "szl-calibration": "szl-calibration=.:pypi",
     "szl-ci-witness": "szl-ci-witness=.:pypi",
     "szl-crosscheck": "szl-crosscheck=.:pypi",
+    "szl-drift": "szl-drift=.:pypi",
     "szl-eclipse": "szl-eclipse=.:pypi",
     "szl-energy-attest": "szl-energy-attest=.:pypi",
     "szl-engine-bench": "szl-engine-bench=.:pypi",
@@ -251,14 +255,14 @@ ALL_CANONICAL_PASS = {
 
 
 class PublisherMappingCensusTests(unittest.TestCase):
-    def test_manifest_declares_39_packages_in_38_workflows(self):
+    def test_manifest_declares_41_packages_in_40_workflows(self):
         packages = releasable()
-        self.assertEqual(len(packages), 39)
-        self.assertEqual(len({(m["repo"], m["workflow"]) for m in packages}), 38)
-        self.assertEqual(collections.Counter(m["status"] for m in packages), {"published": 39})
+        self.assertEqual(len(packages), 41)
+        self.assertEqual(len({(m["repo"], m["workflow"]) for m in packages}), 40)
+        self.assertEqual(collections.Counter(m["status"] for m in packages), {"published": 41})
         self.assertEqual({m["workflow"] for m in packages}, {WORKFLOW})
         self.assertEqual(WORKFLOW, ".github/workflows/publish-pypi.yml")
-        self.assertEqual(len({m["name"] for m in packages}), 39)
+        self.assertEqual(len({m["name"] for m in packages}), 41)
 
     def test_every_releasable_package_has_exactly_one_workflow_mapping(self):
         grouped = manifest_by_repo()
@@ -298,7 +302,7 @@ class PublisherMappingCensusTests(unittest.TestCase):
             self.assertLessEqual(len(parsed), 2, repo)
             shapes[shape].append(repo)
         self.assertEqual({shape: len(repos) for shape, repos in shapes.items()},
-                         {"root": 36, "subdirectory": 1, "dual": 1})
+                         {"root": 38, "subdirectory": 1, "dual": 1})
         self.assertEqual(shapes["subdirectory"], ["khipu-consensus"])
         self.assertEqual(shapes["dual"], ["szl-evidence-litellm"])
 
@@ -382,7 +386,7 @@ class ConsumerParityTests(unittest.TestCase):
                         self.assertEqual(canonical_statuses(rows), {**ALL_CANONICAL_PASS, "canonical:workflow": "FAIL"})
                 checked[kind] += 1
         self.assertEqual(checked, expected)
-        self.assertEqual(checked, {"pin": 230, "comment": 230})
+        self.assertEqual(checked, {"pin": 242, "comment": 242})
 
     def test_one_byte_and_line_ending_drift_fail(self):
         for repo, spec in CONSUMER_SPECS.items():
