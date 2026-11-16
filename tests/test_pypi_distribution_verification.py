@@ -93,8 +93,8 @@ def synthetic_attestation_library(*, fail_verify=False):
 
     pypi = types.ModuleType("pypi_attestations")
     pypi.Attestation = SyntheticAttestation
-    pypi.Distribution = lambda **kwargs: types.SimpleNamespace(**kwargs)
-    pypi.GitHubPublisher = lambda **kwargs: types.SimpleNamespace(**kwargs)
+    pypi.Distribution = types.SimpleNamespace
+    pypi.GitHubPublisher = types.SimpleNamespace
     pypi.VerificationError = SyntheticVerificationError
     cryptography = types.ModuleType("cryptography")
     cryptography.x509 = types.SimpleNamespace(

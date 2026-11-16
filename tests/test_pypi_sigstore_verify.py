@@ -7,9 +7,9 @@ import json
 import sys
 import tempfile
 import unittest
+import unittest.mock as mock
 from contextlib import redirect_stdout
 from pathlib import Path
-from unittest import mock
 
 from tools import pypi_sigstore_verify as cli
 
