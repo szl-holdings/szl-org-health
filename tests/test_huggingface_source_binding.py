@@ -127,11 +127,12 @@ class HuggingFaceSourceBindingTests(unittest.TestCase):
         ):
             return normalize_space(item)
 
-    def test_anatomy_fixture_is_observed_only_after_exact_authenticated_checks(self):
+    def test_v1_metadata_agreement_remains_unknown_without_artifact_provenance(self):
         result = self.resolve()
 
-        self.assertEqual(result["source_binding_state"], "OBSERVED")
-        self.assertEqual(result["operational_state"], "OPERATIONAL_SOURCE_BOUND")
+        self.assertEqual(result["source_binding_state"], "UNKNOWN")
+        self.assertEqual(result["operational_state"], "RUNTIME_HEALTHY_UNBOUND")
+        self.assertIn("artifact provenance", result["source_binding_error"])
         self.assertEqual(result["source_repository"], "szl-holdings/anatomy")
         self.assertEqual(result["source_revision"], ANATOMY_SOURCE_REVISION)
         self.assertEqual(result["source_hf_revision"], ANATOMY_HF_REVISION)
@@ -141,6 +142,35 @@ class HuggingFaceSourceBindingTests(unittest.TestCase):
             set(result["source_evidence"]),
             {".well-known/szl-source.json", "hf-deploy-manifest.json"},
         )
+
+    def test_coherent_unverified_digest_cannot_promote_operational_source_binding(self):
+        from census.governance import evaluate_report
+
+        for digest in ("1" * 64, "f" * 64):
+            with self.subTest(digest=digest):
+                source = anatomy_source_document()
+                manifest = anatomy_manifest()
+                source["deployment"]["artifact_set_sha256"] = digest
+                manifest["deployment"]["artifact_set_sha256"] = digest
+                # A matching claim is not independently observed artifact evidence.
+                with mock.patch(
+                    "census.huggingface.request_bytes",
+                    return_value=(None, {}, "http403"),
+                ):
+                    result = self.resolve(
+                        source_response=(source, {}, None),
+                        manifest_response=(manifest, {}, None),
+                    )
+                self.assertEqual(result["source_binding_state"], "UNKNOWN")
+                self.assertEqual(result["operational_state"], "RUNTIME_HEALTHY_UNBOUND")
+                self.assertEqual(result["source_artifact_sha256"], digest)
+
+                report = {"sources": {"huggingface": {"ok": True, "data": {
+                    "authentication": {"inventory_scope": "AUTHENTICATED_BOUNDED"},
+                    "assets": {"spaces": {"ok": True, "items": [result]}},
+                }}}}
+                controls = {value["id"]: value for value in evaluate_report(report)["controls"]}
+                self.assertEqual(controls["HF-DYNAMIC-SPACE-SOURCE-BINDING"]["status"], "FAIL")
 
     def test_http_200_html_and_malformed_json_are_invalid_not_evidence(self):
         cases = {
