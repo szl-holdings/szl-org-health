@@ -84,8 +84,20 @@ def _validate_header_token(token: str) -> None:
         raise ProbeError("INVALID_CREDENTIAL_FORMAT") from None
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _default_request_json(url: str, token: str) -> Any:
     _validate_header_token(token)
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        valid_url = parsed.scheme == "https" and parsed.netloc == "api.github.com" and not parsed.fragment
+    except (TypeError, ValueError):
+        valid_url = False
+    if not valid_url:
+        raise ProbeError("REQUEST_URL_INVALID") from None
     headers = {
         "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {token}",
@@ -96,7 +108,10 @@ def _default_request_json(url: str, token: str) -> Any:
     for attempt in range(2):
         try:
             request = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(request, timeout=30) as response:
+            opener = urllib.request.build_opener(NoRedirect())
+            with opener.open(request, timeout=30) as response:
+                if response.geturl() != url:
+                    raise ProbeError("RESPONSE_IDENTITY_CHANGED") from None
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
                 if len(raw) > MAX_RESPONSE_BYTES:
                     raise ProbeError("RESPONSE_TOO_LARGE")
