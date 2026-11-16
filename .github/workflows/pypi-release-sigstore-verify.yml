@@ -1,0 +1,72 @@
+name: PyPI sigstore verification
+
+# Cryptographically verifies (sigstore: DSSE signature, Fulcio chain, Rekor
+# inclusion, GitHub Trusted Publisher identity) the PEP 740 publish
+# attestations of every published package in governance/pypi/pypi-packages.v1.json,
+# against live PyPI distribution bytes, plus the release tag commit match.
+# Additive evidence for the release-path audit's UNKNOWN "not cryptographically
+# verified" checks. The main audit tool stays stdlib-only and unchanged.
+# Fail-closed: the job fails on any FAILED or UNKNOWN.
+
+on:
+  schedule:
+    - cron: "53 5 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "governance/pypi/**"
+      - "tools/pypi_sigstore_verify.py"
+      - ".github/workflows/pypi-release-sigstore-verify.yml"
+  push:
+    branches: [main]
+    paths:
+      - "governance/pypi/**"
+      - "tools/pypi_sigstore_verify.py"
+      - ".github/workflows/pypi-release-sigstore-verify.yml"
+
+permissions: {}
+
+concurrency:
+  group: pypi-release-sigstore-verify-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: verify / fail-closed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned verification tooling
+        run: python -m pip install --quiet "sigstore==4.5.1" "pypi-attestations==0.0.31"
+
+      - name: Verify publish attestations (PEP 740)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python tools/pypi_sigstore_verify.py --report pypi-sigstore-report.json --summary pypi-sigstore-summary.md
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pypi-sigstore-report
+          path: |
+            pypi-sigstore-report.json
+            pypi-sigstore-summary.md
+          if-no-files-found: error
