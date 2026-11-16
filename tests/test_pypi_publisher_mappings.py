@@ -1,7 +1,7 @@
 """Every PyPI publisher mapping, rendered by the REAL canonical generator.
 
-governance/pypi/pypi-packages.v1.json declares 37 releasable packages (20
-published, 17 queued) in 36 repositories, each releasing through exactly one
+governance/pypi/pypi-packages.v1.json declares 37 releasable packages (all 37
+published after the 2026-11-15 release wave) in 36 repositories, each releasing through exactly one
 `.github/workflows/publish-pypi.yml`. CONSUMER_SPECS is the exact SZL_PACKAGES
 line of each of those 36 committed workflows, read at each repository's HEAD on
 2026-10-14 (all 36 were then byte-identical to this renderer at org-health
@@ -253,7 +253,7 @@ class PublisherMappingCensusTests(unittest.TestCase):
         packages = releasable()
         self.assertEqual(len(packages), 37)
         self.assertEqual(len({(m["repo"], m["workflow"]) for m in packages}), 36)
-        self.assertEqual(collections.Counter(m["status"] for m in packages), {"published": 20, "queued": 17})
+        self.assertEqual(collections.Counter(m["status"] for m in packages), {"published": 37})
         self.assertEqual({m["workflow"] for m in packages}, {WORKFLOW})
         self.assertEqual(WORKFLOW, ".github/workflows/publish-pypi.yml")
         self.assertEqual(len({m["name"] for m in packages}), 37)
@@ -575,8 +575,11 @@ class ReleaseGateIdentityTests(unittest.TestCase):
 
 class QueuedPublisherInertTests(unittest.TestCase):
     def test_queued_publishers_pass_only_while_pypi_has_no_project(self):
-        queued = [m for m in releasable() if m["status"] == "queued"]
-        self.assertEqual(len(queued), 17)
+        # The 2026-11-15 release wave published every queued package, so the census
+        # holds no queued subjects. Synthesize one so the fail-closed inertness
+        # contract stays covered regardless of census state.
+        queued = [dict(m, status="queued") for m in releasable() if m["status"] == "published"][:1]
+        self.assertTrue(queued)
         for m in queued:
             workflow = gen.render(CONSUMER_SPECS[m["repo"]]).encode("utf-8")
             for status, verdict in ((404, "PASS"), (200, "FAIL"), (503, "UNKNOWN"), (403, "UNKNOWN")):
