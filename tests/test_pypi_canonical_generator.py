@@ -163,11 +163,14 @@ def pin_contract_errors(text: str, packages: list[tuple[str, str]],
         if (step["ref"], version) not in defined:
             errors.append(f"{where}: {step['ref']} with comment {version} is not one PINS entry")
     uploads = [s for s in steps if s["ref"].startswith("actions/upload-artifact@")]
-    if [(s["job"], s["name"]) for s in uploads] != [
+    expected_uploads = [
         ("build", "Upload release-gate receipt"),
         ("build", "Upload distributions (release only)"),
-    ]:
-        errors.append(f"expected exactly the two build uploads, got {[(s['job'], s['name']) for s in uploads]}")
+    ]
+    if packages == [("szl-evidence-mandate", "pypi")]:
+        expected_uploads.append(("build", "Upload CycloneDX SBOM"))
+    if [(s["job"], s["name"]) for s in uploads] != expected_uploads:
+        errors.append(f"expected exactly the declared build uploads {expected_uploads}, got {[(s['job'], s['name']) for s in uploads]}")
     upload_pins = {(s["ref"], s["comment"][1] if s["comment"] else None) for s in uploads}
     if upload_pins != {upload}:
         errors.append(f"uploads do not share the pin and comment {upload}: {sorted(upload_pins, key=str)}")
@@ -217,7 +220,22 @@ def release_contract_errors(text: str, spec: str, packages: list[tuple[str, str]
             errors.append(message)
 
     expect(f'\n  SZL_PACKAGES: "{spec}"\n' in text, "SZL_PACKAGES line is not the declared spec")
-    expect("\n" + TRIGGERS + "\n" in text, "triggers changed")
+    # These accepted profiles are independent test expectations, not inferred
+    # from the generated output or RELEASE_PROFILES under test.
+    locked_profile = packages in ([("szl-provctl", "pypi")], [("szl-evidence-mandate", "pypi")])
+    sbom_profile = packages == [("szl-evidence-mandate", "pypi")]
+    triggers = TRIGGERS
+    if locked_profile:
+        anchor = '      - ".github/scripts/szl_pypi_release_gate.py"\n'
+        extra = ('      - "requirements/ci/pypi-release.in"\n'
+                 '      - "requirements/ci/pypi-release.txt"\n')
+        if sbom_profile:
+            extra += '      - ".github/scripts/szl_pypi_sbom.py"\n'
+        triggers = triggers.replace(anchor, anchor + extra)
+        expect("--require-hashes -r requirements/ci/pypi-release.txt" in text,
+               "profile requires hash-locked release tooling")
+        expect('--upgrade "build>=1.2"' not in text, "profile has unbounded release tooling")
+    expect("\n" + triggers + "\n" in text, "triggers changed")
     for forbidden in ("workflow_dispatch", "schedule:", "workflow_run", "pull_request_target"):
         expect(forbidden not in text, f"unexpected trigger {forbidden}")
     expect(text.count("\npermissions: {}\n") == 1, "top-level permissions must be exactly {}")
@@ -246,7 +264,15 @@ def release_contract_errors(text: str, spec: str, packages: list[tuple[str, str]
         expect("    timeout-minutes: 20" in build, "build timeout changed")
         expect("          name: release-gate-receipt" in build, "receipt artifact name changed")
         expect(build.count("          name: pypi-dists") == 1, "distribution artifact name changed")
-        expect(build.count("          if-no-files-found: error") == 2, "upload if-no-files-found changed")
+        expect(build.count("          if-no-files-found: error") == (3 if sbom_profile else 2),
+               "upload if-no-files-found changed")
+        if sbom_profile:
+            for required in ("      - name: Generate CycloneDX SBOM",
+                             "          python .github/scripts/szl_pypi_sbom.py generate",
+                             "      - name: Upload CycloneDX SBOM",
+                             "          name: cyclonedx-sbom", "          path: sbom/",
+                             "          retention-days: 90"):
+                expect(required in build, "required SBOM contract missing: " + required.strip())
         expect(all("id-token" not in line for line in build), "build job must never hold id-token")
     for (name, environment), job in zip(packages, publish_jobs):
         if job not in jobs:
