@@ -121,11 +121,11 @@ class PyPIAuditTrustTests(TestCase):
             "permission-organization-administration": "read",
             "permission-administration": "read",
         })
-        self.assertTrue(pypi.items() <= census.items())
+        self.assertLessEqual(pypi.items(), census.items())
         census_job = self.workflow.split("\n  census:\n", 1)[1].split("\n  file-audit:\n", 1)[0]
         existing_secrets = set(re.findall(r"\bsecrets\.([A-Z_0-9]+)", census_job))
         pypi_secrets = set(re.findall(r"\bsecrets\.([A-Z_0-9]+)", self.job))
-        self.assertTrue(pypi_secrets <= existing_secrets)
+        self.assertLessEqual(pypi_secrets, existing_secrets)
         self.assertIn("python -B -m tools.run_with_validated_github_reader", self.job)
         self.assertIn("--minimum-repositories 123", self.job)
         self.assertIn("python -B tools/pypi_release_path_audit.py", self.job)
