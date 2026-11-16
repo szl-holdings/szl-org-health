@@ -302,7 +302,7 @@ class PublisherMappingCensusTests(unittest.TestCase):
             self.assertLessEqual(len(parsed), 2, repo)
             shapes[shape].append(repo)
         self.assertEqual({shape: len(repos) for shape, repos in shapes.items()},
-                         {"root": 36, "subdirectory": 1, "dual": 1})
+                         {"root": 38, "subdirectory": 1, "dual": 1})
         self.assertEqual(shapes["subdirectory"], ["khipu-consensus"])
         self.assertEqual(shapes["dual"], ["szl-evidence-litellm"])
 
@@ -386,7 +386,7 @@ class ConsumerParityTests(unittest.TestCase):
                         self.assertEqual(canonical_statuses(rows), {**ALL_CANONICAL_PASS, "canonical:workflow": "FAIL"})
                 checked[kind] += 1
         self.assertEqual(checked, expected)
-        self.assertEqual(checked, {"pin": 230, "comment": 230})
+        self.assertEqual(checked, {"pin": 242, "comment": 242})
 
     def test_one_byte_and_line_ending_drift_fail(self):
         for repo, spec in CONSUMER_SPECS.items():
