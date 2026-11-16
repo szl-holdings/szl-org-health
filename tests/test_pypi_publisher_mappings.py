@@ -1,10 +1,10 @@
 """Every PyPI publisher mapping, rendered by the REAL canonical generator.
 
-governance/pypi/pypi-packages.v1.json declares 37 releasable packages (20
-published, 17 queued) in 36 repositories, each releasing through exactly one
+governance/pypi/pypi-packages.v1.json declares 39 releasable packages (24
+published, 15 queued) in 38 repositories, each releasing through exactly one
 `.github/workflows/publish-pypi.yml`. CONSUMER_SPECS is the exact SZL_PACKAGES
-line of each of those 36 committed workflows, read at each repository's HEAD on
-2026-10-14 (all 36 were then byte-identical to this renderer at org-health
+line of each of those 38 committed workflows, read at each repository's HEAD on
+2026-10-14 (all 38 were then byte-identical to this renderer at org-health
 9bf5447). The table and the manifest are bound in both directions, so a package
 cannot be queued, published or moved without its workflow mapping being stated.
 
@@ -71,9 +71,11 @@ CONSUMER_SPECS = {
     "khipu-consensus": "khipu-consensus=python:pypi",
     "khipu-x1": "khipu-x1=.:pypi",
     "lyte-services": "szl-lyte-enterprise=.:pypi",
+    "szl-atelier": "szl-atelier=.:pypi",
     "szl-calibration": "szl-calibration=.:pypi",
     "szl-ci-witness": "szl-ci-witness=.:pypi",
     "szl-crosscheck": "szl-crosscheck=.:pypi",
+    "szl-drift": "szl-drift=.:pypi",
     "szl-eclipse": "szl-eclipse=.:pypi",
     "szl-energy-attest": "szl-energy-attest=.:pypi",
     "szl-engine-bench": "szl-engine-bench=.:pypi",
@@ -249,14 +251,14 @@ ALL_CANONICAL_PASS = {
 
 
 class PublisherMappingCensusTests(unittest.TestCase):
-    def test_manifest_declares_37_packages_in_36_workflows(self):
+    def test_manifest_declares_39_packages_in_38_workflows(self):
         packages = releasable()
-        self.assertEqual(len(packages), 37)
-        self.assertEqual(len({(m["repo"], m["workflow"]) for m in packages}), 36)
-        self.assertEqual(collections.Counter(m["status"] for m in packages), {"published": 20, "queued": 17})
+        self.assertEqual(len(packages), 39)
+        self.assertEqual(len({(m["repo"], m["workflow"]) for m in packages}), 38)
+        self.assertEqual(collections.Counter(m["status"] for m in packages), {"published": 24, "queued": 15})
         self.assertEqual({m["workflow"] for m in packages}, {WORKFLOW})
         self.assertEqual(WORKFLOW, ".github/workflows/publish-pypi.yml")
-        self.assertEqual(len({m["name"] for m in packages}), 37)
+        self.assertEqual(len({m["name"] for m in packages}), 39)
 
     def test_every_releasable_package_has_exactly_one_workflow_mapping(self):
         grouped = manifest_by_repo()
@@ -296,7 +298,7 @@ class PublisherMappingCensusTests(unittest.TestCase):
             self.assertLessEqual(len(parsed), 2, repo)
             shapes[shape].append(repo)
         self.assertEqual({shape: len(repos) for shape, repos in shapes.items()},
-                         {"root": 34, "subdirectory": 1, "dual": 1})
+                         {"root": 36, "subdirectory": 1, "dual": 1})
         self.assertEqual(shapes["subdirectory"], ["khipu-consensus"])
         self.assertEqual(shapes["dual"], ["szl-evidence-litellm"])
 
@@ -380,7 +382,7 @@ class ConsumerParityTests(unittest.TestCase):
                         self.assertEqual(canonical_statuses(rows), {**ALL_CANONICAL_PASS, "canonical:workflow": "FAIL"})
                 checked[kind] += 1
         self.assertEqual(checked, expected)
-        self.assertEqual(checked, {"pin": 218, "comment": 218})
+        self.assertEqual(checked, {"pin": 230, "comment": 230})
 
     def test_one_byte_and_line_ending_drift_fail(self):
         for repo, spec in CONSUMER_SPECS.items():
@@ -576,7 +578,7 @@ class ReleaseGateIdentityTests(unittest.TestCase):
 class QueuedPublisherInertTests(unittest.TestCase):
     def test_queued_publishers_pass_only_while_pypi_has_no_project(self):
         queued = [m for m in releasable() if m["status"] == "queued"]
-        self.assertEqual(len(queued), 17)
+        self.assertEqual(len(queued), 15)
         for m in queued:
             workflow = gen.render(CONSUMER_SPECS[m["repo"]]).encode("utf-8")
             for status, verdict in ((404, "PASS"), (200, "FAIL"), (503, "UNKNOWN"), (403, "UNKNOWN")):
