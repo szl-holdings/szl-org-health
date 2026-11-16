@@ -1,22 +1,14 @@
 #!/usr/bin/env python3
-"""Sigstore verification of PyPI publish attestations for the szl-holdings estate.
+"""Verify live distribution bytes, publish attestations, and source tags.
 
-For every published package in governance/pypi/pypi-packages.v1.json this
-downloads the latest distribution files from PyPI, hashes them locally, and
-cryptographically verifies each PEP 740 publish attestation with sigstore:
-DSSE signature, Fulcio certificate chain, Rekor transparency inclusion, and
-the GitHub Trusted Publisher identity (OIDC issuer, source repository,
-workflow file, environment). It also confirms that the verified
-certificate's source repository digest matches the release tag commit.
-
-Fail-closed: any infrastructure or verification error is UNKNOWN, never
-PASS. Exit code 1 if any FAILED or UNKNOWN remains. Writes a JSON report
-and a Markdown summary.
+This command shares the exact-release verifier with the release-path audit.
+VERIFIED covers artifact bytes, signatures, repository/workflow identity, and
+source-tag identity, including the signed deployment-environment extension.
+This subset report cannot establish aggregate production readiness.
 """
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -28,11 +20,14 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pypi_attestations import Attestation, Distribution, GitHubPublisher
+if __package__:
+    from .pypi_distribution_verification import ENVIRONMENT_EVIDENCE, MAX_RELEASE_FILES, NoRedirect, verify_release
+else:
+    from pypi_distribution_verification import ENVIRONMENT_EVIDENCE, MAX_RELEASE_FILES, NoRedirect, verify_release
 
 GH_API = "https://api.github.com"
-PREDICATE_PUBLISH = "https://docs.pypi.org/attestations/publish/v1"
-SOURCE_DIGEST_OID = "1.3.6.1.4.1.57264.1.13"
+MAX_METADATA_BYTES = 16 * 1024 * 1024
+VERIFICATION_SCOPE = "distribution-bytes-publish-attestations-repository-workflow-deployment-environment-source-tag"
 
 
 def norm(name: str) -> str:
@@ -43,141 +38,150 @@ class FetchError(Exception):
     pass
 
 
-def fetch(url: str, token: str | None = None, raw: bool = False, retries: int = 3):
-    headers = {"User-Agent": "szl-pypi-sigstore-verify/1"}
-    if token and urllib.parse.urlsplit(url).hostname == "api.github.com":
+def fetch(url: str, token: str | None = None, retries: int = 3):
+    """Bounded JSON reads; no redirect may carry GitHub authorization elsewhere."""
+    parsed = urllib.parse.urlsplit(url)
+    if (parsed.scheme != "https" or parsed.netloc not in ("pypi.org", "api.github.com")
+            or parsed.query or parsed.fragment):
+        raise FetchError("metadata URL rejected")
+    headers = {"User-Agent": "szl-pypi-sigstore-verify/2", "Accept-Encoding": "identity"}
+    if token and parsed.netloc == "api.github.com":
         headers["Authorization"] = f"Bearer {token}"
         headers["X-GitHub-Api-Version"] = "2022-11-28"
-    last: Exception | None = None
+    last = "unavailable"
     for attempt in range(retries):
         try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=60) as r:
-                body = r.read()
-                return r.status, body if raw else json.loads(body or b"null")
-        except urllib.error.HTTPError as e:
-            return e.code, None
-        except Exception as e:  # noqa: BLE001
-            last = e
-            time.sleep(2 * (attempt + 1))
-    raise FetchError(f"{url}: {last}")
+            request = urllib.request.Request(url, headers=headers)
+            opener = urllib.request.build_opener(NoRedirect())
+            with opener.open(request, timeout=30) as response:
+                if response.status != 200 or response.geturl() != url:
+                    raise FetchError("metadata response identity changed")
+                if response.headers.get("Content-Encoding", "identity") != "identity":
+                    raise FetchError("encoded metadata refused")
+                body = response.read(MAX_METADATA_BYTES + 1)
+                if len(body) > MAX_METADATA_BYTES:
+                    raise FetchError("metadata exceeds byte bound")
+                return response.status, json.loads(body or b"null")
+        except urllib.error.HTTPError as exc:
+            return exc.code, None
+        except FetchError:
+            raise
+        except Exception as exc:  # credentials and server response bodies never enter reports
+            last = type(exc).__name__
+            if attempt + 1 < retries:
+                time.sleep(2 * (attempt + 1))
+    raise FetchError("metadata fetch unavailable: " + last)
+
+
+def release_tag_commit(org: str, repo: str, tag: str, token: str | None) -> str | None:
+    status, ref = fetch(
+        f"{GH_API}/repos/{org}/{repo}/git/ref/tags/{urllib.parse.quote(tag, safe='')}",
+        token=token,
+    )
+    if status != 200 or not isinstance(ref, dict):
+        return None
+    obj, seen = ref.get("object"), set()
+    for _ in range(8):
+        if not isinstance(obj, dict):
+            return None
+        sha = obj.get("sha")
+        if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+            return None
+        sha = sha.lower()
+        if obj.get("type") == "commit":
+            return sha
+        if obj.get("type") != "tag" or sha in seen:
+            return None
+        seen.add(sha)
+        status, annotated = fetch(f"{GH_API}/repos/{org}/{repo}/git/tags/{sha}", token=token)
+        if status != 200 or not isinstance(annotated, dict) or annotated.get("sha") != sha:
+            return None
+        obj = annotated.get("object")
+    return None
 
 
 def verify_package(org: str, m: dict, token: str | None, results: list, verbose: bool) -> None:
-    pkg, repo, env = m["name"], m["repo"], m.get("github_environment", "pypi")
-    tag_pattern = m.get("tag_pattern", "v<version>")
-    entry: dict = {"package": pkg, "repo": repo, "files": {}, "status": "UNKNOWN", "detail": ""}
+    pkg, repo, environment = m["name"], m["repo"], m.get("github_environment", "pypi")
+    entry = {
+        "package": pkg, "repo": repo, "files": {}, "status": "UNKNOWN", "detail": "",
+        "verification_scope": VERIFICATION_SCOPE,
+        "publisher_environment_cryptographically_verified": False,
+        "publisher_environment_evidence": "UNVERIFIED",
+    }
     results.append(entry)
     try:
-        st, meta = fetch(f"https://pypi.org/pypi/{norm(pkg)}/json")
-        if st != 200 or not isinstance(meta, dict) or not isinstance((meta.get("info") or {}).get("version"), str):
-            entry["detail"] = f"project fetch HTTP {st}"
+        status, meta = fetch(f"https://pypi.org/pypi/{norm(pkg)}/json")
+        if (status != 200 or not isinstance(meta, dict) or not isinstance(meta.get("info"), dict)
+                or not isinstance(meta["info"].get("version"), str) or not meta["info"]["version"]):
+            entry["detail"] = f"project metadata unavailable (HTTP {status})"
             return
-        version = meta["info"]["version"]
-        entry["version"] = version
-        files = [u for u in (meta.get("urls") or []) if isinstance(u, dict) and isinstance(u.get("filename"), str)]
-        if not files:
-            entry["status"] = "FAILED"
-            entry["detail"] = "release metadata lists no files"
+        version = entry["version"] = meta["info"]["version"]
+        rows = meta.get("urls")
+        if (not isinstance(rows, list) or not 0 < len(rows) <= MAX_RELEASE_FILES
+                or any(not isinstance(row, dict) or not isinstance(row.get("filename"), str)
+                       or not row["filename"] for row in rows)
+                or len({row["filename"] for row in rows}) != len(rows)):
+            entry.update(status="FAILED", detail="release file list empty, malformed, duplicate, or excessive")
             return
-        failures: list[str] = []
-        unknowns: list[str] = []
-        digests: set[str] = set()
-        publisher_ok = True
-        for u in files:
-            name, url = u["filename"], u.get("url")
-            meta_sha = (u.get("digests") or {}).get("sha256")
-            try:
-                st, body = fetch(url, raw=True)
-                if st != 200 or not body:
-                    unknowns.append(f"{name}: download HTTP {st}")
-                    continue
-                local_sha = hashlib.sha256(body).hexdigest()
-                dist = Distribution(name=name, digest=local_sha)
-                if not isinstance(meta_sha, str) or meta_sha.lower() != local_sha:
-                    failures.append(f"{name}: local SHA-256 differs from PyPI metadata")
-                prov_url = (f"https://pypi.org/integrity/{norm(pkg)}/"
-                            f"{urllib.parse.quote(version, safe='')}/{urllib.parse.quote(name, safe='')}/provenance")
-                st, prov = fetch(prov_url)
-                if st != 200 or not isinstance(prov, dict) or not isinstance(prov.get("attestation_bundles"), list) or not prov["attestation_bundles"]:
-                    failures.append(f"{name}: provenance missing or unreadable (HTTP {st})")
-                    continue
-                for bundle in prov["attestation_bundles"]:
-                    p = bundle.get("publisher") or {}
-                    observed = (p.get("kind"), p.get("repository"), p.get("workflow"), p.get("environment"))
-                    expected = ("GitHub", f"{org}/{repo}", "publish-pypi.yml", env)
-                    if observed != expected:
-                        publisher_ok = False
-                        failures.append(f"{name}: publisher={observed!r}; expected={expected!r}")
-                    attestations = bundle.get("attestations") or []
-                    if not attestations:
-                        failures.append(f"{name}: no attestations in bundle")
-                        continue
-                    for raw_att in attestations:
-                        att = Attestation.model_validate(raw_att)
-                        identity = GitHubPublisher(repository=f"{org}/{repo}", workflow="publish-pypi.yml", environment=env)
-                        predicate_type, _pred = att.verify(identity, dist)
-                        if predicate_type != PREDICATE_PUBLISH:
-                            failures.append(f"{name}: predicate type {predicate_type!r}")
-                        for oid, value in (att.certificate_claims or {}).items():
-                            if oid == SOURCE_DIGEST_OID and re.fullmatch(r"[0-9a-fA-F]{40}", str(value)):
-                                digests.add(str(value).lower())
-                if verbose:
-                    print(f"[ok ] {pkg} {name}: signature, chain, transparency, identity verified", flush=True)
-            except Exception as e:  # noqa: BLE001
-                unknowns.append(f"{name}: {str(e)[:160]}")
-        entry["attested_digests"] = sorted(digests)
-        tag = tag_pattern.replace("<version>", version)
+        files = {row["filename"]: row for row in rows}
+        provenances = {}
+        for name in sorted(files):
+            url = (f"https://pypi.org/integrity/{norm(pkg)}/"
+                   f"{urllib.parse.quote(version, safe='')}/{urllib.parse.quote(name, safe='')}/provenance")
+            status, provenance = fetch(url)
+            if status != 200 or not isinstance(provenance, dict):
+                entry["detail"] = f"publish provenance unavailable (HTTP {status})"
+                return
+            provenances[name] = provenance
+        expected = ("GitHub", f"{org}/{repo}", "publish-pypi.yml", environment)
+        verified = verify_release(pkg, version, files, provenances, expected)
+        entry.update(
+            files=verified.get("files", {}),
+            attested_digests=verified.get("source_digests", []),
+            observed_at=verified.get("observed_at"),
+            verifier_versions=verified.get("verifier_versions", {}),
+        )
+        if verified.get("status") != "VERIFIED":
+            entry.update(status="FAILED" if verified.get("status") == "FAILED" else "UNKNOWN",
+                         detail=verified.get("detail", "live verification unavailable"))
+            return
+        digests = entry["attested_digests"]
+        if (set(entry["files"]) != set(files) or not isinstance(digests, list) or len(digests) != 1
+                or not isinstance(digests[0], str) or not re.fullmatch(r"[0-9a-f]{40}", digests[0])
+                or verified.get("publisher_environment_cryptographically_verified") is not True
+                or verified.get("publisher_environment_evidence") != ENVIRONMENT_EVIDENCE
+                or verified.get("publisher_environment") != environment
+                or any(not isinstance(item, dict)
+                       or item.get("publisher_environment") != environment
+                       or item.get("publisher_environment_evidence") != ENVIRONMENT_EVIDENCE
+                       for item in entry["files"].values())):
+            entry.update(status="FAILED", detail="live verifier returned incomplete release or signed environment coverage")
+            return
+        entry.update(publisher_environment_cryptographically_verified=True,
+                     publisher_environment=environment, publisher_environment_evidence=ENVIRONMENT_EVIDENCE)
+        tag = m.get("tag_pattern", "v<version>").replace("<version>", version)
         entry["tag"] = tag
-        tag_commit = None
-        if len(digests) == 1:
-            st, ref = fetch(f"{GH_API}/repos/{org}/{repo}/git/ref/tags/{urllib.parse.quote(tag, safe='')}", token=token)
-            if st == 200 and isinstance(ref, dict):
-                obj = ref.get("object") or {}
-                if obj.get("type") in ("commit", "tag"):
-                    tag_commit = obj.get("sha")
-                if obj.get("type") == "tag":
-                    st2, tobj = fetch(f"{GH_API}/repos/{org}/{repo}/git/tags/{obj['sha']}", token=token)
-                    target = (tobj or {}).get("object") if isinstance(tobj, dict) else None
-                    if isinstance(target, dict) and target.get("type") == "commit":
-                        tag_commit = target.get("sha")
-        entry["tag_commit"] = tag_commit
-        if failures:
-            entry["status"] = "FAILED"
-            entry["detail"] = "; ".join((failures + unknowns)[:4])
+        commit = entry["tag_commit"] = release_tag_commit(org, repo, tag, token)
+        if commit is None:
+            entry["detail"] = "release tag commit unavailable"
             return
-        if unknowns:
-            entry["status"] = "UNKNOWN"
-            entry["detail"] = "; ".join(unknowns[:4])
+        if commit != digests[0]:
+            exception = m.get("tag_exception") or {}
+            if (exception.get("tag") == tag and exception.get("tag_commit") == commit
+                    and exception.get("attested_commit") == digests[0]):
+                entry["detail"] = "tag matches a recorded exception; exact source-tag identity remains unverified"
+                return
+            entry.update(status="FAILED", detail="release tag commit differs from verified source digest")
             return
-        if not publisher_ok:
-            entry["status"] = "FAILED"
-            entry["detail"] = "publisher mismatch"
-            return
-        if len(digests) != 1:
-            entry["status"] = "UNKNOWN"
-            entry["detail"] = f"attested source digests {sorted(digests)}"
-            return
-        if tag_commit is None:
-            entry["status"] = "UNKNOWN"
-            entry["detail"] = f"tag {tag} lookup unavailable"
-            return
-        if tag_commit == digests.pop():
-            entry["status"] = "VERIFIED"
-            entry["detail"] = f"{version}: attestations verified; tag {tag} matches attested source commit"
-            return
-        exc = m.get("tag_exception") or {}
-        if exc.get("tag") == tag and exc.get("tag_commit") == tag_commit and exc.get("attested_commit") in digests:
-            entry["status"] = "UNKNOWN"
-            entry["detail"] = f"tag {tag} matches recorded exception: {exc.get('reason', '')[:100]}"
-            return
-        entry["status"] = "FAILED"
-        entry["detail"] = f"tag {tag} commit {str(tag_commit)[:12]} differs from attested digest"
-    except FetchError as e:
-        entry["detail"] = f"fetch error: {str(e)[:200]}"
-    except Exception as e:  # noqa: BLE001
-        entry["status"] = "UNKNOWN"
-        entry["detail"] = f"unexpected error: {str(e)[:200]}"
+        entry.update(
+            status="VERIFIED",
+            detail=f"{version}: exact artifacts, publish attestations, signed environment and source tag verified",
+        )
+        if verbose:
+            for name in sorted(entry["files"]):
+                print(f"[ok ] {pkg} {name}: bytes, signature, repository/workflow, signed environment and source verified", flush=True)
+    except Exception as exc:
+        entry.update(status="UNKNOWN", detail="verification unavailable: " + type(exc).__name__)
 
 
 def main() -> int:
@@ -185,41 +189,49 @@ def main() -> int:
     ap.add_argument("--manifest", default="governance/pypi/pypi-packages.v1.json")
     ap.add_argument("--report", default="pypi-sigstore-report.json")
     ap.add_argument("--summary", default="pypi-sigstore-summary.md")
-    ap.add_argument("--only", nargs="*", help="limit to these package names")
+    ap.add_argument("--only", nargs="+", help="limit to these published package names")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
-
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+    published = [m for m in manifest["packages"] if m.get("status") == "published"]
+    if args.only:
+        unavailable = set(args.only) - {m.get("name") for m in published}
+        if unavailable:
+            ap.error("not a published manifest package: " + ", ".join(sorted(unavailable)))
     org = manifest["owner"]["github_org"]
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    results: list[dict] = []
-    for m in manifest["packages"]:
-        if m.get("status") != "published":
+    results = []
+    for package in published:
+        if args.only and package.get("name") not in args.only:
             continue
-        if args.only and m.get("name") not in args.only:
-            continue
-        verify_package(org, m, token, results, args.verbose)
-        r = results[-1]
-        print(f"[{r['status']:8}] {r['package']:28} {str(r.get('version', '?')):12} {r['detail'][:90]}", flush=True)
-
-    counts = {s: sum(1 for r in results if r["status"] == s) for s in ("VERIFIED", "FAILED", "UNKNOWN")}
-    verdict = "PASS" if counts["FAILED"] == 0 and counts["UNKNOWN"] == 0 else "FAIL"
+        verify_package(org, package, token, results, args.verbose)
+        row = results[-1]
+        print(f"[{row['status']:8}] {row['package']:28} {str(row.get('version', '?')):12} {row['detail'][:120]}", flush=True)
+    counts = {s: sum(1 for row in results if row["status"] == s) for s in ("VERIFIED", "FAILED", "UNKNOWN")}
+    verdict = "PASS" if results and counts["FAILED"] == 0 and counts["UNKNOWN"] == 0 else "FAIL"
     report = {
         "schema": "szl.pypi-sigstore-verify.v1",
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "verdict": verdict,
-        "counts": counts,
-        "results": results,
+        "verification_scope": VERIFICATION_SCOPE,
+        "publisher_environment_cryptographically_verified": bool(results) and all(
+            row.get("publisher_environment_cryptographically_verified") is True for row in results),
+        "verdict": verdict, "counts": counts, "results": results,
     }
     Path(args.report).write_text(json.dumps(report, indent=1), encoding="utf-8")
-    lines = [f"# PyPI sigstore verification - {verdict}", "",
-             f"Generated {report['generated_at']} - VERIFIED {counts['VERIFIED']} - FAILED {counts['FAILED']} - UNKNOWN {counts['UNKNOWN']}", ""]
-    bad = [r for r in results if r["status"] != "VERIFIED"]
+    lines = [
+        f"# PyPI sigstore verification - {verdict}", "",
+        f"Generated {report['generated_at']} - VERIFIED {counts['VERIFIED']} - FAILED {counts['FAILED']} - UNKNOWN {counts['UNKNOWN']}", "",
+        "Scope: exact distribution bytes, publish signatures, repository/workflow identity, signed deployment environment, and source tags.",
+        "A verified environment requires the signed Fulcio extension on every attestation. This subset report does not establish production readiness.", "",
+    ]
+    bad = [row for row in results if row["status"] != "VERIFIED"]
     if bad:
         lines += ["| package | status | detail |", "|---|---|---|"]
-        lines += [f"| {r['package']} | {r['status']} | {r['detail'][:120]} |" for r in bad]
+        lines += [f"| {row['package']} | {row['status']} | {row['detail'][:120]} |" for row in bad]
+    elif results:
+        lines.append("Every selected published package passed the declared verification scope.")
     else:
-        lines.append("Every published package's publish attestations verified against live PyPI distribution bytes.")
+        lines.append("No published packages were verified; audit fails closed.")
     Path(args.summary).write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(json.dumps(counts), verdict)
     return 0 if verdict == "PASS" else 1

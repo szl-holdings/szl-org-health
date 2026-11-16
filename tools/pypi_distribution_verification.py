@@ -2,8 +2,9 @@
 
 The optional pypi-attestations dependency is imported only on explicit execution.
 Downloaded archives are streamed into hashes, never extracted, installed or run.
-Publisher environment metadata is NOT cryptographically covered by the upstream
-GitHubPublisher policy; callers must preserve that independent evidence boundary.
+The upstream GitHubPublisher policy does not check the deployment environment.
+After verification, require Fulcio's signed deployment-environment extension on
+that same certificate for every attestation; metadata alone cannot satisfy it.
 """
 from __future__ import annotations
 
@@ -14,10 +15,14 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 PUBLISH_PREDICATE = "https://docs.pypi.org/attestations/publish/v1"
 SOURCE_DIGEST_OID = "1.3.6.1.4.1.57264.1.13"
+DEPLOYMENT_ENVIRONMENT_OID = "1.3.6.1.4.1.57264.1.23"
+ENVIRONMENT_EVIDENCE = "FULCIO_CERTIFICATE_DEPLOYMENT_ENVIRONMENT"
+MAX_ENVIRONMENT_UTF8_BYTES = 1024
 MAX_FILE_BYTES = 128 * 1024 * 1024
 MAX_RELEASE_BYTES = 512 * 1024 * 1024
 MAX_RELEASE_FILES = 32
@@ -89,7 +94,50 @@ def distribution_digest(url: str, filename: str) -> tuple[str, int]:
     return digest.hexdigest(), count
 
 
-def _verify_attestation(raw: dict, filename: str, digest: str, expected: tuple[str, ...]) -> str:
+@dataclass(frozen=True)
+class VerifiedAttestation:
+    source_digest: str
+    publisher_environment: str
+
+
+def _decode_environment_der(value: object) -> str:
+    """Decode one complete canonical DER UTF8String, with no trailing data."""
+    if not isinstance(value, bytes) or not 2 <= len(value) <= MAX_ENVIRONMENT_UTF8_BYTES + 4 or value[0] != 0x0C:
+        raise UnavailableEvidence("verified certificate deployment environment malformed")
+    length, offset = value[1], 2
+    if length & 0x80:
+        width = length & 0x7F
+        if not 1 <= width <= 2 or len(value) < 2 + width or value[2] == 0:
+            raise UnavailableEvidence("verified certificate deployment environment malformed")
+        length = int.from_bytes(value[2:2 + width], "big")
+        offset += width
+        if length < 128 or (width > 1 and length < 256):
+            raise UnavailableEvidence("verified certificate deployment environment malformed")
+    if not 0 < length <= MAX_ENVIRONMENT_UTF8_BYTES or len(value) != offset + length:
+        raise UnavailableEvidence("verified certificate deployment environment malformed")
+    try:
+        environment = value[offset:].decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise UnavailableEvidence("verified certificate deployment environment malformed") from exc
+    if len(environment) > 255 or any(ord(char) < 32 or ord(char) == 127 for char in environment):
+        raise UnavailableEvidence("verified certificate deployment environment malformed")
+    return environment
+
+
+def _verified_certificate_environment(attestation: object) -> str:
+    # certificate_claims in pypi-attestations 0.0.31 exposes only OIDs .8-.22.
+    # Read .23 from the exact certificate bytes used by Attestation.verify.
+    from cryptography import x509
+
+    certificate = x509.load_der_x509_certificate(attestation.verification_material.certificate)
+    try:
+        extension = certificate.extensions.get_extension_for_oid(x509.ObjectIdentifier(DEPLOYMENT_ENVIRONMENT_OID))
+    except x509.ExtensionNotFound as exc:
+        raise UnavailableEvidence("verified certificate deployment environment missing") from exc
+    return _decode_environment_der(getattr(extension.value, "value", None))
+
+
+def _verify_attestation(raw: dict, filename: str, digest: str, expected: tuple[str, ...]) -> VerifiedAttestation:
     # Production trust roots and online TUF refresh remain the library defaults.
     # There is deliberately no custom-root, offline, staging, or skip-verify flag.
     from pypi_attestations import Attestation, Distribution, GitHubPublisher, VerificationError
@@ -104,7 +152,10 @@ def _verify_attestation(raw: dict, filename: str, digest: str, expected: tuple[s
         source = attestation.certificate_claims.get(SOURCE_DIGEST_OID)
         if not isinstance(source, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", source):
             raise UnavailableEvidence("verified certificate lacks an immutable source digest")
-        return source.lower()
+        environment = _verified_certificate_environment(attestation)
+        if environment != expected[3]:
+            raise RejectedEvidence("verified certificate deployment environment differs from declared publisher")
+        return VerifiedAttestation(source.lower(), environment)
     except VerificationError as exc:
         raise RejectedEvidence("signature, subject, trust chain, transparency, or publisher verification failed") from exc
 
@@ -130,7 +181,7 @@ def verify_release(package: str, version: str, files: dict, provenances: dict,
         "schema": "szl.pypi-live-distribution-verification/v1",
         "package": package, "version": version, "status": "UNKNOWN", "files": {},
         "source_digests": [], "publisher_environment_cryptographically_verified": False,
-        "publisher_environment_evidence": "PYPI_METADATA_ONLY",
+        "publisher_environment": None, "publisher_environment_evidence": "UNAVAILABLE",
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "archives_installed_or_executed": False,
     }
@@ -176,10 +227,15 @@ def verify_release(package: str, version: str, files: dict, provenances: dict,
                 if not isinstance(attestations, list) or not 0 < len(attestations) <= 8:
                     raise RejectedEvidence("empty or excessive attestation set")
                 for raw in attestations:
-                    source = _verify_attestation(raw, filename, digest, expected_publisher)
-                    if not isinstance(source, str) or not re.fullmatch(r"[0-9a-f]{40}", source):
-                        raise RejectedEvidence("verifier returned no immutable source digest")
-                    file_sources.add(source)
+                    verified = _verify_attestation(raw, filename, digest, expected_publisher)
+                    if (
+                        not isinstance(verified, VerifiedAttestation)
+                        or not isinstance(verified.source_digest, str)
+                        or not re.fullmatch(r"[0-9a-f]{40}", verified.source_digest)
+                        or verified.publisher_environment != expected_publisher[3]
+                    ):
+                        raise RejectedEvidence("verifier returned incomplete source or environment identity")
+                    file_sources.add(verified.source_digest)
                     attestations_verified += 1
             if len(file_sources) != 1:
                 raise RejectedEvidence("file attestations disagree about source commit")
@@ -187,13 +243,22 @@ def verify_release(package: str, version: str, files: dict, provenances: dict,
             result["files"][filename] = {
                 "sha256": digest, "bytes": size, "attestations_verified": attestations_verified,
                 "source_digest": next(iter(file_sources)), "status": "VERIFIED",
+                "publisher_environment": expected_publisher[3],
+                "publisher_environment_evidence": ENVIRONMENT_EVIDENCE,
             }
         if len(sources) != 1 or set(result["files"]) != set(files):
             raise RejectedEvidence("release artifacts disagree about source or coverage")
-        result.update(status="VERIFIED", source_digests=sorted(sources),
-                      detail="all observed release bytes and publish attestations verified; repository/workflow identity verified; environment is metadata-only")
+        result.update(
+            status="VERIFIED", source_digests=sorted(sources),
+            publisher_environment=expected_publisher[3],
+            publisher_environment_cryptographically_verified=True,
+            publisher_environment_evidence=ENVIRONMENT_EVIDENCE,
+            detail="all observed release bytes and publish attestations verified; repository/workflow identity and signed certificate deployment environment verified",
+        )
     except RejectedEvidence as exc:
         result.update(status="FAILED", detail=str(exc))
+    except UnavailableEvidence as exc:
+        result.update(status="UNKNOWN", detail=str(exc))
     except Exception as exc:  # unavailable dependencies/network/trust material never imply validity
         result.update(status="UNKNOWN", detail="verification unavailable: " + type(exc).__name__)
     return result

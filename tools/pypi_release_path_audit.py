@@ -17,8 +17,8 @@ For every package in governance/pypi/pypi-packages.v1.json this checks, from liv
 Without --verify-attestations this stays a stdlib-only metadata audit: signatures,
 chains and transparency are not verified. Explicit verification downloads and hashes
 all observed release artifacts and verifies their existing publish attestations. It
-can resolve provenance and source-tag identity, but does not cryptographically bind
-the GitHub environment; full publisher identity and opaque rulesets stay UNKNOWN.
+can resolve provenance, source-tag identity and signed deployment-environment
+identity. Missing signed claims and opaque rulesets remain UNKNOWN.
 Outcomes are PASS | FAIL | UNKNOWN per check; UNKNOWN is never PASS. Exit code 1 if any
 FAIL or UNKNOWN remains. Writes a JSON report and a Markdown summary.
 """
@@ -568,6 +568,9 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
             set(crypto.get("files", {})) != latest
             or set(crypto.get("source_digests", [])) != digests
             or len(digests) != 1
+            or crypto.get("publisher_environment_cryptographically_verified") is not True
+            or crypto.get("publisher_environment") != env_name
+            or crypto.get("publisher_environment_evidence") != "FULCIO_CERTIFICATE_DEPLOYMENT_ENVIRONMENT"
             or any(
                 not isinstance(crypto["files"][name], dict)
                 or crypto["files"][name].get("status") != "VERIFIED"
@@ -577,6 +580,8 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
                 or type(crypto["files"][name].get("attestations_verified")) is not int
                 or crypto["files"][name]["attestations_verified"] <= 0
                 or crypto["files"][name].get("source_digest") not in digests
+                or crypto["files"][name].get("publisher_environment") != env_name
+                or crypto["files"][name].get("publisher_environment_evidence") != "FULCIO_CERTIFICATE_DEPLOYMENT_ENVIRONMENT"
                 for name in latest
             )
         ):
@@ -591,13 +596,16 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
         check(results, pkg, "pypi:publisher-repository-workflow",
               "PASS" if crypto_verified else "FAIL" if publisher_failures or crypto.get("status") == "FAILED" else "UNKNOWN",
               crypto["detail"])
-    if publisher_failures:
-        check(results, pkg, "pypi:publisher-identity", "FAIL", "; ".join(publisher_failures))
+    if publisher_failures or crypto.get("status") == "FAILED":
+        check(results, pkg, "pypi:publisher-identity", "FAIL", "; ".join(publisher_failures) or crypto["detail"])
+    elif crypto_verified:
+        check(results, pkg, "pypi:publisher-identity", "PASS",
+              f"repository/workflow identity and environment={env_name!r} verified from every signed release certificate")
     else:
         reason = "; ".join(publisher_unknowns + unknowns + failures)
         check(results, pkg, "pypi:publisher-identity", "UNKNOWN",
-              reason or (f"repository/workflow cryptographically verified; environment={env_name!r} remains PyPI metadata only; GitHubPublisher does not bind environment"
-                         if crypto_verified else f"reported publisher={expected_publisher!r}; cryptographic identity not verified"))
+              reason or (crypto["detail"] if verify_attestations else
+                         f"reported publisher={expected_publisher!r}; cryptographic identity not verified"))
     if metadata_status != "PASS":
         check(results, pkg, "github:release-tag", "UNKNOWN", f"per-file source digest unverified: {evidence}")
         return
@@ -710,7 +718,7 @@ def main() -> int:
     report = {"schema": "szl.pypi-release-path-audit.v1", "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "cryptographic_verification_requested": args.verify_attestations, "manifest_generated_at": manifest.get("generated_at"), "canonical": {k: v for k, v in canon.items() if k != "render"}, "counts": counts, "verdict": verdict, "results": results}
     Path(args.report).write_text(json.dumps(report, indent=1), encoding="utf-8")
-    lines = [f"# PyPI release-path audit â€” {verdict}", "", f"Generated {report['generated_at']} Â· PASS {counts['PASS']} Â· FAIL {counts['FAIL']} Â· UNKNOWN {counts['UNKNOWN']}", ""]
+    lines = [f"# PyPI release-path audit - {verdict}", "", f"Generated {report['generated_at']} - PASS {counts['PASS']} - FAIL {counts['FAIL']} - UNKNOWN {counts['UNKNOWN']}", ""]
     bad = [r for r in results if r["status"] != "PASS"]
     if bad:
         lines += ["| package | check | status | detail |", "|---|---|---|---|"]
