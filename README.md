@@ -74,7 +74,11 @@ performed by this reader.
 ### Space source-binding evidence
 
 Source binding is a separate reading from reachability. A v1 claim requires both
-runtime evidence and an immutable deployment manifest. The v2 reader recognizes
+runtime evidence and an immutable deployment manifest. Matching v1 metadata and
+a verified signed source commit plus successful deployment run still remain
+`UNKNOWN`: the claimed artifact digest has not been independently bound to that
+build. Such metadata cannot promote a Space to `OPERATIONAL_SOURCE_BOUND`.
+Contradictory evidence remains `INVALID`. The v2 reader recognizes
 three exact document families: `szl.hf-deploy-manifest/v2`,
 `szl.source-attestation/v2`, and `szl.build-info/v2`. All three must agree on the
 source and artifact count; the manifest and runtime source must also agree on

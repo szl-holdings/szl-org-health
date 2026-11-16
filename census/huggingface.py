@@ -1561,6 +1561,14 @@ def _resolve_space_source_binding(
             build_info_error=build_info_error,
         )
     github_state, github_error = _authenticate_github_claim(claim)
+    if github_state == "OBSERVED":
+        # Signed source and a successful run do not bind a caller-supplied
+        # artifact digest to that build. Agreement alone must not promote v1.
+        github_state = "UNKNOWN"
+        github_error = (
+            "v1 metadata agrees, but artifact provenance linking the manifest "
+            "to the signed GitHub run is unavailable"
+        )
     return _binding_result(
         github_state,
         error=github_error,
