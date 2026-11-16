@@ -343,7 +343,8 @@ class RenderedPublisherContractTests(unittest.TestCase):
             with mock.patch.dict(gen.PINS, {key: moved}):
                 for repo, spec in CONSUMER_SPECS.items():
                     packages = spec_packages(repo)
-                    sites = {"checkout": 1, "setup_python": 1, "upload": 2,
+                    sites = {"checkout": 1, "setup_python": 1,
+                             "upload": 3 if repo == "szl-evidence-mandate" else 2,
                              "download": len(packages), "publish": len(packages)}[key]
                     text = gen.render(spec)
                     with self.subTest(pin=key, repo=repo):
@@ -374,7 +375,7 @@ class ConsumerParityTests(unittest.TestCase):
             text = gen.render(spec)
             steps, errors = action_steps(text)
             self.assertEqual(errors, [])
-            self.assertEqual(len(steps), 4 + 2 * len(packages))
+            self.assertEqual(len(steps), 4 + 2 * len(packages) + (1 if repo == "szl-evidence-mandate" else 0))
             expected["pin"] += len(steps)
             expected["comment"] += len(steps)
             for kind, line, drifted in mutations(text):
@@ -386,7 +387,8 @@ class ConsumerParityTests(unittest.TestCase):
                         self.assertEqual(canonical_statuses(rows), {**ALL_CANONICAL_PASS, "canonical:workflow": "FAIL"})
                 checked[kind] += 1
         self.assertEqual(checked, expected)
-        self.assertEqual(checked, {"pin": 242, "comment": 242})
+        # The explicit evidence-mandate SBOM adds one shared-pin upload site.
+        self.assertEqual(checked, {"pin": 243, "comment": 243})
 
     def test_one_byte_and_line_ending_drift_fail(self):
         for repo, spec in CONSUMER_SPECS.items():

@@ -84,5 +84,27 @@ class ReleaseProfileTests(unittest.TestCase):
             gen.apply_release_profile(plain, gen.parse('szl-evidence-mandate=.:pypi'))
 
 
+class ProfileContractNegativeTests(unittest.TestCase):
+    def test_missing_sbom_upload_is_rejected_by_cross_consumer_pin_contract(self):
+        from tests.test_pypi_canonical_generator import pin_contract_errors
+        text = gen.render('szl-evidence-mandate=.:pypi')
+        text = text.replace('      - name: Upload CycloneDX SBOM', '      - name: Wrong SBOM upload')
+        self.assertTrue(pin_contract_errors(text, [('szl-evidence-mandate', 'pypi')]))
+
+    def test_missing_hash_requirement_is_rejected_by_cross_consumer_contract(self):
+        from tests.test_pypi_canonical_generator import release_contract_errors
+        name = 'szl-provctl'
+        text = gen.render(name + '=.:pypi').replace('--require-hashes ', '')
+        errors = release_contract_errors(text, name + '=.:pypi', [(name, 'pypi')])
+        self.assertTrue(any('hash-locked' in e for e in errors))
+
+    def test_missing_sbom_generation_is_rejected_by_cross_consumer_contract(self):
+        from tests.test_pypi_canonical_generator import release_contract_errors
+        name = 'szl-evidence-mandate'
+        text = gen.render(name + '=.:pypi').replace('      - name: Generate CycloneDX SBOM', '      - name: Omitted')
+        errors = release_contract_errors(text, name + '=.:pypi', [(name, 'pypi')])
+        self.assertTrue(any('SBOM contract missing' in e for e in errors))
+
+
 if __name__ == '__main__':
     unittest.main()
