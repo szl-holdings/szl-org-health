@@ -824,7 +824,7 @@ def main() -> int:
         lines.append("No eligible evidence checks were performed; audit fails closed.")
     Path(args.summary).write_text("\n".join(lines) + "\n", encoding="utf-8")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
     print(json.dumps(counts), verdict)
     return 0 if verdict == "PASS" else 1
