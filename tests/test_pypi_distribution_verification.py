@@ -8,10 +8,10 @@ import json
 import sys
 import tempfile
 import types
-from pathlib import Path
 import unittest
+import unittest.mock as mock
 from contextlib import contextmanager, redirect_stdout
-from unittest import mock
+from pathlib import Path
 
 from tools import pypi_distribution_verification as verifier
 from tools import pypi_release_path_audit as audit_module
