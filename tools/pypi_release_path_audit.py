@@ -168,6 +168,13 @@ def tag_ruleset_result(http: Http, org: str, repo: str, m: dict, rulesets: objec
     return "FAIL", "; ".join([detail] + failures)
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # urllib otherwise carries Authorization across redirects. Every audit
+        # response must come directly from the exact requested source URL.
+        return None
+
+
 class Http:
     def __init__(self, token: str | None):
         self.token = token
@@ -195,7 +202,10 @@ class Http:
             headers["X-GitHub-Api-Version"] = "2022-11-28"
         req = urllib.request.Request(url, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            opener = urllib.request.build_opener(NoRedirect())
+            with opener.open(req, timeout=60) as r:
+                if r.geturl() != url:
+                    return -1, None
                 body = r.read(MAX_HTTP_RESPONSE_BYTES + 1)
                 if len(body) > MAX_HTTP_RESPONSE_BYTES:
                     return -1, None

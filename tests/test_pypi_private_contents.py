@@ -236,9 +236,13 @@ class PrivateContentsTests(TestCase):
         response.status = 200
         response.read.return_value = b"{}"
         response.__enter__.return_value = response
-        with mock.patch("tools.pypi_release_path_audit.urllib.request.urlopen", return_value=response) as request:
+        with mock.patch("tools.pypi_release_path_audit.urllib.request.build_opener") as opener:
+            request = opener.return_value.open
+            request.return_value = response
+            response.geturl.return_value = API_URL
             Http("test-placeholder").get(API_URL)
             self.assertEqual(request.call_args.args[0].headers.get("Authorization"), "Bearer test-placeholder")
+            response.geturl.return_value = RAW_URL
             Http("test-placeholder").get(RAW_URL, raw=True)
             self.assertNotIn("Authorization", request.call_args.args[0].headers)
 
