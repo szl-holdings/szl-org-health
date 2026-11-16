@@ -1,5 +1,3 @@
-[Reading 604 lines from start (total: 604 lines, 0 remaining)]
-
 """Every PyPI publisher mapping, rendered by the REAL canonical generator.
 
 governance/pypi/pypi-packages.v1.json declares 41 releasable packages (all 41
@@ -608,4 +606,3 @@ class QueuedPublisherInertTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-[executed on device: betterwithage (891076a4-8bcb-4774-a4f4-bd217c113882)]
