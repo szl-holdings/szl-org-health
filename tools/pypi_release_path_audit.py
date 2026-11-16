@@ -14,9 +14,9 @@ For every package in governance/pypi/pypi-packages.v1.json this checks, from liv
           * project URLs point at the GitHub source (what PyPI verifies against the Trusted Publisher)
   Internal/never pyproject files carry the `Private :: Do Not Upload` classifier.
 
-Attestation fields are inspected for consistency, but signatures, certificate chains, and
-transparency proofs are not cryptographically verified. Provenance, publisher identity,
-and certificate-derived tag identity therefore remain UNKNOWN even when metadata agrees.
+Attestation fields are inspected for consistency. Cryptographic provenance, publisher identity,
+and certificate-derived tag identity are promoted only from an exact `--sigstore-report` receipt row
+with status `VERIFIED`; without that receipt they remain UNKNOWN even when metadata agrees.
 Outcomes are PASS | FAIL | UNKNOWN per check; UNKNOWN is never PASS. Exit code 1 if any
 FAIL or UNKNOWN remains. Writes a JSON report and a Markdown summary.
 """
@@ -275,6 +275,104 @@ def attested_subject(statement_b64: object) -> tuple[str, dict] | None:
 def check(results: list, pkg: str, name: str, status: str, detail: str = "") -> None:
     results.append({"package": pkg, "check": name, "status": status, "detail": detail})
     print(f"[{status:7}] {pkg:28} {name:40} {detail}", flush=True)
+
+
+def load_sigstore_receipts(path: str | None) -> dict[str, dict]:
+    """Load only exact, cryptographically verified PEP 740 receipts.
+
+    A missing, malformed, or non-VERIFIED report produces no trusted entries.
+    The release-path audit therefore remains fail-closed when the receipt is
+    absent or incomplete.
+    """
+    if not path:
+        return {}
+    try:
+        report = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    if report.get("schema") != "szl.pypi-sigstore-verify.v1":
+        return {}
+    rows = report.get("results")
+    if not isinstance(rows, list):
+        return {}
+    verified: dict[str, dict] = {}
+    for row in rows:
+        if not isinstance(row, dict) or row.get("status") != "VERIFIED":
+            continue
+        package = row.get("package")
+        repo = row.get("repo")
+        version = row.get("version")
+        tag = row.get("tag")
+        tag_commit = row.get("tag_commit")
+        digests = row.get("attested_digests")
+        if (
+            not isinstance(package, str)
+            or not package
+            or not isinstance(repo, str)
+            or not repo
+            or not isinstance(version, str)
+            or not version
+            or not isinstance(tag, str)
+            or not tag
+            or not isinstance(tag_commit, str)
+            or re.fullmatch(r"[0-9a-fA-F]{40}", tag_commit) is None
+            or not isinstance(digests, list)
+            or len(digests) != 1
+            or not isinstance(digests[0], str)
+            or digests[0].lower() != tag_commit.lower()
+        ):
+            continue
+        verified[norm(package)] = row
+    return verified
+
+
+def apply_sigstore_receipt(results: list[dict], manifest_entry: dict, receipts: dict[str, dict]) -> None:
+    """Promote only the three checks covered by an exact VERIFIED receipt."""
+    package = manifest_entry.get("name")
+    if not isinstance(package, str):
+        return
+    receipt = receipts.get(norm(package))
+    if not isinstance(receipt, dict) or receipt.get("status") != "VERIFIED" or receipt.get("repo") != manifest_entry.get("repo"):
+        return
+    tag_commit = receipt.get("tag_commit")
+    digests = receipt.get("attested_digests")
+    if (
+        not isinstance(tag_commit, str)
+        or re.fullmatch(r"[0-9a-fA-F]{40}", tag_commit) is None
+        or not isinstance(digests, list)
+        or len(digests) != 1
+        or not isinstance(digests[0], str)
+        or digests[0].lower() != tag_commit.lower()
+    ):
+        return
+    version = receipt.get("version")
+    expected_tag = manifest_entry.get("tag_pattern", "v<version>").replace("<version>", str(version))
+    if receipt.get("tag") != expected_tag:
+        return
+    project = next(
+        (
+            row for row in reversed(results)
+            if row.get("package") == package and row.get("check") == "pypi:project"
+        ),
+        None,
+    )
+    if not isinstance(project, dict) or project.get("status") != "PASS" or project.get("detail") != f"latest {version}":
+        return
+    detail = (
+        f"sigstore receipt VERIFIED: PEP 740 DSSE, Fulcio, Rekor, "
+        f"Trusted Publisher, and tag {expected_tag} -> {receipt['tag_commit'][:12]}"
+    )
+    for check_name in ("pypi:provenance", "pypi:publisher-identity", "github:release-tag"):
+        row = next(
+            (
+                candidate for candidate in reversed(results)
+                if candidate.get("package") == package and candidate.get("check") == check_name
+            ),
+            None,
+        )
+        if isinstance(row, dict) and row.get("status") == "UNKNOWN":
+            row["status"] = "PASS"
+            row["detail"] = detail
 
 
 def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], results: list, repo_cache: dict) -> None:
@@ -630,10 +728,12 @@ def main() -> int:
     ap.add_argument("--canonical-dir", default="governance/pypi/canonical")
     ap.add_argument("--report", default="pypi-release-path-report.json")
     ap.add_argument("--summary", default="pypi-release-path-summary.md")
+    ap.add_argument("--sigstore-report", help="verified PEP 740 receipt report produced by pypi_sigstore_verify.py")
     ap.add_argument("--only", nargs="*", help="limit to these package names")
     args = ap.parse_args()
 
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+    sigstore_receipts = load_sigstore_receipts(args.sigstore_report)
     org = manifest["owner"]["github_org"]
     canon_dir = Path(args.canonical_dir)
     sys.path.insert(0, str(canon_dir))
@@ -656,6 +756,7 @@ def main() -> int:
             continue
         if m["status"] in ("published", "queued"):
             audit_release_repo(http, org, m, canon, results, repo_cache)
+            apply_sigstore_receipt(results, m, sigstore_receipts)
         elif m["status"] in ("internal", "never"):
             audit_private_marker(http, org, m, results, published_names)
         else:  # hold / third-party: informational only
@@ -664,7 +765,9 @@ def main() -> int:
     counts = {s: sum(1 for r in results if r["status"] == s) for s in ("PASS", "FAIL", "UNKNOWN")}
     verdict = "PASS" if counts["FAIL"] == 0 and counts["UNKNOWN"] == 0 else "FAIL"
     report = {"schema": "szl.pypi-release-path-audit.v1", "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-              "manifest_generated_at": manifest.get("generated_at"), "canonical": {k: v for k, v in canon.items() if k != "render"}, "counts": counts, "verdict": verdict, "results": results}
+              "manifest_generated_at": manifest.get("generated_at"), "canonical": {k: v for k, v in canon.items() if k != "render"},
+              "sigstore_receipt": {"path": args.sigstore_report, "verified_packages": len(sigstore_receipts)},
+              "counts": counts, "verdict": verdict, "results": results}
     Path(args.report).write_text(json.dumps(report, indent=1))
     lines = [f"# PyPI release-path audit — {verdict}", "", f"Generated {report['generated_at']} · PASS {counts['PASS']} · FAIL {counts['FAIL']} · UNKNOWN {counts['UNKNOWN']}", ""]
     bad = [r for r in results if r["status"] != "PASS"]

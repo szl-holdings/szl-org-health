@@ -6,7 +6,9 @@ import base64
 import copy
 import io
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from contextlib import redirect_stdout
 from unittest import mock
 
@@ -14,7 +16,9 @@ from tools.pypi_release_path_audit import (
     GH_API,
     Http,
     RAW,
+    apply_sigstore_receipt,
     audit_release_repo,
+    load_sigstore_receipts,
     sha256,
 )
 
@@ -187,6 +191,74 @@ class PyPIReleasePathAuditTests(unittest.TestCase):
         self.assertIn(RULESET_DETAIL, http.calls)
         self.assertIn(PROVENANCE[WHEEL], http.calls)
         self.assertIn(PROVENANCE[SDIST], http.calls)
+
+    def test_verified_sigstore_receipt_promotes_only_covered_checks(self):
+        result_map, _ = audit(fixture())
+        receipt = {
+            "package": PACKAGE,
+            "repo": REPO,
+            "status": "VERIFIED",
+            "version": VERSION,
+            "tag": f"v{VERSION}",
+            "tag_commit": DIGEST,
+            "attested_digests": [DIGEST],
+        }
+        rows = list(result_map.values())
+        apply_sigstore_receipt(rows, {"name": PACKAGE, "repo": REPO, "tag_pattern": "v<version>"}, {PACKAGE: receipt})
+
+        for name in ("pypi:provenance", "pypi:publisher-identity", "github:release-tag"):
+            self.assertEqual(result_map[name]["status"], "PASS")
+            self.assertIn("sigstore receipt VERIFIED", result_map[name]["detail"])
+        self.assertEqual(result_map["pypi:distribution-metadata"]["status"], "PASS")
+
+    def test_unmatched_sigstore_receipt_leaves_unknown_fail_closed(self):
+        result_map, _ = audit(fixture())
+        receipt = {
+            "package": PACKAGE,
+            "repo": REPO,
+            "status": "VERIFIED",
+            "version": VERSION,
+            "tag": f"v{VERSION}",
+            "tag_commit": "b" * 40,
+            "attested_digests": ["a" * 40],
+        }
+        rows = list(result_map.values())
+        apply_sigstore_receipt(rows, {"name": PACKAGE, "repo": REPO, "tag_pattern": "v<version>"}, {PACKAGE: receipt})
+
+        for name in ("pypi:provenance", "pypi:publisher-identity", "github:release-tag"):
+            self.assertEqual(result_map[name]["status"], "UNKNOWN")
+
+    def test_load_sigstore_receipts_requires_exact_verified_digest_binding(self):
+        report = {
+            "schema": "szl.pypi-sigstore-verify.v1",
+            "results": [
+                {
+                    "package": PACKAGE,
+                    "repo": REPO,
+                    "status": "VERIFIED",
+                    "version": VERSION,
+                    "tag": f"v{VERSION}",
+                    "tag_commit": DIGEST,
+                    "attested_digests": [DIGEST],
+                },
+                {
+                    "package": "unbound",
+                    "repo": REPO,
+                    "status": "VERIFIED",
+                    "version": VERSION,
+                    "tag": f"v{VERSION}",
+                    "tag_commit": DIGEST,
+                    "attested_digests": ["c" * 40],
+                },
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sigstore.json"
+            path.write_text(json.dumps(report), encoding="utf-8")
+            receipts = load_sigstore_receipts(str(path))
+
+        self.assertEqual(set(receipts), {PACKAGE})
+        self.assertEqual(receipts[PACKAGE]["tag_commit"], DIGEST)
 
     def test_workflow_and_publisher_must_bind_manifest_environment(self):
         responses = fixture()

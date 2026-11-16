@@ -20,6 +20,12 @@ GitHub, or by the fail-closed gate — not by convention.
 Changing a status is a reviewed edit to this file. The nightly audit (`pypi-release-path-audit.yml`)
 fails on any drift between the manifest and live GitHub + PyPI state.
 
+The nightly audit runs the pinned PEP 740 sigstore verifier first. The path audit consumes only
+receipt rows with status `VERIFIED`, matching package/repository/version/tag, and an attested source
+digest equal to the verified tag commit. It promotes only the provenance, publisher-identity, and
+release-tag checks covered by that exact receipt; unmatched or malformed evidence remains `UNKNOWN`
+and still fails closed.
+
 ## The release path
 
 1. Bump `[project].version` on `main`.

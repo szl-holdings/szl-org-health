@@ -57,10 +57,21 @@ jobs:
           python -m py_compile governance/pypi/canonical/szl_pypi_release_gate.py tools/pypi_release_path_audit.py
           python -c "import json; json.load(open('governance/pypi/pypi-packages.v1.json'))"
 
+      - name: Install pinned verification tooling
+        run: python -m pip install --quiet "sigstore==4.5.1" "pypi-attestations==0.0.31"
+
+      - name: Verify publish attestations (PEP 740)
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python tools/pypi_sigstore_verify.py --report pypi-sigstore-report.json --summary pypi-sigstore-summary.md
+
       - name: Audit live GitHub + PyPI state
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python tools/pypi_release_path_audit.py --report pypi-release-path-report.json --summary pypi-release-path-summary.md
+        run: python tools/pypi_release_path_audit.py --sigstore-report pypi-sigstore-report.json --report pypi-release-path-report.json --summary pypi-release-path-summary.md
 
       - name: Upload report
         if: always()
@@ -70,4 +81,6 @@ jobs:
           path: |
             pypi-release-path-report.json
             pypi-release-path-summary.md
+            pypi-sigstore-report.json
+            pypi-sigstore-summary.md
           if-no-files-found: error
