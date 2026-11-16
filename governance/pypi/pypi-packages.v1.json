@@ -23,9 +23,9 @@
   },
   "counts": {
     "hold": 5,
-    "published": 37,
+    "published": 39,
     "internal": 51,
-    "never": 11,
+    "never": 9,
     "third-party": 1
   },
   "packages": [
@@ -541,8 +541,20 @@
       "name": "szl-formulas",
       "repo": "szl-formulas",
       "path": "pyproject.toml",
-      "status": "never",
-      "reason": "Hugging Face Kernel Hub / Space descriptor; the wheel would be empty",
+      "status": "published",
+      "github_environment": "pypi",
+      "workflow": ".github/workflows/publish-pypi.yml",
+      "tag_pattern": "v<version>",
+      "pypi_url": "https://pypi.org/project/szl-formulas/",
+      "pypi_version": "0.1.0",
+      "pypi_releases": [
+        "0.1.0"
+      ],
+      "pypi_latest_provenance": "e56ed86174f947f66ef89cde4ed6e4c43ec127ea",
+      "pypi_latest_source_ref": "refs/tags/v0.1.0",
+      "import_names": [
+        "szl_formulas"
+      ],
       "source": "https://github.com/szl-holdings/szl-formulas"
     },
     {
@@ -573,8 +585,20 @@
       "name": "szl-provctl",
       "repo": "szl-provctl",
       "path": "pyproject.toml",
-      "status": "never",
-      "reason": "Hugging Face Kernel Hub / Space descriptor; the wheel would be empty",
+      "status": "published",
+      "github_environment": "pypi",
+      "workflow": ".github/workflows/publish-pypi.yml",
+      "tag_pattern": "v<version>",
+      "pypi_url": "https://pypi.org/project/szl-provctl/",
+      "pypi_version": "0.1.0",
+      "pypi_releases": [
+        "0.1.0"
+      ],
+      "pypi_latest_provenance": "950dbf6092822e70a0dc86d4d47694e6dfa9196e",
+      "pypi_latest_source_ref": "refs/tags/v0.1.0",
+      "import_names": [
+        "szl_provctl"
+      ],
       "source": "https://github.com/szl-holdings/szl-provctl"
     },
     {
@@ -1362,6 +1386,10 @@
     {
       "at": "2026-11-16T04:30:00Z",
       "event": "release-path-audit fix 2026-11-16: 17 queued packages verified live on PyPI via pypi.org JSON API and promoted to published (measured version, releases, tag commit); szl-ci-witness pypi_latest_provenance corrected to measured tag commit sha"
+    },
+    {
+      "at": "2026-11-16T06:02:51Z",
+      "event": "release-path-audit follow-up 2026-11-16: szl-formulas and szl-provctl verified live on PyPI via pypi.org JSON API and promoted never -> published (measured version 0.1.0, releases, tag commit sha); the former wheel-would-be-empty reason was stale; both live publish-pypi.yml workflows measured canonical with SZL_PACKAGES single-package specs"
     }
   ]
 }
