@@ -330,9 +330,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install pinned cryptographic verifier
+        run: python -m pip install --quiet "sigstore==4.5.1" "pypi-attestations==0.0.31"
+
       - name: Validate private-reader and credential custody contracts
         run: |
           python -m unittest \
+            tests.test_pypi_distribution_verification \
+            tests.test_pypi_sigstore_verify \
             tests.test_pypi_private_contents \
             tests.test_pypi_audit_trust \
             tests.test_secret_workflow_boundary \
@@ -357,7 +362,7 @@ jobs:
             --org szl-holdings \
             --minimum-repositories 123 \
             -- \
-            python -B tools/pypi_release_path_audit.py \
+            python -B tools/pypi_release_path_audit.py --verify-attestations \
               --report pypi-release-path-report.json \
               --summary pypi-release-path-summary.md
 

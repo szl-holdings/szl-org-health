@@ -103,6 +103,16 @@ class PyPIAuditTrustTests(TestCase):
             self.job.index("secrets."),
         )
 
+    def test_scheduled_reader_uses_pinned_live_verifier(self):
+        self.assertIn(
+            'python -m pip install --quiet "sigstore==4.5.1" "pypi-attestations==0.0.31"',
+            self.job,
+        )
+        audit_step = self.job.split("- name: Audit live GitHub and PyPI state", 1)[1]
+        self.assertIn("python -B tools/pypi_release_path_audit.py --verify-attestations", audit_step)
+        self.assertIn("tests.test_pypi_distribution_verification", self.job)
+        self.assertIn("tests.test_pypi_sigstore_verify", self.job)
+
     def test_reader_permissions_and_aliases_are_existing_read_only_subset(self):
         census = dict(_reader_permission_pairs(self.workflow, "census"))
         pypi = dict(_reader_permission_pairs(self.workflow, "pypi-audit"))
