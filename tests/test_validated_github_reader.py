@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import io
+import traceback
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
 from tools import run_with_validated_github_reader as subject
@@ -61,7 +64,7 @@ class ValidatedReaderTests(unittest.TestCase):
 
         return subject.validate_github_reader(
             "synthetic",
-            "",
+            "synthetic-count-token",
             org="szl-holdings",
             minimum_repositories=minimum,
             request_json=request,
@@ -317,6 +320,132 @@ class ValidatedReaderTests(unittest.TestCase):
             log=io.StringIO(),
         )
         self.assertEqual(result, 2)
+
+
+class CredentialDiagnosticTests(unittest.TestCase):
+    MARKER = "SYNTHETIC_CREDENTIAL_MARKER_DO_NOT_LOG"
+    URL = "https://api.github.com/orgs/szl-holdings"
+
+    def assert_sanitized_probe_error(self, operation, expected_code):
+        output, errors = io.StringIO(), io.StringIO()
+        with redirect_stdout(output), redirect_stderr(errors):
+            try:
+                operation()
+            except subject.ProbeError as error:
+                self.assertEqual(error.code, expected_code)
+                diagnostics = str(error) + repr(error) + traceback.format_exc()
+            else:
+                self.fail("probe did not reject unsafe request")
+        for text in (output.getvalue(), errors.getvalue(), diagnostics):
+            self.assertNotIn(self.MARKER, text)
+
+    def test_invalid_header_characters_are_rejected_before_request_construction(self):
+        for character in ("\r", "\n", "\r\n", "\x00", "\t", " ", "\x7f", "\u0100"):
+            with self.subTest(character=repr(character)), \
+                    patch.object(subject.urllib.request, "Request") as request, \
+                    patch.object(subject.urllib.request, "urlopen") as opened:
+                token = self.MARKER + character + "suffix"
+                self.assert_sanitized_probe_error(
+                    lambda: subject._default_request_json(self.URL, token),
+                    "INVALID_CREDENTIAL_FORMAT",
+                )
+                request.assert_not_called()
+                opened.assert_not_called()
+
+    def test_validation_rejects_malformed_candidate_before_custom_requester(self):
+        requester = Mock(side_effect=AssertionError("network forbidden"))
+        self.assert_sanitized_probe_error(
+            lambda: subject.validate_github_reader(
+                "synthetic", self.MARKER + "\r\nsuffix",
+                org="szl-holdings", minimum_repositories=123,
+                request_json=requester,
+            ),
+            "INVALID_CREDENTIAL_FORMAT",
+        )
+        requester.assert_not_called()
+
+    def test_header_construction_and_serialization_errors_have_safe_diagnostics(self):
+        constructor = subject.urllib.request.Request
+        for stage in ("construction", "serialization"):
+            for error_type in (ValueError, TypeError):
+                with self.subTest(stage=stage, error_type=error_type.__name__), \
+                        patch.object(subject.urllib.request, "Request", wraps=constructor) as request, \
+                        patch.object(subject.urllib.request, "urlopen") as opened, \
+                        patch.object(subject.time, "sleep") as sleep:
+                    failure = error_type("invalid Authorization value " + self.MARKER)
+                    if stage == "construction":
+                        request.side_effect = failure
+                    else:
+                        opened.side_effect = failure
+                    self.assert_sanitized_probe_error(
+                        lambda: subject._default_request_json(self.URL, self.MARKER),
+                        "INVALID_REQUEST_HEADERS",
+                    )
+                    self.assertEqual(request.call_count, 1)
+                    self.assertEqual(opened.call_count, int(stage == "serialization"))
+                    sleep.assert_not_called()
+
+    def test_header_failure_returns_fail_closed_without_child_or_secret_output(self):
+        output, errors = io.StringIO(), io.StringIO()
+        child = Mock(side_effect=AssertionError("child must not run"))
+        with patch.object(subject.urllib.request, "urlopen", side_effect=ValueError(self.MARKER)), \
+                redirect_stdout(output), redirect_stderr(errors):
+            status = subject.run(
+                ["--", "python", "-V"],
+                environ={"SZL_GITHUB_TOKEN": self.MARKER},
+                request_json=subject._default_request_json,
+                subprocess_run=child,
+                log=errors,
+            )
+        self.assertEqual(status, 2)
+        child.assert_not_called()
+        self.assertIn("INVALID_REQUEST_HEADERS", errors.getvalue())
+        self.assertNotIn(self.MARKER, output.getvalue() + errors.getvalue())
+
+    def test_malformed_unicode_candidate_cannot_escape_deduplication(self):
+        output, errors = io.StringIO(), io.StringIO()
+        requester = Mock(side_effect=AssertionError("network forbidden"))
+        child = Mock(side_effect=AssertionError("child must not run"))
+        with redirect_stdout(output), redirect_stderr(errors):
+            status = subject.run(
+                ["--", "python", "-V"],
+                environ={"SZL_GITHUB_TOKEN": self.MARKER + "\ud800suffix"},
+                request_json=requester,
+                subprocess_run=child,
+                log=errors,
+            )
+        self.assertEqual(status, 2)
+        requester.assert_not_called()
+        child.assert_not_called()
+        self.assertIn("INVALID_CREDENTIAL_FORMAT", errors.getvalue())
+        self.assertNotIn(self.MARKER, output.getvalue() + errors.getvalue())
+
+    def test_malformed_candidate_can_fall_back_without_inheriting_unused_aliases(self):
+        requester = FixtureRequester({"selected-synthetic": "valid"})
+        child = Mock(return_value=SimpleNamespace(returncode=0))
+        output, errors = io.StringIO(), io.StringIO()
+        with redirect_stdout(output), redirect_stderr(errors):
+            status = subject.run(
+                ["--", "python", "-V"],
+                environ={
+                    "GITHUB_READER_APP_TOKEN": self.MARKER + "\r\nsuffix",
+                    "SZL_GITHUB_TOKEN": "\n selected-synthetic \t",
+                    "GH_PAT": "unused-" + self.MARKER,
+                },
+                request_json=requester,
+                subprocess_run=child,
+                log=errors,
+            )
+        self.assertEqual(status, 0)
+        self.assertTrue(requester.calls)
+        self.assertEqual({token for _, token in requester.calls}, {"selected-synthetic"})
+        environment = child.call_args.kwargs["env"]
+        for alias in ("GITHUB_TOKEN", "GH_TOKEN", "SZL_GITHUB_TOKEN"):
+            self.assertEqual(environment[alias], "selected-synthetic")
+        self.assertNotIn("GITHUB_READER_APP_TOKEN", environment)
+        self.assertNotIn("GH_PAT", environment)
+        self.assertNotIn(self.MARKER, repr(environment))
+        self.assertNotIn(self.MARKER, output.getvalue() + errors.getvalue())
 
 
 if __name__ == "__main__":
