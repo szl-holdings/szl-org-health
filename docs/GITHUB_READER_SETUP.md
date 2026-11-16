@@ -6,7 +6,7 @@ substitute for the App's private key or accepted installation permissions.
 Never copy a broad administrator session credential into an Actions secret to
 work around missing setup.
 
-## Two distinct reader scopes
+## Separate reader scopes
 
 The `census` job observes inventory, workflow runs, branch protection/rulesets,
 and code-scanning, secret-scanning, and Dependabot alerts. Its token explicitly
@@ -26,7 +26,16 @@ token scope. Metadata access is implicit in installation tokens.
 
 The exact input names are defined by the
 [pinned token action](https://github.com/actions/create-github-app-token/blob/bcd2ba49218906704ab6c1aa796996da409d3eb1/action.yml).
-Neither job requests write permissions. This reader does not publish, sign a
+The separate PyPI audit job requests only Repository Contents/read,
+Repository Administration/read, and Organization Administration/read. These
+are a subset of the existing census App permissions: file contents establish
+private package markers; administration exposes tag ruleset bypass actors;
+organization metadata establishes reader inventory coverage. It uses the same
+validated reader selection and provider-fixed schedule. Pull requests and manual
+audit dispatches receive only the repository token and may retain UNKNOWN
+evidence. No new credential or installation permission is granted by this job.
+
+None of these jobs requests write permissions. This reader does not publish, sign a
 product release, modify protection, or actuate a runtime.
 
 ## Legitimate configuration

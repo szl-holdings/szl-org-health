@@ -1,16 +1,22 @@
-"""Execute the real workflow guard across trusted and untrusted contexts."""
+"""Execute the scheduled PyPI reader guard across trusted and untrusted contexts."""
 
 from __future__ import annotations
 
 import os
 import re
-import tempfile
 import textwrap
 from pathlib import Path
 from unittest import TestCase, main, mock
 
+from tests.test_secret_workflow_boundary import (
+    _canonical_triggers,
+    _reader_permission_pairs,
+    _uses_actions_secrets,
+)
 
-WORKFLOW_PATH = Path(__file__).resolve().parents[1] / ".github/workflows/pypi-release-path-audit.yml"
+
+WORKFLOWS = Path(__file__).resolve().parents[1] / ".github/workflows"
+WORKFLOW_PATH = WORKFLOWS / "scheduled-estate-census.yml"
 SHA = "a" * 40
 
 
@@ -18,9 +24,10 @@ class PyPIAuditTrustTests(TestCase):
     @classmethod
     def setUpClass(cls):
         cls.workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        cls.job = cls.workflow.split("\n  pypi-audit:\n", 1)[1]
         match = re.search(
-            r"      - name: Validate default-branch audit source\n(.*?)\n      - name:",
-            cls.workflow, re.DOTALL,
+            r"      - name: Validate provider-scheduled PyPI audit source\n(.*?)\n      - name:",
+            cls.job, re.DOTALL,
         )
         if match is None:
             raise AssertionError("workflow source guard is missing")
@@ -31,25 +38,22 @@ class PyPIAuditTrustTests(TestCase):
         )
 
     def run_guard(self, event, ref, *, default_branch="main", head=SHA, expected_sha=SHA):
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "step-output.txt"
-            environ = {
-                "GITHUB_EVENT_NAME": event,
-                "GITHUB_REF": ref,
-                "AUDIT_DEFAULT_BRANCH": default_branch,
-                "GITHUB_SHA": expected_sha,
-                "GITHUB_OUTPUT": str(output),
-            }
-            error = None
-            with mock.patch.dict(os.environ, environ, clear=True), \
-                    mock.patch("subprocess.check_output", return_value=head + "\n") as git:
-                try:
-                    exec(self.guard, {"__name__": "__main__"})
-                except SystemExit as exc:
-                    error = str(exc)
-            return output.read_text() if output.exists() else "", error, git
+        environ = {
+            "GITHUB_EVENT_NAME": event,
+            "GITHUB_REF": ref,
+            "AUDIT_DEFAULT_BRANCH": default_branch,
+            "GITHUB_SHA": expected_sha,
+        }
+        error = None
+        with mock.patch.dict(os.environ, environ, clear=True), \
+                mock.patch("subprocess.check_output", return_value=head + "\n") as git:
+            try:
+                exec(self.guard, {"__name__": "__main__"})
+            except SystemExit as exc:
+                error = str(exc)
+        return error, git
 
-    def test_actual_guard_allows_only_three_events_on_exact_default_branch(self):
+    def test_actual_guard_allows_only_provider_schedule_on_exact_default_branch(self):
         for event in (
             "push", "schedule", "workflow_dispatch", "pull_request",
             "pull_request_target", "workflow_run", "repository_dispatch", "unknown",
@@ -59,51 +63,65 @@ class PyPIAuditTrustTests(TestCase):
                 "refs/tags/main", "refs/heads/main-suffix",
             ):
                 with self.subTest(event=event, ref=ref):
-                    output, error, git = self.run_guard(event, ref)
-                    allowed = event in ("push", "schedule", "workflow_dispatch") and ref == "refs/heads/main"
-                    self.assertIsNone(error)
-                    self.assertEqual(output, "trusted=true\n" if allowed else "")
+                    error, git = self.run_guard(event, ref)
+                    allowed = event == "schedule" and ref == "refs/heads/main"
                     if allowed:
+                        self.assertIsNone(error)
                         git.assert_called_once_with(["git", "rev-parse", "HEAD"], text=True)
                     else:
+                        self.assertIsNotNone(error)
                         git.assert_not_called()
 
     def test_default_branch_comes_from_repository_context(self):
-        output, error, _ = self.run_guard("push", "refs/heads/release", default_branch="release")
+        error, _ = self.run_guard("schedule", "refs/heads/release", default_branch="release")
         self.assertIsNone(error)
-        self.assertEqual(output, "trusted=true\n")
-        output, error, git = self.run_guard("push", "refs/heads/main", default_branch="release")
-        self.assertIsNone(error)
-        self.assertEqual(output, "")
+        error, git = self.run_guard("schedule", "refs/heads/main", default_branch="release")
+        self.assertEqual(error, "PyPI reader requires the repository default branch")
         git.assert_not_called()
 
     def test_mismatched_checkout_stops_before_credential_selection(self):
-        for event in ("push", "schedule", "workflow_dispatch"):
-            with self.subTest(event=event):
-                output, error, _ = self.run_guard(event, "refs/heads/main", head="b" * 40)
-                self.assertEqual(output, "")
-                self.assertEqual(error, "audit checkout does not match exact workflow source")
+        error, _ = self.run_guard("schedule", "refs/heads/main", head="b" * 40)
+        self.assertEqual(error, "audit checkout does not match exact workflow source")
 
-    def test_credential_expression_requires_event_ref_and_successful_guard(self):
-        match = re.search(r"          GITHUB_TOKEN: >-\n(.*?)\n        run:", self.workflow, re.DOTALL)
-        self.assertIsNotNone(match)
-        expression = " ".join(match.group(1).split())
-        self.assertEqual(expression, (
-            "${{ contains(fromJSON('[\"push\",\"schedule\",\"workflow_dispatch\"]'), github.event_name) "
-            "&& github.ref == format('refs/heads/{0}', github.event.repository.default_branch) "
-            "&& steps.audit-source.outputs.trusted == 'true' "
-            "&& secrets.SZL_GITHUB_TOKEN || github.token }}"
-        ))
-        self.assertIn("        id: audit-source", self.guard_block)
-        self.assertIn("        shell: python", self.guard_block)
-        self.assertNotIn("secrets.", self.guard_block)
-        self.assertEqual(self.workflow.count("secrets.SZL_GITHUB_TOKEN"), 1)
-        self.assertIn("    permissions:\n      contents: read\n", self.workflow)
-        self.assertNotIn("continue-on-error:", self.workflow)
-        self.assertLess(
-            self.workflow.index("- name: Validate default-branch audit source"),
-            self.workflow.index("secrets.SZL_GITHUB_TOKEN"),
+    def test_credentials_remain_in_existing_schedule_only_workflow(self):
+        self.assertEqual(
+            _canonical_triggers(self.workflow, WORKFLOW_PATH.name),
+            (("schedule",), ("17 */6 * * *",)),
         )
+        unprivileged = (WORKFLOWS / "pypi-release-path-audit.yml").read_text(encoding="utf-8")
+        self.assertFalse(_uses_actions_secrets(unprivileged))
+        self.assertIn("GITHUB_TOKEN: " + "$" + "{{ github.token }}", unprivileged)
+        self.assertIn(
+            "if: github.event_name == 'schedule' && github.ref == "
+            "format('refs/heads/{0}', github.event.repository.default_branch)",
+            self.job,
+        )
+        self.assertIn("ref: " + "$" + "{{ github.sha }}", self.job)
+        self.assertIn("persist-credentials: false", self.job)
+        self.assertLess(
+            self.job.index("- name: Validate provider-scheduled PyPI audit source"),
+            self.job.index("secrets."),
+        )
+
+    def test_reader_permissions_and_aliases_are_existing_read_only_subset(self):
+        census = dict(_reader_permission_pairs(self.workflow, "census"))
+        pypi = dict(_reader_permission_pairs(self.workflow, "pypi-audit"))
+        self.assertEqual(pypi, {
+            "permission-contents": "read",
+            "permission-organization-administration": "read",
+            "permission-administration": "read",
+        })
+        self.assertTrue(pypi.items() <= census.items())
+        census_job = self.workflow.split("\n  census:\n", 1)[1].split("\n  file-audit:\n", 1)[0]
+        existing_secrets = set(re.findall(r"\bsecrets\.([A-Z_0-9]+)", census_job))
+        pypi_secrets = set(re.findall(r"\bsecrets\.([A-Z_0-9]+)", self.job))
+        self.assertTrue(pypi_secrets <= existing_secrets)
+        self.assertIn("python -B -m tools.run_with_validated_github_reader", self.job)
+        self.assertIn("--minimum-repositories 123", self.job)
+        self.assertIn("python -B tools/pypi_release_path_audit.py", self.job)
+        audit_step = self.job.split("- name: Audit live GitHub and PyPI state", 1)[1]
+        self.assertNotIn("continue-on-error:", audit_step)
+        self.assertNotIn("secrets.", self.guard_block)
 
 
 if __name__ == "__main__":

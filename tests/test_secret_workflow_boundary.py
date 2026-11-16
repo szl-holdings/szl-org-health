@@ -135,6 +135,17 @@ class SecretWorkflowBoundaryTests(unittest.TestCase):
         self.assertEqual(dict(pairs), expected)
         self.assertEqual(len(pairs), len(expected), "duplicate permission input")
 
+    def test_pypi_reader_has_only_inventory_contents_and_controls_permissions(self) -> None:
+        workflow = (WORKFLOWS / "scheduled-estate-census.yml").read_text(encoding="utf-8")
+        pairs = _reader_permission_pairs(workflow, "pypi-audit")
+        expected = {
+            "permission-contents": "read",
+            "permission-organization-administration": "read",
+            "permission-administration": "read",
+        }
+        self.assertEqual(dict(pairs), expected)
+        self.assertEqual(len(pairs), len(expected), "duplicate permission input")
+
     def test_retired_one_shot_executor_is_absent(self) -> None:
         self.assertFalse((WORKFLOWS / "zz-org-convergence-20260828.yml").exists())
         self.assertFalse((REPO_ROOT / "tools" / "org_converge_20260828.py").exists())
@@ -179,15 +190,15 @@ class SecretWorkflowBoundaryTests(unittest.TestCase):
         self.assertNotIn("workflow_dispatch:", workflow)
         self.assertEqual(
             workflow.count("python -B -m tools.run_with_validated_github_reader"),
-            2,
+            3,
         )
         self.assertEqual(
             workflow.count("permission-organization-administration: read"),
-            2,
+            3,
         )
         self.assertEqual(
             workflow.count("if: vars.QILLQAQ_CLIENT_ID != ''"),
-            2,
+            3,
         )
         self.assertNotIn(
             "GITHUB_TOKEN: ${{ steps.org-reader.outputs.token ||",
