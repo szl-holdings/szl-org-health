@@ -602,19 +602,56 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
         check(results, pkg, "github:release-tag", "FAIL", f"{tag} -> {commit[:12]} contradicts reported certificate source digest {digest[:12]} (unverified)")
 
 
+def contents_file_bytes(payload: object, path: str) -> bytes | None:
+    """Accept only the exact file returned inline by the GitHub Contents API."""
+    if not isinstance(payload, dict) or (
+        payload.get("type") != "file" or payload.get("path") != path
+        or payload.get("encoding") != "base64"
+        or not isinstance(payload.get("content"), str)
+        or type(payload.get("size")) is not int or payload["size"] < 0
+        or not isinstance(payload.get("sha"), str)
+        or re.fullmatch(r"[0-9a-f]{40}", payload["sha"]) is None
+    ):
+        return None
+    try:
+        body = base64.b64decode(payload["content"].replace("\n", "").replace("\r", ""), validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    blob = b"blob " + str(len(body)).encode("ascii") + b"\0" + body
+    if len(body) != payload["size"] or hashlib.sha1(blob, usedforsecurity=False).hexdigest() != payload["sha"]:
+        return None
+    return body
+
+
 def audit_private_marker(http: Http, org: str, m: dict, results: list, published_names: dict[str, str] | None = None) -> None:
     published_names = published_names or {}
+    source = m["path"]
     st, body = http.get(f"{RAW}/{org}/{m['repo']}/HEAD/{m['path']}", raw=True)
     if st != 200:
-        check(results, m.get("name") or m["path"], "private-classifier", "UNKNOWN", f"{m['path']} HTTP {st}")
-        return
+        raw_status = st
+        # Raw URLs are anonymous. Keep the same explicit HEAD source while
+        # allowing an existing GitHub credential to read private repositories.
+        endpoint = (
+            f"{GH_API}/repos/{urllib.parse.quote(org, safe='')}/"
+            f"{urllib.parse.quote(m['repo'], safe='')}/contents/"
+            f"{urllib.parse.quote(m['path'], safe='/')}?ref=HEAD"
+        )
+        st, payload = http.get(endpoint)
+        body = contents_file_bytes(payload, m["path"]) if st == 200 else None
+        if body is None:
+            detail = f"{m['path']} raw HTTP {raw_status}; Contents API HTTP {st}"
+            if st == 200:
+                detail += "; file response missing, malformed, or inconsistent"
+            check(results, m.get("name") or m["path"], "private-classifier", "UNKNOWN", detail)
+            return
+        source = f"{m['path']} via GitHub Contents API ref=HEAD blob={payload['sha']}"
     try:
         doc = tomllib.loads(body.decode("utf-8", "replace"))
     except Exception as e:  # noqa: BLE001
         check(results, m.get("name") or m["path"], "private-classifier", "FAIL", f"TOML parse error: {e}")
         return
     cls = ((doc.get("project") or {}).get("classifiers") or [])
-    check(results, m.get("name") or m["path"], "private-classifier", "PASS" if PRIVATE in cls else "FAIL", m["path"])
+    check(results, m.get("name") or m["path"], "private-classifier", "PASS" if PRIVATE in cls else "FAIL", source)
     st, meta = http.get(f"https://pypi.org/pypi/{norm(m.get('name') or '')}/json") if m.get("name") else (404, None)
     if st == 200 and m["status"] in ("internal", "never"):
         if norm(m["name"]) in published_names:
