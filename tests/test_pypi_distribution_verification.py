@@ -34,6 +34,18 @@ def release():
 
 
 class VerificationTests(unittest.TestCase):
+    def setUp(self):
+        # These are contract tests, not packaging/Sigstore integration tests.
+        # The CI's stdlib-only runner must not inherit optional laptop packages.
+        # Production has no injected-parser flag; live verification exercises
+        # the real parser and cryptographic library separately.
+        def synthetic_filename(filename, package, version):
+            if package != PACKAGE or version != VERSION or filename not in (fixture.WHEEL, fixture.SDIST):
+                raise verifier.RejectedEvidence("synthetic filename identity mismatch")
+        patcher = mock.patch.object(verifier, "_check_filename", side_effect=synthetic_filename)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def run_verify(self, files=None, proofs=None, **kwargs):
         default_files, default_proofs = release()
         if files is None:

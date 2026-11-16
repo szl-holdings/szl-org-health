@@ -109,6 +109,16 @@ def _verify_attestation(raw: dict, filename: str, digest: str, expected: tuple[s
         raise RejectedEvidence("signature, subject, trust chain, transparency, or publisher verification failed") from exc
 
 
+def _check_filename(filename: str, package: str, version: str) -> None:
+    """Use the packaging parser; missing optional tooling stays UNKNOWN."""
+    from packaging.utils import canonicalize_name, parse_sdist_filename, parse_wheel_filename
+    from packaging.version import Version
+
+    parsed = parse_wheel_filename(filename) if filename.endswith(".whl") else parse_sdist_filename(filename)
+    if parsed[0] != canonicalize_name(package) or parsed[1] != Version(version):
+        raise RejectedEvidence("distribution filename names a different project or version")
+
+
 def verify_release(package: str, version: str, files: dict, provenances: dict,
                    expected_publisher: tuple[str, ...]) -> dict:
     """Bind every file in one observation to verified bytes and source identity.
@@ -125,9 +135,6 @@ def verify_release(package: str, version: str, files: dict, provenances: dict,
         "archives_installed_or_executed": False,
     }
     try:
-        from packaging.utils import canonicalize_name, parse_sdist_filename, parse_wheel_filename
-        from packaging.version import Version
-
         for dependency in ("pypi-attestations", "sigstore"):
             result.setdefault("verifier_versions", {})[dependency] = importlib.metadata.version(dependency)
         if (not isinstance(files, dict) or not 0 < len(files) <= MAX_RELEASE_FILES
@@ -141,9 +148,7 @@ def verify_release(package: str, version: str, files: dict, provenances: dict,
             raise RejectedEvidence("release must include both wheel and sdist")
         total_bytes, sources = 0, set()
         for filename, metadata in sorted(files.items()):
-            parsed = parse_wheel_filename(filename) if filename.endswith(".whl") else parse_sdist_filename(filename)
-            if parsed[0] != canonicalize_name(package) or parsed[1] != Version(version):
-                raise RejectedEvidence("distribution filename names a different project or version")
+            _check_filename(filename, package, version)
             if not isinstance(metadata, dict) or metadata.get("filename") != filename:
                 raise RejectedEvidence("distribution metadata identity mismatch")
             expected_hash = (metadata.get("digests") or {}).get("sha256")
