@@ -14,3 +14,5 @@
 /tests/fixtures/ps51/historical-replay-b1b1c5df.json -text
 /governance/pypi/canonical/publish-pypi.yml text eol=lf
 /.github/workflows/pypi-artifact-transport.yml text eol=lf
+/governance/pypi/canonical/gen_publish_workflow.py text eol=lf
+/governance/pypi/canonical/szl_pypi_release_gate.py text eol=lf

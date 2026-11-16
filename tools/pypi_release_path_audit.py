@@ -47,6 +47,8 @@ PRIVATE = "Private :: Do Not Upload"
 TOKEN_MARKERS = ("PYPI_API_TOKEN", "PYPI_TOKEN", "TWINE_PASSWORD", "TWINE_USERNAME", "POETRY_PYPI_TOKEN", "UV_PUBLISH_TOKEN", "HATCH_INDEX_AUTH", "PDM_PUBLISH_PASSWORD")
 OID_SOURCE_DIGEST = "1.3.6.1.4.1.57264.1.13"
 REQUIRED_TAG_RULES = {"creation", "update", "deletion"}
+MAX_PRIVATE_FILE_BYTES = 1024 * 1024
+MAX_HTTP_RESPONSE_BYTES = 16 * 1024 * 1024
 
 
 def norm(name: str) -> str:
@@ -166,6 +168,13 @@ def tag_ruleset_result(http: Http, org: str, repo: str, m: dict, rulesets: objec
     return "FAIL", "; ".join([detail] + failures)
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # urllib otherwise carries Authorization across redirects. Every audit
+        # response must come directly from the exact requested source URL.
+        return None
+
+
 class Http:
     def __init__(self, token: str | None):
         self.token = token
@@ -175,11 +184,16 @@ class Http:
         if github_api and not self.token and shutil.which("gh"):
             # local operator fallback: let the gh CLI supply credentials (never printed here)
             cmd = ["gh", "api", url] + (["-H", f"Accept: {accept}"] if accept else [])
-            p = subprocess.run(cmd, capture_output=True, text=True)
-            if p.returncode != 0:
-                m = re.search(r"HTTP (\d{3})", p.stderr)
-                return (int(m.group(1)) if m else -1), None
-            return 200, json.loads(p.stdout or "null")
+            try:
+                p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                if p.returncode != 0:
+                    m = re.search(r"HTTP (\d{3})", p.stderr)
+                    return (int(m.group(1)) if m else -1), None
+                if len(p.stdout.encode("utf-8")) > MAX_HTTP_RESPONSE_BYTES:
+                    return -1, None
+                return 200, json.loads(p.stdout or "null")
+            except (OSError, subprocess.TimeoutExpired, ValueError):
+                return -1, None
         headers = {"User-Agent": "szl-pypi-release-path-audit/1"}
         if accept:
             headers["Accept"] = accept
@@ -188,13 +202,18 @@ class Http:
             headers["X-GitHub-Api-Version"] = "2022-11-28"
         req = urllib.request.Request(url, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
-                body = r.read()
+            opener = urllib.request.build_opener(NoRedirect())
+            with opener.open(req, timeout=60) as r:
+                if r.geturl() != url:
+                    return -1, None
+                body = r.read(MAX_HTTP_RESPONSE_BYTES + 1)
+                if len(body) > MAX_HTTP_RESPONSE_BYTES:
+                    return -1, None
                 return r.status, (body if raw else json.loads(body or b"null"))
         except urllib.error.HTTPError as e:
             return e.code, None
-        except Exception as e:  # noqa: BLE001
-            return -1, str(e)
+        except Exception:  # noqa: BLE001
+            return -1, None
 
 
 def sha256(b: bytes) -> str:
@@ -649,19 +668,95 @@ def audit_release_repo(http: Http, org: str, m: dict, canon: dict[str, str], res
         check(results, pkg, "github:release-tag", "FAIL", f"{tag} -> {commit[:12]} contradicts reported certificate source digest {digest[:12]} (unverified)")
 
 
+def contents_file_bytes(payload: object, path: str) -> bytes | None:
+    """Accept only the exact file returned inline by the GitHub Contents API."""
+    if not isinstance(payload, dict) or (
+        payload.get("type") != "file" or payload.get("path") != path
+        or payload.get("encoding") != "base64"
+        or not isinstance(payload.get("content"), str)
+        or type(payload.get("size")) is not int
+        or not 0 <= payload["size"] <= MAX_PRIVATE_FILE_BYTES
+        or len(payload["content"]) > 2 * MAX_PRIVATE_FILE_BYTES
+        or not isinstance(payload.get("sha"), str)
+        or re.fullmatch(r"[0-9a-f]{40}", payload["sha"]) is None
+    ):
+        return None
+    try:
+        body = base64.b64decode(payload["content"].replace("\n", "").replace("\r", ""), validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    blob = b"blob " + str(len(body)).encode("ascii") + b"\0" + body
+    if len(body) != payload["size"] or hashlib.sha1(blob, usedforsecurity=False).hexdigest() != payload["sha"]:
+        return None
+    return body
+
+
+def private_source_commit(http: Http, org: str, repo: str) -> tuple[str | None, str | None, str]:
+    """Resolve HEAD once, then require the exact default-branch commit."""
+    endpoint = f"{GH_API}/repos/{urllib.parse.quote(org, safe='')}/{urllib.parse.quote(repo, safe='')}"
+    st, metadata = http.get(endpoint)
+    if st != 200:
+        return None, None, f"repository metadata HTTP {st}"
+    branch = metadata.get("default_branch") if isinstance(metadata, dict) else None
+    if (
+        not isinstance(metadata, dict) or metadata.get("full_name") != f"{org}/{repo}"
+        or not isinstance(branch, str) or re.fullmatch(r"[A-Za-z0-9._/-]{1,255}", branch) is None
+    ):
+        return None, None, "repository default branch missing, malformed, or inconsistent"
+    st, reference = http.get(f"{endpoint}/git/ref/heads/{urllib.parse.quote(branch, safe='/')}")
+    if st != 200:
+        return None, None, f"default-branch ref HTTP {st}"
+    target = reference.get("object") if isinstance(reference, dict) else None
+    commit = target.get("sha") if isinstance(target, dict) else None
+    if (
+        not isinstance(reference, dict) or reference.get("ref") != f"refs/heads/{branch}"
+        or not isinstance(target, dict) or target.get("type") != "commit"
+        or not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None
+    ):
+        return None, None, "default-branch commit missing, malformed, or inconsistent"
+    return branch, commit, ""
+
+
 def audit_private_marker(http: Http, org: str, m: dict, results: list, published_names: dict[str, str] | None = None) -> None:
     published_names = published_names or {}
+    source = m["path"]
     st, body = http.get(f"{RAW}/{org}/{m['repo']}/HEAD/{m['path']}", raw=True)
     if st != 200:
-        check(results, m.get("name") or m["path"], "private-classifier", "UNKNOWN", f"{m['path']} HTTP {st}")
+        raw_status = st
+        branch, commit, error = private_source_commit(http, org, m["repo"])
+        if commit is None:
+            check(results, m.get("name") or m["path"], "private-classifier", "UNKNOWN",
+                  f"{m['path']} raw HTTP {raw_status}; {error}")
+            return
+        # Anonymous raw URLs cannot read private repositories. Use existing API
+        # authority, at the immutable commit just resolved from the default branch.
+        endpoint = (
+            f"{GH_API}/repos/{urllib.parse.quote(org, safe='')}/"
+            f"{urllib.parse.quote(m['repo'], safe='')}/contents/"
+            f"{urllib.parse.quote(m['path'], safe='/')}?ref={commit}"
+        )
+        st, payload = http.get(endpoint)
+        body = contents_file_bytes(payload, m["path"]) if st == 200 else None
+        if body is None:
+            detail = f"{m['path']} raw HTTP {raw_status}; Contents API HTTP {st}"
+            if st == 200:
+                detail += "; file response missing, malformed, inconsistent, or oversized"
+            check(results, m.get("name") or m["path"], "private-classifier", "UNKNOWN", detail)
+            return
+        source = f"{m['path']} via GitHub Contents API default_branch={branch} commit={commit} blob={payload['sha']}"
+    if not isinstance(body, bytes) or len(body) > MAX_PRIVATE_FILE_BYTES:
+        check(results, m.get("name") or m["path"], "private-classifier", "UNKNOWN",
+              "private marker response malformed or oversized")
         return
     try:
-        doc = tomllib.loads(body.decode("utf-8", "replace"))
-    except Exception as e:  # noqa: BLE001
-        check(results, m.get("name") or m["path"], "private-classifier", "FAIL", f"TOML parse error: {e}")
+        doc = tomllib.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+        check(results, m.get("name") or m["path"], "private-classifier", "FAIL", "TOML parse error")
         return
-    cls = ((doc.get("project") or {}).get("classifiers") or [])
-    check(results, m.get("name") or m["path"], "private-classifier", "PASS" if PRIVATE in cls else "FAIL", m["path"])
+    project = doc.get("project")
+    cls = project.get("classifiers") if isinstance(project, dict) else None
+    private = isinstance(cls, list) and PRIVATE in cls
+    check(results, m.get("name") or m["path"], "private-classifier", "PASS" if private else "FAIL", source)
     st, meta = http.get(f"https://pypi.org/pypi/{norm(m.get('name') or '')}/json") if m.get("name") else (404, None)
     if st == 200 and m["status"] in ("internal", "never"):
         if norm(m["name"]) in published_names:

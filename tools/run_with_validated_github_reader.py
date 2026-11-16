@@ -72,7 +72,32 @@ class ValidatedReader:
 RequestJson = Callable[[str, str], Any]
 
 
+def _validate_header_token(token: str) -> None:
+    # GitHub credentials are opaque visible ASCII. Reject embedded whitespace,
+    # controls and non-ASCII before an HTTP client can echo an invalid header.
+    # Candidate discovery still trims surrounding whitespace for compatibility.
+    if (
+        not isinstance(token, str)
+        or not token
+        or any(not 0x21 <= ord(character) <= 0x7E for character in token)
+    ):
+        raise ProbeError("INVALID_CREDENTIAL_FORMAT") from None
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _default_request_json(url: str, token: str) -> Any:
+    _validate_header_token(token)
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        valid_url = parsed.scheme == "https" and parsed.netloc == "api.github.com" and not parsed.fragment
+    except (TypeError, ValueError):
+        valid_url = False
+    if not valid_url:
+        raise ProbeError("REQUEST_URL_INVALID") from None
     headers = {
         "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {token}",
@@ -81,24 +106,31 @@ def _default_request_json(url: str, token: str) -> Any:
     }
     last_code = "REQUEST_FAILED"
     for attempt in range(2):
-        request = urllib.request.Request(url, headers=headers)
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            request = urllib.request.Request(url, headers=headers)
+            opener = urllib.request.build_opener(NoRedirect())
+            with opener.open(request, timeout=30) as response:
+                if response.geturl() != url:
+                    raise ProbeError("RESPONSE_IDENTITY_CHANGED") from None
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
                 if len(raw) > MAX_RESPONSE_BYTES:
                     raise ProbeError("RESPONSE_TOO_LARGE")
                 try:
                     return json.loads(raw.decode("utf-8"))
-                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                    raise ProbeError("INVALID_JSON") from exc
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    raise ProbeError("INVALID_JSON") from None
+        except (TypeError, ValueError):
+            # Request construction and http.client header encoding can raise
+            # exceptions containing the Authorization value. Never chain them.
+            raise ProbeError("INVALID_REQUEST_HEADERS") from None
         except urllib.error.HTTPError as exc:
             last_code = f"HTTP_{exc.code}"
             if exc.code not in {429, 500, 502, 503, 504} or attempt == 1:
-                raise ProbeError(last_code) from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
+                raise ProbeError(last_code) from None
+        except (urllib.error.URLError, TimeoutError):
             last_code = "TRANSPORT_ERROR"
             if attempt == 1:
-                raise ProbeError(last_code) from exc
+                raise ProbeError(last_code) from None
         time.sleep(1.0)
     raise ProbeError(last_code)
 
@@ -119,6 +151,7 @@ def validate_github_reader(
 ) -> ValidatedReader:
     """Prefer owned counts; quota-only fallback cannot prove owned authority."""
 
+    _validate_header_token(token)
     encoded_org = urllib.parse.quote(org, safe="")
     metadata = request_json(f"{GITHUB_API}/orgs/{encoded_org}", token)
     if not isinstance(metadata, dict):
@@ -205,7 +238,8 @@ def _configured_candidates(
         token = str(environ.get(name) or "").strip()
         if not token:
             continue
-        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        # Deduplication must not fail before the sanitized format rejection.
+        digest = hashlib.sha256(token.encode("utf-8", errors="surrogatepass")).hexdigest()
         if digest in seen:
             continue
         seen.add(digest)
