@@ -89,3 +89,20 @@ Primary references:
 - https://pypi.github.io/pypi-attestations/pypi_attestations.html
 - https://docs.pypi.org/attestations/security-model/
 - https://github.com/sigstore/fulcio/blob/main/docs/oid-info.md
+
+## Independent scheduled authority and unavailable private names
+
+The trusted reader audit runs in scheduled-pypi-release-audit.yml, on the
+provider-fixed '29 */6 * * *' schedule. Its exact-default-branch and workflow-SHA
+guard, validated reader, existing read permissions, pinned live verifier, and
+fail-closed result are preserved. Its job is moved out of the census workflow
+so a release hold cannot change the outcome of otherwise healthy collection.
+The secret-workflow allowlist gains only this exact filename; all existing
+event, source and credential-custody requirements still apply. Generic PR and
+manual audit runs keep the repository token.
+
+A valid private classifier does not prove absence from PyPI. For a named
+internal/never package, a 429, server failure, redirect refusal, or unavailable
+transport now emits pypi:unexpected-project UNKNOWN. A confirmed 404 preserves
+success, and actual public projects retain the existing declared-name exception
+or failure. Unnamed entries still do not invent a package lookup.

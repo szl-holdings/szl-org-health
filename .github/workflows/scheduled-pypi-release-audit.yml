@@ -1,0 +1,116 @@
+name: Scheduled PyPI release evidence
+
+# Cross-repository credentials remain on a fixed provider schedule.
+# Release holds are independent of census collection health.
+on:
+  schedule:
+    - cron: "29 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled-pypi-release-audit
+  cancel-in-progress: false
+
+jobs:
+  pypi-audit:
+    name: PyPI release path / fail-closed evidence
+    if: github.event_name == 'schedule' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Check out exact PyPI audit source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate provider-scheduled PyPI audit source
+        env:
+          AUDIT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: python
+        run: |
+          import os
+          import subprocess
+
+          if os.environ["GITHUB_EVENT_NAME"] != "schedule":
+              raise SystemExit("PyPI reader requires provider-scheduled execution")
+          if os.environ["GITHUB_REF"] != f"refs/heads/{os.environ['AUDIT_DEFAULT_BRANCH']}":
+              raise SystemExit("PyPI reader requires the repository default branch")
+          head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          if head != os.environ["GITHUB_SHA"]:
+              raise SystemExit("audit checkout does not match exact workflow source")
+
+      - name: Mint short-lived organization reader
+        id: org-reader
+        if: vars.QILLQAQ_CLIENT_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.QILLQAQ_CLIENT_ID }}
+          private-key: ${{ secrets.QILLQAQ_PRIVATE_KEY }}
+          owner: szl-holdings
+          permission-contents: read
+          permission-organization-administration: read
+          permission-administration: read
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned cryptographic verifier
+        run: python -m pip install --quiet "sigstore==4.5.1" "pypi-attestations==0.0.31"
+
+      - name: Validate private-reader and credential custody contracts
+        run: |
+          python -m unittest \
+            tests.test_pypi_distribution_verification \
+            tests.test_pypi_sigstore_verify \
+            tests.test_pypi_audit_http \
+            tests.test_pypi_private_contents \
+            tests.test_pypi_audit_trust \
+            tests.test_secret_workflow_boundary \
+            tests.test_validated_github_reader \
+            -v
+
+      - name: Audit live GitHub and PyPI state with a validated organization reader
+        env:
+          GITHUB_READER_APP_TOKEN: ${{ steps.org-reader.outputs.token }}
+          SZL_GITHUB_TOKEN: ${{ secrets.SZL_GITHUB_TOKEN }}
+          DOCS_AUTOMATION_TEAM_READ_TOKEN: ${{ secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN }}
+          ORG_REPO_WORKFLOW_TOKEN: ${{ secrets.ORG_REPO_WORKFLOW_TOKEN }}
+          SZL_ORG_PAT: ${{ secrets.SZL_ORG_PAT }}
+          SZL_GITHUB_PAT: ${{ secrets.SZL_GITHUB_PAT }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+          GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          REPOSITORY_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python -B -m tools.run_with_validated_github_reader \
+            --org szl-holdings \
+            --minimum-repositories 123 \
+            -- \
+            python -B tools/pypi_release_path_audit.py --verify-attestations \
+              --report pypi-release-path-report.json \
+              --summary pypi-release-path-summary.md
+
+      - name: Retain PyPI release-path evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pypi-release-path-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            pypi-release-path-report.json
+            pypi-release-path-summary.md
+          if-no-files-found: error
+          retention-days: 30
