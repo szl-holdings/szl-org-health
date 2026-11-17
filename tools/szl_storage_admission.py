@@ -52,7 +52,9 @@ def _usage_bytes(usage: object) -> tuple[int, int, int]:
         raise AdmissionInputError("DISK_OBSERVATION_MALFORMED") from exc
     if any(type(v) is not int or v < 0 for v in (total, used, free)):
         raise AdmissionInputError("DISK_OBSERVATION_MALFORMED")
-    if total == 0 or used + free != total:
+    # POSIX filesystems can reserve blocks not counted as user-available
+    # free space. Accept total > used + free, but never a sum > total.
+    if total == 0 or used + free > total:
         raise AdmissionInputError("DISK_GEOMETRY_INCONSISTENT")
     return total, used, free
 
@@ -122,6 +124,7 @@ def observe(
         budget_bytes = 0
 
     observed = []
+    unavailable_reserved = []
     total = None
     for i in range(2 if sample_seconds else 1):
         if i:
@@ -136,6 +139,7 @@ def observe(
             raise AdmissionInputError("DISK_GEOMETRY_CHANGED")
         total = t
         observed.append(free)
+        unavailable_reserved.append(t - _used - free)
 
     assert total is not None
     minimum = min(observed)
@@ -168,6 +172,7 @@ def observe(
         "observations": len(observed),
         "total_bytes": total,
         "observed_free_bytes": observed,
+        "filesystem_unavailable_reserved_bytes": unavailable_reserved,
         "min_free_bytes": minimum,
         "measured_free_gib": _rounded_gib(minimum),
         "floor_bytes": floor_bytes,

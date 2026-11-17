@@ -27,7 +27,7 @@ Linux equivalent: `--drive /`. CI tests synthetic observations and may observe i
 
 ## Explicit contract
 
-- Two OS `shutil.disk_usage` observations by default, with 0–10 seconds between them. Choose **minimum observed free bytes**, never the more optimistic reading. Inconsistent disk geometry or an unavailable sensor is an error and no admission occurs.
+- Two OS `shutil.disk_usage` observations by default, with 0–10 seconds between them. Choose **minimum observed free bytes**, never the more optimistic reading. Impossible geometry (used + available > total), changing disk totals or an unavailable sensor is an error and no admission occurs. POSIX root-reserved blocks are recorded as unavailable, not wrongly counted as user free space.
 - `ADMIT_PRECHECK_ONLY` means the minimum observed free bytes **minus the declared additional budget** are still at or above the headroom floor. Otherwise return `HOLD` with a specific reason. Below-critical and below-floor conditions take precedence. `--mode observe` always returns `NOT_REQUESTED` for a successful observation, never `ADMIT`.
 - CLI exit **0** means a completed observation or admitted precheck, depending on `mode`. Exit **2** means an actual admission was rejected; **3** means inputs or measurements were invalid or unavailable. Callers must check both exit code and structured `decision`; an observation exit 0 must not be confused with job approval.
 - Output is a source-linked JSON receipt with raw byte readings, conservative minimum, declared budget bytes, thresholds, UTC timestamp, this implementation's SHA-256 and canonical domain-separated receipt SHA-256. **The digest is not a signature or proof of future capacity**.
@@ -41,6 +41,6 @@ True cross-agent disk scheduling requires an authenticated owner/worker registry
 
 ## Reproducibility
 
-Run `python -m unittest discover -s tests -p test_storage_admission.py -v`. The 24 cases cover exact GiB math, threshold crossings, two-sample minimum, source/receipt checksum, malformed observations, unavailable disks and CLI behavior. The standard estate CI also compiles the module and runs these checks, separately from its production dashboard tests.
+Run `python -m unittest discover -s tests -p test_storage_admission.py -v`. The 25 cases cover exact GiB math, threshold crossings, two-sample minimum, source/receipt checksum, malformed observations, unavailable disks and CLI behavior. The standard estate CI also compiles the module and runs these checks, separately from its production dashboard tests.
 
 This repository does **not** embed a user's local machine paths, private cleanup journals, hardware credentials, current disk telemetry or archaeological datasets in its release artifacts. It is a reusable local source-control contract; operational live disk observations must be obtained from an authorized device at the moment of use.

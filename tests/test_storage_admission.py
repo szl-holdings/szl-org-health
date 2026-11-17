@@ -171,7 +171,7 @@ class SZLStorageAdmissionTests(unittest.TestCase):
 
     def test_disk_observation_malformed_or_inconsistent_fails_closed(self):
         bad = [
-            SimpleNamespace(total=100, used=50, free=49),
+            SimpleNamespace(total=100, used=52, free=49),
             SimpleNamespace(total=0, used=0, free=0),
             SimpleNamespace(total=100, used=True, free=99),
             SimpleNamespace(total=100, used=-1, free=101),
@@ -193,6 +193,23 @@ class SZLStorageAdmissionTests(unittest.TestCase):
                 drive="X:\\", mode="admit", reserve_gib="1",
                 disk_reader=fail, sample_seconds=0,
             )
+
+    def test_posix_reserved_filesystem_blocks_do_not_inflate_available_space(self):
+        # Linux root-reserved blocks are neither used nor available to this job.
+        # A valid usage need not satisfy total == used + free.
+        data = SimpleNamespace(
+            total=100 * GIB, used=20 * GIB, free=70 * GIB
+        )
+        r = g.observe(
+            drive="/", mode="admit", reserve_gib="8",
+            disk_reader=lambda _: data, sample_seconds=0, clock=lambda: UTC,
+        )
+        self.assertEqual(r["decision"], "ADMIT_PRECHECK_ONLY")
+        self.assertEqual(r["measured_free_gib"], 70)
+        self.assertEqual(r["min_post_budget_free_gib"], 62)
+        self.assertEqual(
+            r["filesystem_unavailable_reserved_bytes"], [10 * GIB]
+        )
 
     def test_disk_geometry_changed_does_not_admit(self):
         samples = iter([usage(100, 60), usage(200, 120)])
