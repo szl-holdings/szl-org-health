@@ -1413,6 +1413,9 @@
                          "repo":  "szl-cram",
                          "path":  "pyproject.toml",
                          "status":  "queued",
+                         "github_environment":  "pypi",
+                         "workflow":  ".github/workflows/publish-pypi.yml",
+                         "tag_pattern":  "v\u003cversion\u003e",
                          "reason":  "queued 2026-11-17 (owner order): CRAM classical-energy reasoning package (arXiv:2611.17309 audit line); first tag v0.1.0 deferred pending PyPI pending-publisher registration, pypi environment, tag ruleset",
                          "source":  "https://github.com/szl-holdings/szl-cram"
                      }
