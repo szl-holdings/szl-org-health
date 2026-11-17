@@ -240,7 +240,10 @@ Public API requests never run or wait for provider collection. A cold or expired
 response schedules at most one background refresh shared by `/api/health`,
 `/api/portal`, and `/api/proof-graph`; until that refresh succeeds, all three return HTTP 503 with
 `{"error":"UNAVAILABLE"}` and `Retry-After: 60`. The refresh precomputes all three
-public response bodies. Successful responses are cached for 60 seconds from
+public response bodies when the graph is admissible. A graph-only projection
+failure leaves the existing health and portal readbacks available while the
+graph endpoint returns bounded HTTP 503; it never leaks error details or serves
+an expired graph. Successful responses are cached for 60 seconds from
 completion. A failed refresh backs off for 60 seconds and never serves expired
 data as a current observation. Provider timestamps, coverage states, public
 projection and governance rules are unchanged. `/healthz` remains a liveness
