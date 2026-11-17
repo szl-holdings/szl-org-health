@@ -53,6 +53,15 @@ CI passed for the current branch head. `run_window_observed` and
 `default_branch_push_runs_total` retain the observed denominator and provider
 total; the collection timestamps retain the observation window. An empty
 complete query remains CI `unknown`.
+**Nonexecuted workflow guard (2026-11-17).** A terminal `skipped` or
+`neutral` run is retained internally in `nonexecuted_workflows`, not counted
+as a measured success. If every observed workflow is skipped/neutral, CI is
+`unknown`, not `success`. When there is an executed success plus an optional
+skipped workflow, the skipped workflow remains nonblocking; a real current
+failure still wins. This is a bounded **push-run evidence** classification,
+not a required-check enumeration, enabled/disabled workflow-definition count,
+exact protected-main SHA attestation, or production-readiness result.
+
 
 A page-cap limit is `INCOMPLETE`; a first-page total above 1,000 stops further
 requests because those requests could not establish completeness within budget.

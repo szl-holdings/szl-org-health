@@ -146,6 +146,53 @@ class WorkflowAggregationTests(unittest.TestCase):
         self.assertEqual(result["ci"], "unknown")
 
 
+    def test_all_neutral_and_skipped_runs_cannot_make_ci_green(self):
+        runs = [
+            {"workflow_id": 1, "name": "optional-manual", "created_at": "2026-11-17T00:00:00Z",
+             "status": "completed", "conclusion": "skipped"},
+            {"workflow_id": 2, "name": "neutral-coverage", "created_at": "2026-11-17T00:01:00Z",
+             "status": "completed", "conclusion": "neutral"},
+        ]
+        result = aggregate_workflow_runs(runs)
+        self.assertEqual(result["ci"], "unknown")
+        self.assertEqual(result["failing_workflows"], [])
+        self.assertEqual(result["nonexecuted_workflows"],
+                         ["neutral-coverage", "optional-manual"])
+
+    def test_executed_success_with_optional_skip_is_not_blocked(self):
+        runs = [
+            {"workflow_id": 1, "name": "required-test", "created_at": "2026-11-17T00:00:00Z",
+             "status": "completed", "conclusion": "success"},
+            {"workflow_id": 2, "name": "optional-manual", "created_at": "2026-11-17T00:01:00Z",
+             "status": "completed", "conclusion": "skipped"},
+        ]
+        result = aggregate_workflow_runs(runs)
+        self.assertEqual(result["ci"], "success")
+        self.assertEqual(result["nonexecuted_workflows"], ["optional-manual"])
+
+    def test_latest_skip_supersedes_old_success_without_resurrecting_it(self):
+        result = aggregate_workflow_runs([
+            {"workflow_id": 5, "name": "build", "created_at": "2026-11-16T00:00:00Z",
+             "status": "completed", "conclusion": "success"},
+            {"workflow_id": 5, "name": "build", "created_at": "2026-11-17T00:00:00Z",
+             "status": "completed", "conclusion": "skipped"},
+        ])
+        self.assertEqual(result["ci"], "unknown")
+        self.assertEqual(result["nonexecuted_workflows"], ["build"])
+
+    def test_terminal_red_dominates_neutral_optional_workflow(self):
+        result = aggregate_workflow_runs([
+            {"workflow_id": 1, "name": "security", "created_at": "2026-11-17T00:00:00Z",
+             "status": "completed", "conclusion": "failure"},
+            {"workflow_id": 2, "name": "manual", "created_at": "2026-11-17T00:00:00Z",
+             "status": "completed", "conclusion": "skipped"},
+        ])
+        self.assertEqual(result["ci"], "failure")
+        self.assertEqual(result["failing_workflows"], ["security"])
+        self.assertEqual(result["nonexecuted_workflows"], ["manual"])
+
+
+
 class ClassificationTests(unittest.TestCase):
     def test_archive_wins_over_name_rules(self):
         self.assertEqual(classify_repo({"name": "platform", "archived": True}), "archive")

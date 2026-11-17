@@ -69,7 +69,10 @@ FAILURE_CONCLUSIONS = {
     "startup_failure",
     "timed_out",
 }
-GREEN_CONCLUSIONS = {"neutral", "skipped", "success"}
+GREEN_CONCLUSIONS = {"success"}
+# Completed, but not measured source-CI execution. Optional/skipped/manual
+# workflows cannot turn an otherwise unwitnessed branch green.
+NONEXECUTED_CONCLUSIONS = {"neutral", "skipped"}
 PENDING_STATUSES = {"in_progress", "pending", "queued", "requested", "waiting"}
 RULESET_PAGE_SIZE = 100
 ENFORCING_BRANCH_RULE_TYPES = frozenset(
@@ -195,11 +198,14 @@ def aggregate_workflow_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
             "failing_workflows": [],
             "pending_workflows": [],
             "unknown_workflows": [],
+            "nonexecuted_workflows": [],
         }
 
     failing: list[str] = []
     pending: list[str] = []
     unknown: list[str] = []
+    nonexecuted: list[str] = []
+    success_count = 0
     for key, run in latest.items():
         name = str(run.get("name") or key)
         status = run.get("status")
@@ -207,7 +213,9 @@ def aggregate_workflow_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
         if status == "completed" and conclusion in FAILURE_CONCLUSIONS:
             failing.append(name)
         elif status == "completed" and conclusion in GREEN_CONCLUSIONS:
-            continue
+            success_count += 1
+        elif status == "completed" and conclusion in NONEXECUTED_CONCLUSIONS:
+            nonexecuted.append(name)
         elif status in PENDING_STATUSES and conclusion is None:
             pending.append(name)
         else:
@@ -217,6 +225,7 @@ def aggregate_workflow_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
     failing.sort()
     pending.sort()
     unknown.sort()
+    nonexecuted.sort()
     ci = (
         "failure"
         if failing
@@ -224,7 +233,7 @@ def aggregate_workflow_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
         if unknown
         else "pending"
         if pending
-        else "success"
+        else "success" if success_count else "unknown"
     )
     return {
         "ci": ci,
@@ -232,6 +241,7 @@ def aggregate_workflow_runs(runs: list[dict[str, Any]]) -> dict[str, Any]:
         "failing_workflows": failing,
         "pending_workflows": pending,
         "unknown_workflows": unknown,
+        "nonexecuted_workflows": nonexecuted,
     }
 
 
