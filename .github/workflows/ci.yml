@@ -26,13 +26,15 @@ jobs:
       - name: Install locked dependencies
         run: python -m pip install --require-hashes -r requirements.txt
       - name: Compile collectors, autonomic controller, and diligence compiler
-        run: python -m compileall -q app.py refresh_snapshot.py build_series_a_diligence.py census autonomic scripts
+        run: python -m compileall -q app.py refresh_snapshot.py build_series_a_diligence.py census autonomic scripts tools/szl_storage_admission.py
       - name: Check diligence policy and schema document JSON syntax
         run: |
           python -m json.tool diligence/policy.json >/dev/null
           python -m json.tool schemas/series-a-diligence.schema.json >/dev/null
       - name: Run fail-closed census and recovery contracts
         run: python -m unittest discover -s tests -v
+      - name: Explicitly verify read-only capacity budget admission and sensor denial
+        run: python -m unittest discover -s tests -p test_storage_admission.py -v
       - name: Compile a source-bound packet and reproduce its historical bytes
         run: |
           python -I -B build_series_a_diligence.py \
