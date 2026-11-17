@@ -16,7 +16,7 @@ from tests.test_secret_workflow_boundary import (
 
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github/workflows"
-WORKFLOW_PATH = WORKFLOWS / "scheduled-estate-census.yml"
+WORKFLOW_PATH = WORKFLOWS / "scheduled-pypi-release-audit.yml"
 SHA = "a" * 40
 
 
@@ -83,10 +83,10 @@ class PyPIAuditTrustTests(TestCase):
         error, _ = self.run_guard("schedule", "refs/heads/main", head="b" * 40)
         self.assertEqual(error, "audit checkout does not match exact workflow source")
 
-    def test_credentials_remain_in_existing_schedule_only_workflow(self):
+    def test_credentials_remain_in_named_schedule_only_workflow(self):
         self.assertEqual(
             _canonical_triggers(self.workflow, WORKFLOW_PATH.name),
-            (("schedule",), ("17 */6 * * *",)),
+            (("schedule",), ("29 */6 * * *",)),
         )
         unprivileged = (WORKFLOWS / "pypi-release-path-audit.yml").read_text(encoding="utf-8")
         self.assertFalse(_uses_actions_secrets(unprivileged))
@@ -114,7 +114,8 @@ class PyPIAuditTrustTests(TestCase):
         self.assertIn("tests.test_pypi_sigstore_verify", self.job)
 
     def test_reader_permissions_and_aliases_are_existing_read_only_subset(self):
-        census = dict(_reader_permission_pairs(self.workflow, "census"))
+        census_workflow = (WORKFLOWS / "scheduled-estate-census.yml").read_text(encoding="utf-8")
+        census = dict(_reader_permission_pairs(census_workflow, "census"))
         pypi = dict(_reader_permission_pairs(self.workflow, "pypi-audit"))
         self.assertEqual(pypi, {
             "permission-contents": "read",
@@ -122,7 +123,7 @@ class PyPIAuditTrustTests(TestCase):
             "permission-administration": "read",
         })
         self.assertLessEqual(pypi.items(), census.items())
-        census_job = self.workflow.split("\n  census:\n", 1)[1].split("\n  file-audit:\n", 1)[0]
+        census_job = census_workflow.split("\n  census:\n", 1)[1].split("\n  file-audit:\n", 1)[0]
         existing_secrets = set(re.findall(r"\bsecrets\.([A-Z_0-9]+)", census_job))
         pypi_secrets = set(re.findall(r"\bsecrets\.([A-Z_0-9]+)", self.job))
         self.assertLessEqual(pypi_secrets, existing_secrets)

@@ -764,6 +764,9 @@ def audit_private_marker(http: Http, org: str, m: dict, results: list, published
                   f"name is published from {published_names[norm(m['name'])]}; this copy ({m['repo']}/{m['path']}) stays private")
         else:
             check(results, m["name"], "pypi:unexpected-project", "FAIL", "internal/never package exists on PyPI")
+    elif st != 404 and m.get("name") and m["status"] in ("internal", "never"):
+        check(results, m["name"], "pypi:unexpected-project", "UNKNOWN",
+              f"PyPI project absence could not be established: HTTP {st}")
 
 
 def main() -> int:
@@ -824,7 +827,7 @@ def main() -> int:
         lines.append("No eligible evidence checks were performed; audit fails closed.")
     Path(args.summary).write_text("\n".join(lines) + "\n", encoding="utf-8")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
             f.write("\n".join(lines) + "\n")
     print(json.dumps(counts), verdict)
     return 0 if verdict == "PASS" else 1

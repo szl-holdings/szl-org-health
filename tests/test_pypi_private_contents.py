@@ -138,6 +138,24 @@ class PrivateContentsTests(TestCase):
         results, _ = audit_marker(pypi_status=200, published_names={PACKAGE: "public-example"})
         self.assertEqual(results["pypi:unexpected-project"]["status"], "PASS")
 
+    def test_unavailable_pypi_lookup_never_implies_private_absence(self):
+        for raw_status in (200, 404):
+            for status in (301, 401, 403, 408, 429, 500, 503, -1):
+                for published_names in (None, {PACKAGE: "public-example"}):
+                    with self.subTest(raw_status=raw_status, status=status, associated=bool(published_names)):
+                        results, _ = audit_marker(
+                            raw_status=raw_status, pypi_status=status,
+                            published_names=published_names,
+                        )
+                        self.assertEqual(results["private-classifier"]["status"], "PASS")
+                        self.assertEqual(results["pypi:unexpected-project"]["status"], "UNKNOWN")
+                        self.assertIn(f"HTTP {status}", results["pypi:unexpected-project"]["detail"])
+                        self.assertFalse(all(row["status"] == "PASS" for row in results.values()))
+
+    def test_confirmed_pypi_404_preserves_private_success(self):
+        results, _ = audit_marker(pypi_status=404)
+        self.assertTrue(all(row["status"] == "PASS" for row in results.values()))
+
     def test_api_path_query_characters_cannot_change_selected_ref(self):
         path = "tools/private?ref=untrusted/pyproject.toml"
         raw_url = f"{RAW}/{ORG}/{REPO}/HEAD/{path}"
