@@ -1,13 +1,15 @@
 """Every PyPI publisher mapping, rendered by the REAL canonical generator.
 
-governance/pypi/pypi-packages.v1.json declares 41 releasable packages (all 41
+governance/pypi/pypi-packages.v1.json declares 42 releasable packages (41
 published: the 2026-11-15 release wave plus szl-atelier and szl-drift,
-measured live on PyPI on 2026-11-16) in 40 repositories, each releasing through exactly one
+measured live on PyPI on 2026-11-16; szl-cram queued 2026-11-17, held pending
+PyPI pending-publisher registration) in 41 repositories, each releasing through exactly one
 `.github/workflows/publish-pypi.yml`. CONSUMER_SPECS is the exact SZL_PACKAGES
-line of each of those 40 committed workflows, read at each repository's HEAD (36 on
+line of each of those 41 committed workflows, read at each repository's HEAD (36 on
 2026-10-14, all then byte-identical to this renderer at org-health 9bf5447;
 szl-formulas and szl-provctl on 2026-11-16, both byte-identical to this renderer;
-szl-atelier and szl-drift on 2026-11-16, both byte-identical to this renderer). The table and the manifest are bound in both directions, so a package
+szl-atelier and szl-drift on 2026-11-16, both byte-identical to this renderer;
+szl-cram on 2026-11-17, byte-identical to this renderer). The table and the manifest are bound in both directions, so a package
 cannot be queued, published or moved without its workflow mapping being stated.
 
 For every mapping the shipped generator renders the workflow and the shipped
@@ -76,6 +78,7 @@ CONSUMER_SPECS = {
     "szl-atelier": "szl-atelier=.:pypi",
     "szl-calibration": "szl-calibration=.:pypi",
     "szl-ci-witness": "szl-ci-witness=.:pypi",
+    "szl-cram": "szl-cram=.:pypi",
     "szl-crosscheck": "szl-crosscheck=.:pypi",
     "szl-drift": "szl-drift=.:pypi",
     "szl-eclipse": "szl-eclipse=.:pypi",
@@ -255,14 +258,17 @@ ALL_CANONICAL_PASS = {
 
 
 class PublisherMappingCensusTests(unittest.TestCase):
-    def test_manifest_declares_41_packages_in_40_workflows(self):
+    def test_manifest_declares_42_packages_in_41_workflows(self):
         packages = releasable()
-        self.assertEqual(len(packages), 41)
-        self.assertEqual(len({(m["repo"], m["workflow"]) for m in packages}), 40)
-        self.assertEqual(collections.Counter(m["status"] for m in packages), {"published": 41})
+        self.assertEqual(len(packages), 42)
+        self.assertEqual(len({(m["repo"], m["workflow"]) for m in packages}), 41)
+        self.assertEqual(
+            collections.Counter(m["status"] for m in packages),
+            {"published": 41, "queued": 1},
+        )
         self.assertEqual({m["workflow"] for m in packages}, {WORKFLOW})
         self.assertEqual(WORKFLOW, ".github/workflows/publish-pypi.yml")
-        self.assertEqual(len({m["name"] for m in packages}), 41)
+        self.assertEqual(len({m["name"] for m in packages}), 42)
 
     def test_every_releasable_package_has_exactly_one_workflow_mapping(self):
         grouped = manifest_by_repo()
@@ -302,7 +308,7 @@ class PublisherMappingCensusTests(unittest.TestCase):
             self.assertLessEqual(len(parsed), 2, repo)
             shapes[shape].append(repo)
         self.assertEqual({shape: len(repos) for shape, repos in shapes.items()},
-                         {"root": 38, "subdirectory": 1, "dual": 1})
+                         {"root": 39, "subdirectory": 1, "dual": 1})
         self.assertEqual(shapes["subdirectory"], ["khipu-consensus"])
         self.assertEqual(shapes["dual"], ["szl-evidence-litellm"])
 
@@ -388,7 +394,7 @@ class ConsumerParityTests(unittest.TestCase):
                 checked[kind] += 1
         self.assertEqual(checked, expected)
         # The explicit evidence-mandate SBOM adds one shared-pin upload site.
-        self.assertEqual(checked, {"pin": 243, "comment": 243})
+        self.assertEqual(checked, {"pin": 249, "comment": 249})
 
     def test_one_byte_and_line_ending_drift_fail(self):
         for repo, spec in CONSUMER_SPECS.items():
@@ -583,10 +589,12 @@ class ReleaseGateIdentityTests(unittest.TestCase):
 
 class QueuedPublisherInertTests(unittest.TestCase):
     def test_queued_publishers_pass_only_while_pypi_has_no_project(self):
-        # The 2026-11-15 release wave published every queued package, so the census
-        # holds no queued subjects. Synthesize one so the fail-closed inertness
-        # contract stays covered regardless of census state.
-        queued = [dict(m, status="queued") for m in releasable() if m["status"] == "published"][:1]
+        # szl-cram was queued on 2026-11-17 (first tag held pending PyPI
+        # pending-publisher registration), so the census holds a real queued
+        # subject; a published entry is additionally synthesized so the
+        # fail-closed inertness contract stays covered regardless of census state.
+        queued = [m for m in releasable() if m["status"] == "queued"]
+        queued += [dict(m, status="queued") for m in releasable() if m["status"] == "published"][:1]
         self.assertTrue(queued)
         for m in queued:
             workflow = gen.render(CONSUMER_SPECS[m["repo"]]).encode("utf-8")

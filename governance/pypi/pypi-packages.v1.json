@@ -26,7 +26,8 @@
                    "published":  41,
                    "internal":  51,
                    "never":  9,
-                   "third-party":  1
+                   "third-party":  1,
+                   "queued":  1
                },
     "packages":  [
                      {
@@ -1406,6 +1407,17 @@
                          "status":  "third-party",
                          "reason":  "vendored upstream project; name owned by its upstream maintainer on PyPI",
                          "source":  "https://github.com/szl-holdings/platform"
+                     },
+                     {
+                         "name":  "szl-cram",
+                         "repo":  "szl-cram",
+                         "path":  "pyproject.toml",
+                         "status":  "queued",
+                         "github_environment":  "pypi",
+                         "workflow":  ".github/workflows/publish-pypi.yml",
+                         "tag_pattern":  "v\u003cversion\u003e",
+                         "reason":  "queued 2026-11-17 (owner order): CRAM classical-energy reasoning package (arXiv:2611.17309 audit line); first tag v0.1.0 deferred pending PyPI pending-publisher registration, pypi environment, tag ruleset",
+                         "source":  "https://github.com/szl-holdings/szl-cram"
                      }
                  ],
     "history":  [
@@ -1424,6 +1436,10 @@
                     {
                         "at":  "2026-11-16T06:02:51Z",
                         "event":  "release-path-audit follow-up 2026-11-16: szl-formulas and szl-provctl verified live on PyPI via pypi.org JSON API and promoted never -\u003e published (measured version 0.1.0, releases, tag commit sha); the former wheel-would-be-empty reason was stale; both live publish-pypi.yml workflows measured canonical with SZL_PACKAGES single-package specs"
+                    },
+                    {
+                        "at":  "2026-11-17T20:00:04Z",
+                        "event":  "szl-cram queued: CRAM classical-energy reasoning package (from arXiv:2611.17309 audit) added as queued; publish-pypi.yml measured canonical (built from szl-pin HEAD); first tag v0.1.0 held pending PyPI pending-publisher registration by owner"
                     }
                 ]
 }
