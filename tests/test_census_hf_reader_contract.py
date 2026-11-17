@@ -1,7 +1,6 @@
 """Contract: the scheduled estate census receives only an admitted HF reader."""
 from __future__ import annotations
 
-import re
 import unittest
 from pathlib import Path
 
@@ -12,8 +11,8 @@ WORKFLOW = ROOT / ".github" / "workflows" / "scheduled-estate-census.yml"
 class CensusCredentialBoundaryTests(unittest.TestCase):
     def test_dedicated_read_secret_is_only_hf_census_credential(self):
         source = WORKFLOW.read_text(encoding="utf-8")
-        token_bindings = re.findall(r"(?m)^\\s{10}HF_TOKEN:\\s*(.+)$", source)
-        present_bindings = re.findall(r"(?m)^\\s{10}HAS_HF_TOKEN:\\s*(.+)$", source)
+        token_bindings = [line.strip().split("HF_TOKEN: ", 1)[1] for line in source.splitlines() if line.startswith("          HF_TOKEN: ")]
+        present_bindings = [line.strip().split("HAS_HF_TOKEN: ", 1)[1] for line in source.splitlines() if line.startswith("          HAS_HF_TOKEN: ")]
         self.assertEqual(token_bindings, ["${{ secrets.HF_CENSUS_READ_TOKEN }}"])
         self.assertEqual(present_bindings, ["${{ secrets.HF_CENSUS_READ_TOKEN != '' }}"])
         self.assertEqual(source.count("HF_CENSUS_READ_TOKEN"), 2)
