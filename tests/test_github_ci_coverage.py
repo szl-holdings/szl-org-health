@@ -59,6 +59,28 @@ class WorkflowCoverageTests(unittest.TestCase):
             self.assertEqual(self.control(result), "PASS")
             self.assertEqual(report._public_github_repo("sample", result)["ci"], "success")
 
+    def test_skip_only_complete_window_fails_closed_through_public_projection(self):
+        row, request = self.census([page([run(1, conclusion="skipped")], 1)])
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(row["ci_coverage"], "COMPLETE")
+        self.assertEqual(row["ci"], "unknown")
+        self.assertEqual(row["nonexecuted_workflows"], ["docs"])
+        self.assertEqual(self.control(row), "UNKNOWN")
+        public = report._public_github_repo("sample", row)
+        self.assertEqual(public["ci"], "unknown")
+        self.assertNotIn("nonexecuted_workflows", public)
+
+    def test_optional_skip_with_executed_green_is_measured_but_not_release_admitted(self):
+        rows = [run(1, workflow=10, conclusion="success"),
+                run(2, workflow=20, conclusion="neutral")]
+        row, _ = self.census([page(rows, 2)])
+        self.assertEqual(row["ci_coverage"], "COMPLETE")
+        self.assertEqual(row["ci"], "success")
+        self.assertEqual(row["nonexecuted_workflows"], ["docs"])
+        # This is a push-history status. Source SHA, required checks,
+        # signatures and runtime admission are separately unverified here.
+        self.assertNotIn("runtime_ready", row)
+
     def test_empty_complete_window_is_unknown_not_green(self):
         result, _ = self.census([page([], 0)])
         self.assertEqual(result["ci_coverage"], "COMPLETE")
