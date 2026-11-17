@@ -14,9 +14,11 @@ COPY census/huggingface.py /app/census/huggingface.py
 COPY census/space_readiness.py /app/census/space_readiness.py
 COPY census/report.py /app/census/report.py
 COPY census/portal_projection.py /app/census/portal_projection.py
+COPY census/proof_graph.py /app/census/proof_graph.py
 COPY census/sites.py /app/census/sites.py
 COPY governance/policy.json /app/governance/policy.json
 COPY static/index.html /app/static/index.html
+COPY static/proof-graph.html /app/static/proof-graph.html
 COPY static/data.json /app/static/data.json
 EXPOSE 7860
 USER 65532:65532
