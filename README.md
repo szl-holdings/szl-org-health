@@ -486,3 +486,21 @@ Estate on Hugging Face: models, datasets and Spaces are published under the [SZL
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).
+
+
+### Local agent storage-admission precheck (read-only)
+
+The separate [Local Storage Admission v1](docs/LOCAL_STORAGE_ADMISSION.md) supplies a
+source-bound, fail-closed Python precheck for SZL developer workstations. It
+computes whether a **declared maximum job disk budget** can fit while leaving a
+free-space floor (default 50 GiB), using the minimum of two local OS measurements.
+It never deletes caches, runs jobs, stores credentials, takes reservations or
+asserts that all autonomous agents obey it.
+
+For example, `python -I tools/szl_storage_admission.py --mode admit --drive C:/ --reserve-gib 8`
+returns 0 only for a measured preflight fit, 2 for a capacity HOLD, and 3 for
+bad input or unavailable measurements. This is a **precheck, not a lease or
+future-space guarantee**. The older privileged PowerShell V13 recovery script
+remains intentionally source-blocked; this addition does not remove its hold.
+Linux CI tests the portable implementation with synthetic disk fixtures, not
+the owner's Windows drive.
