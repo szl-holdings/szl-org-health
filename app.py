@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from census import SCHEMA_VERSION, build_report
 from census.common import resolve_txt as _resolve_txt
 from census.portal_projection import project_portal_index
+from census.proof_graph import project_proof_graph
 from census.sites import DOMAINS
 
 
@@ -52,9 +53,11 @@ class PublicResponses:
         try:
             report = build_report(exposure="public", use_cache=False)
             portal = project_portal_index(report)
+            proof_graph = project_proof_graph(report)
             responses = {
                 path: json.dumps(value, separators=(",", ":"), allow_nan=False).encode()
-                for path, value in (("/api/health", report), ("/api/portal", portal))
+                for path, value in (("/api/health", report), ("/api/portal", portal),
+                                    ("/api/proof-graph", proof_graph))
             }
         except Exception:
             # Do not expose provider exceptions or promote an old result.
@@ -139,13 +142,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
         path = self.path.split("?", 1)[0]
-        if path in ("/api/health", "/api/portal"):
+        if path in ("/api/health", "/api/portal", "/api/proof-graph"):
             try:
                 payload = PUBLIC_RESPONSES.get(path)
             except ReportUnavailable:
                 self._send(503, '{"error":"UNAVAILABLE"}')
             else:
                 self._send(200, payload)
+        elif path in ("/proof-graph", "/proof-graph.html"):
+            try:
+                with open("static/proof-graph.html", "rb") as source:
+                    self._send(200, source.read(), "text/html; charset=utf-8")
+            except FileNotFoundError:
+                self._send(404, "not found", "text/plain; charset=utf-8")
         elif path in ("/", "/index.html"):
             try:
                 with open("static/index.html", "rb") as source:

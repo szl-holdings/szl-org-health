@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SZL | Public Evidence Topology</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+--bg:#080f1a;--card:#101d2c;--line:#284057;--text:#ecf3fa;--muted:#a6b6c6;--cyan:#79dbe5}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 30% 10%,#12304b,var(--bg) 62%);color:var(--text)}
+header,main,footer{max-width:1450px;margin:auto;padding:20px}
+header{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+h1{font-size:clamp(21px,3vw,30px);margin:0;letter-spacing:-.02em}
+.small{font-size:12px;color:var(--muted);max-width:78ch}
+a{color:var(--cyan)}.top{display:flex;align-items:center;gap:16px}.pill{padding:4px 10px;border-radius:12px;background:#263b47;color:#d9ebef;font-size:12px}
+.bar{padding:12px 14px;border:1px solid #5c5040;background:#392d20;border-radius:12px;margin:4px 0 14px;font-size:13px;line-height:1.5}
+main{padding-top:0}.layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px}
+.visual,.side{border:1px solid var(--line);background:linear-gradient(145deg,rgba(20,41,64,.95),rgba(10,20,32,.98));border-radius:16px;box-shadow:0 18px 60px rgba(0,0,0,.16)}
+.visual{position:relative;min-height:500px;overflow:hidden}canvas{width:100%;height:600px;display:block;touch-action:none}
+.side{padding:18px;overflow-wrap:anywhere}.side h2{font-size:15px;margin:2px 0 12px}.k{font-size:11px;text-transform:uppercase;color:var(--muted);letter-spacing:.1em}
+#node-name{font-size:20px;font-weight:650;margin:9px 0}#node-url{display:block;margin:14px 0;word-break:break-all}
+.value{margin:7px 0;font-size:13px}.muted{color:var(--muted)}.warning{color:#ffcd8d}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
+.controls{position:absolute;left:12px;top:12px;right:12px;display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+input,select,button{background:#132a3e;border:1px solid #46627d;border-radius:8px;color:var(--text);padding:8px 10px;font:inherit;font-size:13px}
+input{min-width:160px;flex:1}button{cursor:pointer}button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.hint{position:absolute;bottom:10px;left:14px;right:14px;color:var(--muted);font-size:12px;pointer-events:none}
+.legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px;color:var(--muted);font-size:12px}
+.legend b{font-weight:400}.swatch{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}
+footer{font-size:12px;color:var(--muted)}@media(max-width:870px){.layout{grid-template-columns:1fr}canvas{height:430px}.visual{min-height:430px}.side{min-height:200px}header,main,footer{padding:12px}}
+</style>
+</head>
+<body>
+<header>
+<div><h1>SZL / Evidence Topology</h1><div class="small">Interactive three-dimensional layout of public source metadata. Membership is not deployment proof.</div></div>
+<div class="top"><a href="/">Operations overview</a><span id="fresh" class="pill">UNAVAILABLE</span></div>
+</header>
+<main>
+<div class="bar" role="status" id="truth">No privileged reads or execution actions. Source-to-HF, HF-to-product and product-to-proof parity are <strong>UNKNOWN</strong> unless independent evidence proves otherwise. Layout coordinates are illustrative—not measured geography or runtime topology.</div>
+<div class="layout">
+<section class="visual" aria-label="Interactive 3D projection of public GitHub and Hugging Face sources">
+<div class="controls"><input id="search" aria-label="Filter nodes by name" placeholder="Search public sources" autocomplete="off"><select id="kind" aria-label="Filter node type"><option value="">All source types</option><option value="github">GitHub</option><option value="huggingface">Hugging Face</option><option value="hub">Hub roots</option></select><button id="reset" type="button">Reset view</button></div>
+<canvas id="space" role="img" aria-label="Rotatable public evidence topology. Select a node for its source URL and evidence limitations."></canvas>
+<div class="hint">Drag to orbit · Scroll to zoom · Click a node to inspect · No live action or payment dispatch</div>
+</section>
+<aside class="side" aria-live="polite">
+<div class="k">Selected observation</div><div id="node-name">Source unavailable</div>
+<div class="value" id="node-kind"></div><div class="value muted" id="node-scope">No data has been verified.</div>
+<a id="node-url" rel="noopener noreferrer" target="_blank" hidden></a>
+<div class="k">Evidence boundary</div><div class="value warning" id="node-evidence">UNKNOWN</div>
+<div class="value muted" id="node-runtime">Runtime, deployment and settlement unverified.</div>
+<hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+<div class="k">Public observation</div><div class="mono" id="facts">No live graph payload.</div>
+<div class="legend">
+<b><span class="swatch" style="background:#74bedc"></span>GitHub</b>
+<b><span class="swatch" style="background:#bda2f1"></span>HF models/datasets</b>
+<b><span class="swatch" style="background:#64d9b0"></span>HF Spaces</b>
+<b><span class="swatch" style="background:#f4bd78"></span>Hub</b>
+</div>
+</aside>
+</div>
+</main>
+<footer>Source: /api/proof-graph · PUBLIC_SUBSET_ONLY · A content hash is a deterministic checksum, not a cryptographic signature. Cross-provider dashed links are unverified.</footer>
+<script>
+'use strict';
+const cvs=document.getElementById('space'),ctx=cvs.getContext('2d');
+const $=id=>document.getElementById(id);
+let graph=null,pts=[],visible=[],links=[],yaw=.23,pitch=.15,zoom=1.0,drag=false,mx=0,my=0,positions=[];
+function hash(s){let h=2166136261;for(const c of s){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return h>>>0}
+function group(n){return n.id==='hub:github'?0:n.id==='hub:huggingface'?1:n.id==='hub:product'?2:n.id==='hub:proof'?3:n.kind.startsWith('github')?0:1}
+function place(n){const g=group(n),h=hash(n.id),center=[[-245,5,0],[220,5,0],[5,235,30],[10,-210,0]][g];if(n.kind==='hub')return center;
+const rad=90+((h>>>5)%175),a=(h%360)*Math.PI/180,b=(((h>>>9)%180)-90)*Math.PI/180;
+return [center[0]+rad*Math.cos(a)*Math.cos(b),center[1]+rad*Math.sin(b),
+center[2]+rad*Math.sin(a)*Math.cos(b)]}
+function color(n){if(n.kind==='hub')return '#f4bd78';if(n.kind.startsWith('github'))return '#74bedc';if(n.kind==='huggingface_spaces')return '#64d9b0';return '#bda2f1'}
+function resize(){const box=cvs.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,2);cvs.width=Math.round(box.width*d);cvs.height=Math.round(box.height*d);ctx.setTransform(d,0,0,d,0,0);draw()}
+function project(p){const [x,y,z]=p;const c=Math.cos(yaw),s=Math.sin(yaw),u=x*c+z*s,v=z*c-x*s;
+const cy=Math.cos(pitch),sy=Math.sin(pitch),yy=y*cy-v*sy,zz=v*cy+y*sy;
+const box=cvs.getBoundingClientRect(),scale=650*zoom/(1050+zz);
+return {x:box.width/2+u*scale,y:box.height/2+yy*scale,z:zz,scale}}
+function filter(n){const search=$('search').value.trim().toLowerCase(),k=$('kind').value;
+return (!search||n.label.toLowerCase().includes(search))&&(!k|| (k==='hub'?n.kind==='hub':k==='github'?n.kind.startsWith('github'):n.kind.startsWith('huggingface')))}
+function draw(){if(!ctx)return;const w=cvs.clientWidth,h=cvs.clientHeight;ctx.clearRect(0,0,w,h);ctx.fillStyle='#0b1523';ctx.fillRect(0,0,w,h);
+if(!graph)return;visible=pts.filter(p=>filter(p.n));const allowed=new Set(visible.map(p=>p.n.id));
+const rendered=new Map(pts.map(p=>[p.n.id,project(p.p)]));
+for(const e of links){if(!allowed.has(e.source)||!allowed.has(e.target))continue;
+const a=rendered.get(e.source),b=rendered.get(e.target);if(!a||!b)continue;
+ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.strokeStyle=e.relation==='PARITY_NOT_ESTABLISHED'?'rgba(241,176,100,.66)':'rgba(139,185,209,.17)';
+ctx.setLineDash(e.relation==='PARITY_NOT_ESTABLISHED'?[4,6]:[]);ctx.lineWidth=e.relation==='PARITY_NOT_ESTABLISHED'?1.5:.8;ctx.stroke();ctx.setLineDash([])}
+positions=visible.map(({n,p})=>({n,v:rendered.get(n.id)})).sort((a,b)=>b.v.z-a.v.z);
+for(const {n,v} of positions){const r=n.kind==='hub'?9:Math.max(2.2,3.3*v.scale);
+ctx.beginPath();ctx.arc(v.x,v.y,r,0,Math.PI*2);ctx.fillStyle=color(n);ctx.globalAlpha=n.evidence_class==='UNKNOWN'?.7:1;ctx.fill();ctx.globalAlpha=1}
+const roots=positions.filter(x=>x.n.kind==='hub');ctx.fillStyle='#ebf5fb';ctx.font='12px system-ui';
+for(const {n,v} of roots){ctx.fillText(n.label,v.x+12,v.y-11)}
+}
+function inspect(node){$('node-name').textContent=node.label;$('node-kind').textContent=node.kind.replaceAll('_',' ');
+$('node-scope').textContent='Scope: '+node.claim_scope;
+$('node-evidence').textContent='Evidence: '+node.evidence_class;
+$('node-runtime').textContent='No signed source/deployment parity, live model inference, settlement or release authority is established by this node.';
+const link=$('node-url');let allowed=false;try{const u=new URL(node.url);allowed=u.protocol==='https:'&&['github.com','huggingface.co','a-11-oy.com','a11oy.net'].includes(u.hostname)&&!u.username&&!u.password}catch(_){}
+link.hidden=!allowed;if(allowed){link.href=node.url;link.textContent='Open public source ↗'}else{link.removeAttribute('href');link.textContent=''}}
+let startX=0,startY=0;
+cvs.addEventListener('pointerdown',e=>{drag=true;mx=e.clientX;my=e.clientY;startX=mx;startY=my;cvs.setPointerCapture(e.pointerId)});
+cvs.addEventListener('pointermove',e=>{if(!drag)return;yaw+=(e.clientX-mx)*.007;pitch=Math.max(-1.25,Math.min(1.25,pitch+(e.clientY-my)*.007));mx=e.clientX;my=e.clientY;draw()});
+cvs.addEventListener('pointerup',e=>{drag=false;if(Math.abs(e.clientX-startX)+Math.abs(e.clientY-startY)>7)return;
+const r=cvs.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;
+const hit=positions.filter(v=>Math.hypot(v.v.x-x,v.v.y-y)<(v.n.kind==='hub'?16:10)).pop();if(hit)inspect(hit.n)});
+cvs.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.4,Math.min(3.2,zoom*Math.exp(-e.deltaY*.0009)));draw()},{passive:false});
+$('search').addEventListener('input',draw);$('kind').addEventListener('change',draw);
+$('reset').addEventListener('click',()=>{yaw=.23;pitch=.15;zoom=1;$('search').value='';$('kind').value='';draw()});
+addEventListener('resize',resize);
+async function load(){
+try{const response=await fetch('/api/proof-graph',{credentials:'omit',redirect:'error',cache:'no-store'});
+if(!response.ok)throw Error('HTTP '+response.status);
+const data=await response.json();
+if(data.schema!=='szl.public-source-topology/v1'||!Array.isArray(data.nodes)||!Array.isArray(data.edges)||data.nodes.length>800)throw Error('Invalid graph contract');
+graph=data;pts=data.nodes.map(n=>({n,p:place(n)}));links=data.edges;
+$('fresh').textContent=data.within_24h?'RECENT PUBLIC SUBSET':'STALE OR UNKNOWN';
+$('truth').textContent='PUBLIC SUBSET only. GitHub ↔ Hugging Face ↔ product ↔ proof cross-provider parity: UNKNOWN. Layout is illustrative. Source evidence is not runtime acceptance.';
+$('facts').textContent='Nodes: '+pts.length+' · Membership/gap edges: '+links.length+'\nSource timestamp: '+(data.generated_at||'UNKNOWN')+'\nContent SHA-256: '+data.content_sha256+'\nSignature: '+data.signature_state+'\nRelease authority: '+data.release_authority;
+if(pts.length)inspect(pts[0].n);resize();
+}catch(e){$('fresh').textContent='UNAVAILABLE';$('truth').textContent='The live public proof graph is unavailable. No fallback data is promoted to current evidence.';$('facts').textContent=String(e.message).slice(0,160)}
+}
+resize();load();
+</script>
+</body>
+</html>
