@@ -37,7 +37,11 @@ class PublicResponses:
         with self._lock:
             now = time.monotonic()
             if self._responses and now < self._expires_at:
-                return self._responses[path]
+                # Optional graph failure cannot produce a 500 on a cache miss.
+                payload = self._responses.get(path)
+                if payload is not None:
+                    return payload
+                raise ReportUnavailable
             if not self._refreshing and now >= self._retry_at:
                 self._refreshing = True
                 try:
@@ -53,12 +57,21 @@ class PublicResponses:
         try:
             report = build_report(exposure="public", use_cache=False)
             portal = project_portal_index(report)
-            proof_graph = project_proof_graph(report)
             responses = {
                 path: json.dumps(value, separators=(",", ":"), allow_nan=False).encode()
-                for path, value in (("/api/health", report), ("/api/portal", portal),
-                                    ("/api/proof-graph", proof_graph))
+                for path, value in (("/api/health", report), ("/api/portal", portal))
             }
+            try:
+                # A new optional graph projection must not poison the existing
+                # health/portal readbacks when its own contract is unavailable.
+                proof_graph = project_proof_graph(report)
+                responses["/api/proof-graph"] = json.dumps(
+                    proof_graph, separators=(",", ":"), allow_nan=False
+                ).encode()
+            except Exception:
+                # Do not reveal upstream details or serve a stale graph.
+                # Missing optional entry becomes a bounded HTTP 503.
+                pass
         except Exception:
             # Do not expose provider exceptions or promote an old result.
             pass

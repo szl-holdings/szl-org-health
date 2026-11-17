@@ -85,6 +85,18 @@ class ProofGraphTests(unittest.TestCase):
         self.assertEqual(health["projection_schema"], "szl.estate-public-projection/v1")
         self.assertEqual(len(observed), 1)
 
+    def test_graph_projection_fault_isolated_from_primary_health_and_portal(self):
+        cache = app.PublicResponses()
+        with patch.object(app, "build_report", return_value=self.report), \
+                patch.object(app, "project_proof_graph",
+                             side_effect=RuntimeError("private upstream detail")):
+            cache._refresh()
+        self.assertEqual(json.loads(cache.get("/api/health"))["exposure"], "public")
+        self.assertEqual(json.loads(cache.get("/api/portal"))["schema"],
+                         "szl.portal-evidence-index/v1")
+        with self.assertRaises(app.ReportUnavailable):
+            cache.get("/api/proof-graph")
+
     def test_static_viewer_self_hosted_with_no_provider_inference(self):
         html = (ROOT / "static" / "proof-graph.html").read_text(encoding="utf-8")
         self.assertIn("'/api/proof-graph'", html)
