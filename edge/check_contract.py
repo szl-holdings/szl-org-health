@@ -39,6 +39,7 @@ import ipaddress
 import json
 import os
 import re
+import socket
 import ssl
 import sys
 import tempfile
@@ -737,6 +738,9 @@ class Observation:
     body: bytes = b""
     error: str | None = None
     elapsed_ms: int = 0
+    # Structured diagnostics only; do not infer that a timed-out phase finished.
+    failure_phase: str | None = None
+    failure_class: str | None = None
 
     def header(self, name: str) -> list[str]:
         return self.headers.get(name.lower(), [])
@@ -783,16 +787,35 @@ def fetch(
         body = client.post_body.encode("utf-8")
         headers["Content-Type"] = client.post_content_type
     started = time.monotonic()
-    connection: http.client.HTTPConnection
-    if connect_to is None:
-        connection = http.client.HTTPSConnection(
-            check.host, 443, timeout=client.timeout_seconds, context=ssl.create_default_context()
-        )
-    else:
-        connection = http.client.HTTPConnection(connect_to[0], connect_to[1], timeout=client.timeout_seconds)
+    connection: http.client.HTTPConnection | None = None
+    phase = "CONNECTION_INITIALIZATION"
     try:
+        if connect_to is None:
+            connection = http.client.HTTPSConnection(
+                check.host, 443, timeout=client.timeout_seconds, context=ssl.create_default_context()
+            )
+            # http.client.HTTPSConnection.connect() calls its _create_connection
+            # hook for TCP before the stdlib TLS wrap and certificate validation.
+            # This observes phase completion without replacing the verified
+            # default TLS transport, creating an extra request or disabling SNI.
+            def tracked_tcp(*args: Any, **kwargs: Any) -> socket.socket:
+                nonlocal phase
+                sock = socket.create_connection(*args, **kwargs)
+                phase = "TLS_HANDSHAKE"
+                return sock
+
+            connection._create_connection = tracked_tcp
+        else:
+            connection = http.client.HTTPConnection(
+                connect_to[0], connect_to[1], timeout=client.timeout_seconds
+            )
+        phase = "TCP_CONNECT"
+        connection.connect()
+        phase = "HTTP_REQUEST_WRITE"
         connection.request(method, check.path, body=body, headers=headers)
+        phase = "HTTP_RESPONSE_HEADERS"
         response = connection.getresponse()
+        phase = "HTTP_RESPONSE_BODY"
         payload = response.read(client.max_body_bytes)
         collected: dict[str, list[str]] = {}
         for name, value in response.getheaders():
@@ -804,14 +827,18 @@ def fetch(
             elapsed_ms=int((time.monotonic() - started) * 1000),
         )
     except (OSError, http.client.HTTPException) as exc:
+        failure_phase = "DNS_LOOKUP" if isinstance(exc, socket.gaierror) else phase
         message = f"{type(exc).__name__}: {exc}"
         return Observation(
             status=None,
             error=message[:300],
             elapsed_ms=int((time.monotonic() - started) * 1000),
+            failure_phase=failure_phase,
+            failure_class=type(exc).__name__,
         )
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
 
 
 # --------------------------------------------------------------------------
@@ -1114,6 +1141,17 @@ def evaluate(check: Check, method: str, observation: Observation, terms: Payment
     if decoded is not None:
         observed["x402"] = decoded
     row["observed"] = observed
+    if outcome == "transport-error":
+        # The phase is the last ATTEMPTED network operation, not evidence
+        # that an earlier stage completed when no HTTP response was received.
+        # Keep details bounded and structured for diagnostics without
+        # reclassifying a timeout as a pass or a Cloudflare paywall.
+        row["transport_failure"] = {
+            "attempted_phase": observation.failure_phase or "UNOBSERVED",
+            "exception_class": observation.failure_class or "UNOBSERVED",
+            "phase_completed": False,
+            "provider_or_origin_attribution": "NOT_ESTABLISHED",
+        }
     return row
 
 
