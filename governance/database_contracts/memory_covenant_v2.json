@@ -1,0 +1,76 @@
+{
+  "schema": "szl.database-catalog-policy/v1",
+  "contract_id": "a11oy-memory-covenant-v2",
+  "source_binding": {
+    "repository": "szl-holdings/a11oy",
+    "path": "migrations/20260820_memory_covenant_v2_postmerge_hardening.sql",
+    "git_blob_sha1": "162cd077150c58f008b568bb530628ec799ecdff"
+  },
+  "max_age_seconds": 86400,
+  "required_tables": [
+    {
+      "name": "public.memory_records",
+      "rls_enabled": true,
+      "rls_forced": true,
+      "min_policies": 1,
+      "max_public_grants": 0
+    },
+    {
+      "name": "public.memory_evidence_refs",
+      "rls_enabled": true,
+      "rls_forced": true,
+      "min_policies": 1,
+      "max_public_grants": 0
+    },
+    {
+      "name": "public.memory_receipts",
+      "rls_enabled": true,
+      "rls_forced": true,
+      "min_policies": 1,
+      "max_public_grants": 0
+    },
+    {
+      "name": "public.memory_query_audit",
+      "rls_enabled": true,
+      "rls_forced": true,
+      "min_policies": 1,
+      "max_public_grants": 0
+    },
+    {
+      "name": "public.memory_index_generations",
+      "rls_enabled": true,
+      "rls_forced": true,
+      "min_policies": 1,
+      "max_public_grants": 0
+    },
+    {
+      "name": "public.memory_idempotency",
+      "rls_enabled": true,
+      "rls_forced": true,
+      "min_policies": 1,
+      "max_public_grants": 0
+    },
+    {
+      "name": "public.memory_outbox",
+      "rls_enabled": true,
+      "rls_forced": false,
+      "min_policies": 1,
+      "max_public_grants": 0
+    },
+    {
+      "name": "public.memory_context_bindings",
+      "rls_enabled": true,
+      "rls_forced": false,
+      "min_policies": 0,
+      "max_public_grants": 0
+    }
+  ],
+  "required_functions": [
+    {
+      "name": "public.a11oy_memory_context_matches",
+      "security_definer": true,
+      "binds_principal": true,
+      "references_context_bindings": true
+    }
+  ]
+}
