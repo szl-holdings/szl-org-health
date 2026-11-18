@@ -49,6 +49,48 @@ python -I -B -m unittest discover -s tests -p test_database_catalog_admission.py
 
 Exit 0 = `CATALOG_MATCH_ONLY` (never production authorization); exit 2 = `HOLD`; exit 3 = input unavailable/invalid. Output uses exclusive file creation to avoid overwriting receipts. CLI reports only typed finding codes and SQL object identifiers, never provider errors or credentials.
 
+### Generate and independently execute a bounded catalog SELECT
+
+The additive `tools/database_catalog_probe.py` builds one read-only PostgreSQL
+`WITH ... SELECT` from the *existing* Memory Covenant v2 policy. It reads only
+`pg_catalog` metadata: required table RLS/FORCE flags, existing policy count,
+PUBLIC ACL entries, invalid indexes and the required helper's structural flags.
+It does not query tenant rows, execute migration SQL, connect to Neon, or embed
+database credentials.
+
+From the repository root:
+
+```bash
+python -B -m tools.database_catalog_probe \
+  --policy governance/database_contracts/memory_covenant_v2.json \
+  --scope NEON_VALIDATION_READ_ONLY \
+  --output /owner-private-evidence/exclusive-catalog-readonly.sql
+```
+
+Pass only that exact, hash-pinned SELECT through an authorized Postgres/
+Neon connector using read-only SQL, and preserve the returned single JSON column under an
+exclusive, private filename. Do not silently retry a 401/403/429 as a different
+principal. Pass the resulting JSON as `--catalog` to the offline checker above.
+
+**Important:** The query copies `source_binding` from the *policy* to build
+the expected JSON input. It cannot assert that those source bytes were ever
+executed on this database. A successful `reported_source_blob_matches` means
+only equality to that supplied assertion; `source_identity_independently_verified`
+remains FALSE. The `binds_principal` flag checks a conservative syntax indicator
+(SECURITY DEFINER + constrained `proconfig.search_path` + references to
+`session_user` and the binding table); it cannot prove correct role authentication,
+function semantics, policy enforcement or production readiness.
+
+On November 18, 2026, a single authorized read-only SELECT against the private
+A11oy validation Neon branch returned seven existing tables and the unbound
+helper. The separately executed offline checker returned **HOLD / four gaps**.
+The private result hash and exact SQL/source hashes belong in owner-private
+evidence, never in a public model card.
+
+See [database-system architecture and implementation research](DATABASE_FRONTIER_ARCHITECTURE_20261118.md)
+for PostgreSQL/Neon, Citus, DuckDB, ClickHouse, Materialize/DBSP, Iceberg,
+pgvector and Ontology action boundaries and their measured admission criteria.
+
 ### Source-versus-runtime admission remains distinct
 
 - This verifier **trusts neither the provided origin claim nor a reported Git SHA as independent attestation**. It explicitly emits `source_identity_independently_verified=false` and `database_queried_by_this_verifier=false` even when all table checks match.
