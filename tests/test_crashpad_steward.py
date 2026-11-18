@@ -8,6 +8,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import crashpad_steward as c
@@ -73,6 +74,14 @@ class StewardTests(unittest.TestCase):
         scanned = c.inventory(self.folder, now_ns=self.now)
         self.assertNotIn(self.name(0), [x.name for x in scanned["eligible"]])
         self.assertGreater(scanned["last_20m_count"], 0)
+
+    def test_cleanup_batch_is_bounded_by_cap(self):
+        for i in range(240):
+            self.write_dump(i)
+        with patch.object(c, "MAX_PER_RUN", 7):
+            scanned = c.inventory(self.folder, now_ns=self.now)
+        self.assertEqual(len(scanned["eligible"]), 7)
+        self.assertEqual(scanned["oldest_protected_count"], 200)
 
     def test_newest_200_preserved(self):
         for i in range(230):
