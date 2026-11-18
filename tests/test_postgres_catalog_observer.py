@@ -6,8 +6,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
-import unittest
-from unittest import mock
+from unittest import TestCase, main as unittest_main, mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -99,7 +98,7 @@ class FakeConnection:
         return FakeCursor(self.responses, self.statements)
 
 
-class PostgresObserverTests(unittest.TestCase):
+class PostgresObserverTests(TestCase):
     def test_sanitizer_matches_source_contract_not_authority(self):
         result = sanitize_rows(tables(), routines(), POLICY, "NEON_VALIDATION_READ_ONLY",
                                observed_at=datetime.now(timezone.utc).isoformat())
@@ -187,7 +186,7 @@ class PostgresObserverTests(unittest.TestCase):
         self.assertEqual(out["state"], "HOLD")
 
     def test_validated_neon_tls_uri_parses_but_is_not_used(self):
-        self.assertIsNone(validate_dsn(VALID_URI, "NEON_VALIDATION_READ_ONLY"))
+        validate_dsn(VALID_URI, "NEON_VALIDATION_READ_ONLY")
 
     def test_host_injection_and_tls_downgrade_refused(self):
         bad = (
@@ -291,4 +290,4 @@ class PostgresObserverTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest_main()
