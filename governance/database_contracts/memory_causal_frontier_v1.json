@@ -1,0 +1,19 @@
+{
+  "schema": "szl.database-causal-frontier-policy/v1",
+  "contract_id": "a11oy_memory_causal_frontier_v1",
+  "timeline": "szl.memory_receipt_sequence.v1",
+  "source_binding": {
+    "repository": "szl-holdings/a11oy",
+    "path": "migrations/20260820_memory_covenant_v2_postmerge_hardening.sql",
+    "git_blob_sha1": "162cd077150c58f008b568bb530628ec799ecdff"
+  },
+  "required_stages": [
+    "source_ledger",
+    "transactional_outbox",
+    "retrieval_index",
+    "api_projection"
+  ],
+  "max_age_seconds": 900,
+  "max_version_skew": 3,
+  "required_catalog_state": "CATALOG_MATCH_ONLY"
+}
