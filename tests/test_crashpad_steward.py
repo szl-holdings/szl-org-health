@@ -2,6 +2,7 @@
 """Regression contracts for fail-closed, read-only Crashpad monitoring."""
 from __future__ import annotations
 
+import ast
 import hashlib
 import io
 import json
@@ -96,6 +97,21 @@ class CrashpadMonitorTests(unittest.TestCase):
         self.assertEqual(data["reason_code"], "CRASHPAD_DB_STATE_UNVERIFIED")
         self.assertFalse(data["deletion_authorized"])
         self.assertEqual(file.read_bytes(), before)
+
+    def test_no_destructive_calls_in_monitor_ast(self):
+        source = Path(mod.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        forbidden = {
+            "unlink", "remove", "rmtree", "rmdir", "rename", "replace",
+            "write_text", "write_bytes", "mkdir", "makedirs",
+            "system", "popen", "run", "Popen", "kill", "terminate",
+        }
+        violations = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr in forbidden:
+                    violations.append((node.lineno, node.func.attr))
+        self.assertEqual(violations, [])
 
     def test_module_does_not_offer_delete_functions(self):
         self.assertFalse(hasattr(mod, "cleanup_candidate"))
