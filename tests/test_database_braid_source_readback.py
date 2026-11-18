@@ -45,8 +45,8 @@ def fake_fetch(entry):
 class SourceReadbackTests(TestCase):
     def test_policy_refs_are_exact_frozen_families(self):
         refs = validate_policy(POLICY)
-        self.assertEqual(len(refs), 14)
-        self.assertEqual(len({x["repository"] for x in refs}), 10)
+        self.assertEqual(len(refs), 33)
+        self.assertEqual(len({x["repository"] for x in refs}), 11)
         self.assertEqual(POLICY["lambda_claim"],
                          "UNCONDITIONAL_UNIQUENESS_DISPROVEN_AS_STATED")
 
@@ -55,8 +55,8 @@ class SourceReadbackTests(TestCase):
         result = observe(p, fetch=fake_fetch,
                          at=datetime(2026, 11, 18, tzinfo=timezone.utc))
         self.assertEqual(result["state"], "COMPLETE_BLOB_MATCH")
-        self.assertEqual(result["matched_count"], 14)
-        self.assertEqual(result["required_count"], 14)
+        self.assertEqual(result["matched_count"], 33)
+        self.assertEqual(result["required_count"], 33)
         self.assertTrue(all(x["content_sha256"] for x in result["entries"]))
         self.assertFalse(result["runtime_sources_independently_verified"])
         self.assertFalse(result["provider_writes"])
@@ -89,7 +89,7 @@ class SourceReadbackTests(TestCase):
             return fake_fetch(entry)
         result = observe(p, fetch=missing)
         self.assertEqual(result["state"], "HOLD")
-        self.assertEqual(result["matched_count"], 13)
+        self.assertEqual(result["matched_count"], 32)
         witness = next(x for x in result["entries"] if x["id"] == "lean_khipu")
         self.assertEqual(witness["status"], "UNAVAILABLE")
         self.assertIsNone(witness["byte_length"])
@@ -120,6 +120,53 @@ class SourceReadbackTests(TestCase):
         p = fake_policy()
         p["source_refs"][0]["repository"] = "another-org/untrusted"
         with self.assertRaisesRegex(InputError, "BRAID_SOURCE_PIN_INVALID"):
+            validate_policy(p)
+
+    def test_axioms_egyptian_greek_and_codex_families_required(self):
+        categories = {
+            "AXIOM_SOURCE": 4,
+            "EGYPTIAN_MATH": 4,
+            "GREEK_MATH": 2,
+            "GREEK_LOGIC": 4,
+            "CODEX_ANALOGY": 5,
+        }
+        refs = validate_policy(POLICY)
+        self.assertEqual(
+            {tier: sum(x["tier"] == tier for x in refs)
+             for tier in categories}, categories)
+        for tier in categories:
+            p = fake_policy()
+            p["source_refs"] = [row for row in p["source_refs"]
+                                if row["tier"] != tier]
+            p["source_refs_required"] = len(p["source_refs"])
+            with self.subTest(missing=tier), self.assertRaises(InputError):
+                validate_policy(p)
+
+    def test_axiom_reference_must_keep_axiom_classification(self):
+        p = fake_policy()
+        base = next(x for x in p["source_refs"]
+                    if x["id"] == "axiom_base")
+        base["tier"] = "HISTORICAL_LINEAGE"
+        with self.assertRaisesRegex(
+                InputError, "BRAID_SOURCE_FAMILY_TIER_DRIFT"):
+            validate_policy(p)
+
+    def test_greek_math_distinct_from_greek_philosophical_gates(self):
+        p = fake_policy()
+        theorem = next(x for x in p["source_refs"]
+                       if x["id"] == "greek_pythagoras_hm")
+        theorem["tier"] = "GREEK_LOGIC"
+        with self.assertRaisesRegex(
+                InputError, "BRAID_SOURCE_FAMILY_TIER_DRIFT"):
+            validate_policy(p)
+
+    def test_codex_analogies_cannot_be_reclassified_as_proofs(self):
+        p = fake_policy()
+        scroll = next(x for x in p["source_refs"]
+                      if x["id"] == "codex_copper_scroll")
+        scroll["tier"] = "LEAN_CARRIER"
+        with self.assertRaisesRegex(
+                InputError, "BRAID_SOURCE_FAMILY_TIER_DRIFT"):
             validate_policy(p)
 
     def test_unsupported_proof_tier_denied(self):
