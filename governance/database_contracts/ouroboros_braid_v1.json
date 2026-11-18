@@ -13,12 +13,116 @@
       "tier": "HISTORICAL_LINEAGE"
     },
     {
+      "id": "axiom_base",
+      "repository": "szl-holdings/lutar-lean",
+      "path": "Lutar/Axioms.lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "blob_sha1": "fc922178ca30d588dbb330dc834428bcfca36367",
+      "tier": "AXIOM_SOURCE"
+    },
+    {
+      "id": "axiom_uniqueness_check",
+      "repository": "szl-holdings/lutar-lean",
+      "path": "Lutar/Uniqueness/AxiomCheck.lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "blob_sha1": "4182d602a5e0be4890ba79db24fa2540333049d8",
+      "tier": "AXIOM_SOURCE"
+    },
+    {
+      "id": "axiom_wave11_disclosure",
+      "repository": "szl-holdings/lutar-lean",
+      "path": "Lutar/Wave11/AxiomDisclosure.lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "blob_sha1": "868b2f3048fe0a5252d7dec25e336f4fd348ef23",
+      "tier": "AXIOM_SOURCE"
+    },
+    {
+      "id": "axiom_wave16_mean",
+      "repository": "szl-holdings/lutar-lean",
+      "path": "Lutar/Wave16/Cut1MeanAxioms.lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "blob_sha1": "b9ae7491f764c8b7710e28547efa9657182dff3d",
+      "tier": "AXIOM_SOURCE"
+    },
+    {
+      "id": "codex_copper_scroll",
+      "repository": "szl-holdings/lutar-lean",
+      "path": "Lutar/Innovations/round4/CopperScrollDAGHeight.lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "blob_sha1": "f1bb9bdee8881c19740397990dd87804afc2a741",
+      "tier": "CODEX_ANALOGY"
+    },
+    {
+      "id": "codex_masoretic",
+      "repository": "szl-holdings/lutar-lean",
+      "path": "Lutar/Innovations/round4/MasoreticChecksum.lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "blob_sha1": "947516dd1f7f37d62e3a56810dcdf8c6d01a86a4",
+      "tier": "CODEX_ANALOGY"
+    },
+    {
+      "id": "codex_maya_epoch",
+      "repository": "szl-holdings/lutar-lean",
+      "path": "Lutar/Innovations/round4/MayaLCMEpochSync.lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "blob_sha1": "6eebc342553be4d8a3c7909b722bd7d52d670a17",
+      "tier": "CODEX_ANALOGY"
+    },
+    {
+      "id": "codex_plimpton_tablet",
+      "repository": "szl-holdings/lutar-lean",
+      "path": "Lutar/Innovations/round4/PlimptonReciprocal.lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "blob_sha1": "c3575dc52ba6c0be4e5183a43de0138185ce6b75",
+      "tier": "CODEX_ANALOGY"
+    },
+    {
+      "id": "codex_sexagesimal",
+      "repository": "szl-holdings/lutar-lean",
+      "path": "Lutar/Innovations/round4/SexagesimalReciprocal.lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "blob_sha1": "b189663e5851c4ff70a89e5c3c3c12aa1fc6594c",
+      "tier": "CODEX_ANALOGY"
+    },
+    {
       "id": "db_agent_planner",
       "repository": "szl-holdings/szl-org-health",
       "commit": "575b7072266922806a5fff1304c996defc298a87",
       "path": "tools/database_agentic_planner.py",
       "blob_sha1": "3561cdb4d38cf107054b01059174e989df159f56",
       "tier": "CODE"
+    },
+    {
+      "id": "egyptian_akhmim",
+      "repository": "szl-holdings/lutar-lean",
+      "path": "Lutar/Egyptian/AkhmimTable.lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "blob_sha1": "876a99120bd1ea0dd00c5b3601fdd2b225f79e3b",
+      "tier": "EGYPTIAN_MATH"
+    },
+    {
+      "id": "egyptian_exactness",
+      "repository": "szl-holdings/lutar-lean",
+      "path": "Lutar/Egyptian.lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "blob_sha1": "6c5d58ea7750dffdedcd7d58ff95d14853d953f8",
+      "tier": "EGYPTIAN_MATH"
+    },
+    {
+      "id": "egyptian_horus",
+      "repository": "szl-holdings/lutar-lean",
+      "path": "Lutar/Egyptian/HorusEye.lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "blob_sha1": "bfc3e2c77dbd7090d7c6995bf1e0e229a14dfa0e",
+      "tier": "EGYPTIAN_MATH"
+    },
+    {
+      "id": "egyptian_weight_sum",
+      "repository": "szl-holdings/lutar-lean",
+      "path": "Lutar/Thesis/TH_V18_04_EgyptianWeightSum.lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "blob_sha1": "fcdaa8743e5b80264c0b3211cf8f3adabe629b8a",
+      "tier": "EGYPTIAN_MATH"
     },
     {
       "id": "formula_atlas",
@@ -35,6 +139,54 @@
       "path": "contracts/locked-formula-reference.v1.json",
       "blob_sha1": "61eca5b6d531ad758ff557b881ff49ec2b9af3ea",
       "tier": "FORMULA_REGISTRY"
+    },
+    {
+      "id": "greek_aristotle_axioms",
+      "repository": "szl-holdings/platform",
+      "path": "packages/ouroboros-aristotle/src/axiom-posit-separator.ts",
+      "commit": "1a9f5732b84f719fb6fa8f40a3298ff33785144a",
+      "blob_sha1": "804ff6b90e4ff03f5992bc4d0f7fc0f2749a6f00",
+      "tier": "GREEK_LOGIC"
+    },
+    {
+      "id": "greek_aristotle_pnc",
+      "repository": "szl-holdings/platform",
+      "path": "packages/ouroboros-aristotle/src/pnc-bedrock-axiom-guard.ts",
+      "commit": "1a9f5732b84f719fb6fa8f40a3298ff33785144a",
+      "blob_sha1": "6acba763f1e378b198a168f0555361c9821b1e24",
+      "tier": "GREEK_LOGIC"
+    },
+    {
+      "id": "greek_heron",
+      "repository": "szl-holdings/lutar-lean",
+      "path": "Lutar/Innovations/round4/YBCHeronConvergence.lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "blob_sha1": "bf4a9924451db142badf00cde1e115a3a9cf03bf",
+      "tier": "GREEK_MATH"
+    },
+    {
+      "id": "greek_pythagoras_hm",
+      "repository": "szl-holdings/a11oy",
+      "path": "Lutar/Innovations/round6/PythagorasHarmonicMean.lean",
+      "commit": "4c45d3b5c6e2324b3561d6d7142e0d8d702bc62c",
+      "blob_sha1": "53d9b15c84e6f9d095ce02e4b5569b2f611ae82a",
+      "tier": "GREEK_MATH"
+    },
+    {
+      "id": "greek_socrates_elenchus",
+      "repository": "szl-holdings/platform",
+      "path": "packages/ouroboros-socrates/src/elenchus.ts",
+      "commit": "1a9f5732b84f719fb6fa8f40a3298ff33785144a",
+      "blob_sha1": "02ac294a482561a46bab3111972d33184fa71030",
+      "tier": "GREEK_LOGIC"
+    },
+    {
+      "id": "greek_socrates_hypotheses",
+      "repository": "szl-holdings/platform",
+      "path": "packages/ouroboros-socrates/src/hypothesis-ledger.ts",
+      "commit": "1a9f5732b84f719fb6fa8f40a3298ff33785144a",
+      "blob_sha1": "92c91d70e482c208b40f9438ff163daf3da60b78",
+      "tier": "GREEK_LOGIC"
     },
     {
       "id": "hatun_governance",
@@ -117,7 +269,7 @@
       "tier": "CODE"
     }
   ],
-  "source_refs_required": 14,
+  "source_refs_required": 33,
   "khipu_conservation": "ONE_UNIT_PER_PRESENT_PINNED_SOURCE",
   "lambda_claim": "UNCONDITIONAL_UNIQUENESS_DISPROVEN_AS_STATED",
   "lean_proof_admission": "NOT_EXECUTED_THIS_RUN",

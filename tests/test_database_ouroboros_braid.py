@@ -111,12 +111,12 @@ class OuroborosBraidTests(TestCase):
 
     def test_khipu_unit_cords_conserve_observed_count_only(self):
         report = run()
-        self.assertEqual(report["source_ref_count"], 14)
-        self.assertEqual(report["source_matched_count"], 14)
-        self.assertEqual(report["khipu_root_observed_unit_sum"], 14)
+        self.assertEqual(report["source_ref_count"], 33)
+        self.assertEqual(report["source_matched_count"], 33)
+        self.assertEqual(report["khipu_root_observed_unit_sum"], 33)
         self.assertFalse(report["khipu_missing_is_zero"])
         self.assertEqual(report["khipu_missing_cords"], 0)
-        self.assertEqual(sum(x["unit_weight"] for x in report["cords"]), 14)
+        self.assertEqual(sum(x["unit_weight"] for x in report["cords"]), 33)
 
     def test_missing_khipu_anchor_never_encoded_as_zero(self):
         obs = source_readback()
@@ -129,8 +129,22 @@ class OuroborosBraidTests(TestCase):
         self.assertIn("khipu_math", report["missing_source_ids"])
         self.assertIsNone(next(x for x in report["cords"]
                                if x["source_id"] == "khipu_math")["unit_weight"])
-        self.assertEqual(report["khipu_root_observed_unit_sum"], 13)
+        self.assertEqual(report["khipu_root_observed_unit_sum"], 32)
         self.assertTrue(verify_report(report, BRAID_POLICY, plan_fixture()))
+
+    def test_missing_axiom_source_stays_unavailable_not_zero(self):
+        obs = source_readback()
+        row = next(x for x in obs["entries"]
+                   if x["id"] == "axiom_base")
+        row.update(status="UNAVAILABLE", byte_length=None,
+                   content_sha256=None)
+        obs["matched_count"] -= 1
+        obs["state"] = "HOLD"
+        result = run(sources=obs)
+        self.assertEqual(result["source_matched_count"], 32)
+        self.assertIn("axiom_base", result["missing_source_ids"])
+        self.assertFalse(result["khipu_missing_is_zero"])
+        self.assertEqual(result["lean_checker_result"], PROOF_STATUS)
 
     def test_missing_lean_source_never_upgraded_by_braid(self):
         obs = source_readback()
@@ -203,7 +217,7 @@ class OuroborosBraidTests(TestCase):
         with self.assertRaisesRegex(InputError, "BRAID_SOURCE_PIN_MISMATCH"):
             run(sources=obs)
 
-    def test_replaced_source_sha_fails_even_if_matched_count_is_14(self):
+    def test_replaced_source_sha_fails_even_if_matched_count_is_33(self):
         obs = source_readback()
         obs["entries"][2]["blob_sha1"] = "f" * 40
         with self.assertRaisesRegex(InputError, "BRAID_SOURCE_PIN_MISMATCH"):
@@ -279,7 +293,7 @@ class OuroborosBraidTests(TestCase):
 
     def test_historical_sum_weight_tamper_detected(self):
         p = run()
-        p["khipu_root_observed_unit_sum"] = 15
+        p["khipu_root_observed_unit_sum"] = 34
         with self.assertRaisesRegex(InputError, "BRAID_KHIPU_CONSERVATION_DRIFT"):
             verify_report(p, BRAID_POLICY, plan_fixture())
 

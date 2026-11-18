@@ -30,9 +30,11 @@ POLICY_SCHEMA = "szl.database-ouroboros-braid-policy/v1"
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 SOURCE = re.compile(r"szl-holdings/[A-Za-z0-9_.-]{1,80}\Z")
 PATH = re.compile(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*\Z")
-LABEL = re.compile(r"[a-z_]{3,50}\Z")
+LABEL = re.compile(r"[a-z][a-z0-9_]{2,49}\Z")
 TIERS = frozenset({"CODE", "LEAN_CARRIER", "FORMULA_REGISTRY",
-                   "HISTORICAL_LINEAGE", "RESEARCH_SCOPE"})
+                   "HISTORICAL_LINEAGE", "RESEARCH_SCOPE",
+                   "AXIOM_SOURCE", "EGYPTIAN_MATH", "GREEK_MATH",
+                   "GREEK_LOGIC", "CODEX_ANALOGY"})
 MAX_BODY_BYTES = 512_000
 MAX_JSON_BYTES = 850_000
 FIXED_DOCTRINE = "bounded, terminating, receipt-closed"
@@ -74,7 +76,7 @@ def validate_policy(policy):
     require(all(policy[k] == v for k, v in fixed.items()),
             "BRAID_AUTHORITY_CLAIM_REFUSED")
     refs = policy["source_refs"]
-    require(type(refs) is list and 10 <= len(refs) <= 20 and
+    require(type(refs) is list and 30 <= len(refs) <= 40 and
             type(policy["source_refs_required"]) is int and
             policy["source_refs_required"] == len(refs),
             "BRAID_SOURCE_COVERAGE_INVALID")
@@ -96,12 +98,36 @@ def validate_policy(policy):
                 "BRAID_SOURCE_PIN_INVALID")
         ids.append(entry["id"])
     require(ids == sorted(set(ids)), "BRAID_SOURCE_ORDER_OR_DUPLICATE")
+    family_tiers = {
+        "axiom_": "AXIOM_SOURCE",
+        "egyptian_": "EGYPTIAN_MATH",
+        "greek_aristotle_": "GREEK_LOGIC",
+        "greek_socrates_": "GREEK_LOGIC",
+        "greek_": "GREEK_MATH",
+        "codex_": "CODEX_ANALOGY",
+    }
+    for entry in refs:
+        for prefix, tier in family_tiers.items():
+            if entry["id"].startswith(prefix):
+                require(entry["tier"] == tier,
+                        "BRAID_SOURCE_FAMILY_TIER_DRIFT")
+                break
     must_have = {
         "ouroboros_kernel", "hatun_governance", "hatun_loop",
         "khipu_loop", "khipu_math", "lake_pcgi", "lean_khipu",
         "lean_cross_component", "formula_reference", "formula_atlas",
         "invariants_kernel", "ancient_lineage", "lean_experimental_scope",
         "db_agent_planner",
+        "axiom_base", "axiom_uniqueness_check",
+        "axiom_wave11_disclosure", "axiom_wave16_mean",
+        "egyptian_exactness", "egyptian_horus",
+        "egyptian_akhmim", "egyptian_weight_sum",
+        "greek_pythagoras_hm", "greek_heron",
+        "greek_aristotle_axioms", "greek_aristotle_pnc",
+        "greek_socrates_elenchus", "greek_socrates_hypotheses",
+        "codex_copper_scroll", "codex_masoretic",
+        "codex_plimpton_tablet", "codex_maya_epoch",
+        "codex_sexagesimal",
     }
     require(set(ids) == must_have, "BRAID_SOURCE_FAMILY_INCOMPLETE")
     return refs
