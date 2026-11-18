@@ -40,7 +40,29 @@ Every message starts with one of these labels, so a red run says why:
 | `401-origin-auth`, `403-origin-auth` | Any other 401 or 403. |
 | `5xx-origin` | Any 5xx. The message says whether the body is a Cloudflare error page, which means the edge could not get a valid response from the origin. |
 | `2xx`, `3xx`, `404`, `4xx` | The status class. Redirects are recorded and never followed. |
-| `transport-error` | No HTTP response: DNS, TLS, connection or timeout failure. |
+| `transport-error` | No HTTP response: DNS, TCP connection, TLS handshake, request write, response headers or body transfer. All remain FAIL. |
+
+For `transport-error`, the receipt now adds a bounded
+`transport_failure` record with `attempted_phase`,
+`exception_class`, `phase_completed: false` and
+`provider_or_origin_attribution: NOT_ESTABLISHED`. The six attempted
+phases are `DNS_LOOKUP` (socket address-resolution exception),
+`TCP_CONNECT`, `TLS_HANDSHAKE`, `HTTP_REQUEST_WRITE`,
+`HTTP_RESPONSE_HEADERS`, and `HTTP_RESPONSE_BODY`.
+The original stdlib `HTTPSConnection` still performs default CA
+validation and SNI; a small per-connection TCP hook marks the moment the
+socket successfully connects before the TLS handshake. No extra HTTP
+request, retry, redirect, account credential, custom certificate trust,
+or new monitoring controller is introduced. DNS failure is distinguished
+by `socket.gaierror` rather than assuming all connection timeouts are DNS.
+For a timeout the phase names the **last attempted operation**; it is
+not evidence that operation completed or which provider caused it.
+
+A failure after a TLS handshake does not prove that Cloudflare Worker code,
+an upstream ntfy provider, WAF, origin, or any other specific component
+is responsible. A zero-byte response remains transport failure, not
+HTTP 200/403/402, a qualified settlement or a healthy alert channel.
+All classes retain their existing acceptance and fail-closed exit semantics.
 
 The 403 split is a heuristic over response headers and the first 64 KiB of
 the body. The receipt records the evidence each classification used
@@ -71,7 +93,9 @@ it only because the contract says an origin refusal is acceptable there.
   contract bytes (`contract.sha256`), the GitHub run (`source`), the transport
   (`direct-https` live, `loopback-override` in tests) and one row per request:
   verdict, label, status, message, selected response headers, the Cloudflare
-  origin timing when present, and the decoded x402 terms. It never stores
+  origin timing when present, and the decoded x402 terms. Failed network
+  probes additionally record the attempted transport phase and the stable
+  exception class (not a statement of provider blame). It never stores
   response bodies.
 - A Markdown table in the job summary, failures first.
 - Exit `0` when every request passes, `1` when any fails, `2` when the
@@ -164,6 +188,37 @@ yet.
 - **A "Not yet observed live" path may fail with `404`.** Then the contract is
   wrong about that path; correct it in a reviewed change with the evidence,
   never by accepting 404 on a free surface.
+
+## Recorded ntfy relay response-header timeout (November 18, 2026)
+
+The public [scheduled Edge contract run](https://github.com/szl-holdings/szl-org-health/actions/runs/44211456274)
+passed 30 of 31 requests; `ntfy.a11oy.net/` returned **no HTTP status**
+and a read-timeout. In a separate bounded, no-credential, one-request
+observation on November 18, 01:13:53–01:14:08 UTC, the
+unchanged `ntfy-root` contract returned FAIL in 15,110 milliseconds.
+The enhanced transport receipt classified it as
+`attempted_phase=HTTP_RESPONSE_HEADERS`,
+`exception_class=TimeoutError`, `phase_completed=false`,
+`provider_or_origin_attribution=NOT_ESTABLISHED`. Its owner-local
+private receipt SHA-256 is
+`9a283397a5b97406cf8a22b7ce6bcdc791246b43f4b9b389d05d32e78bb6f036`.
+A checksum binds bytes, not the account or provider identity.
+
+The same request reached the HTTP response-wait phase after TCP and TLS
+handshake; this rules out *that particular request's* initial DNS/TCP/TLS
+failure but **does not identify** whether the Cloudflare Worker, custom
+domain, WAF, upstream ntfy provider, or another component caused the
+delay. It does not establish successful notification delivery.
+
+**Owner acceptance required:** reconcile the declared free-root expectation
+here with the source [alert-relay Worker runbook](https://github.com/szl-holdings/a11oy/tree/main/ops/alert-relay-worker),
+which documents `GET /` as intentionally challenged. The canonical
+Cloudflare owner must independently inspect the custom domain and deployed
+Worker revision, permitted WAF rules, and upstream behavior, then run the
+existing authenticated publisher's revision readback and permitted delivery
+canary. **Do not** change `ntfy-root` to a passing class, silently remove it,
+weaken Cloudflare access protection, or call a timed-out request healthy.
+No security settings or production routing were changed by the diagnostic.
 
 ## Proof boundary
 

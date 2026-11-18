@@ -14,11 +14,13 @@ import json
 import os
 import re
 import socket
+import ssl
 import tempfile
 import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from edge.check_contract import (
     Check,
@@ -28,6 +30,7 @@ from edge.check_contract import (
     classify,
     decode_payment_required,
     evaluate,
+    fetch,
     load_contract,
     main,
     parse_connect_to,
@@ -398,7 +401,9 @@ class ContractValidationTests(unittest.TestCase):
 
     def assert_invalid(self, text: str, fragment: str) -> None:
         path = Path(self.tmp.name) / "contract.yaml"
-        path.write_text(text, encoding="utf-8")
+        # The audited YAML grammar intentionally refuses CRLF. Test fixtures
+        # must retain exact supplied bytes on Windows as well as Linux.
+        path.write_bytes(text.encode("utf-8"))
         with self.assertRaises(ContractError) as raised:
             load_contract(path)
         self.assertIn(fragment, str(raised.exception))
@@ -495,7 +500,7 @@ class ContractValidationTests(unittest.TestCase):
             "    path: /pricing\n    methods: [GET]\n    accept: [ok]\n",
         )
         path = Path(self.tmp.name) / "narrow.yaml"
-        path.write_text(narrowed, encoding="utf-8")
+        path.write_bytes(narrowed.encode("utf-8"))
         pricing = next(check for check in load_contract(path).checks if check.id == "apex-pricing")
         self.assertEqual(pricing.accept, ("ok",))
 
@@ -793,7 +798,7 @@ class LiveShapeRunTests(_ContractRun):
 
     def test_invalid_contract_or_unknown_check_exits_2_without_a_receipt(self) -> None:
         bad = Path(self.tmp.name) / "bad.yaml"
-        bad.write_text("schema: wrong\n", encoding="utf-8")
+        bad.write_bytes(b"schema: wrong\n")
         err = io.StringIO()
         with redirect_stderr(err):
             self.assertEqual(main(["--contract", str(bad), "--receipt", str(self.receipt_path)]), 2)
@@ -806,6 +811,132 @@ class LiveShapeRunTests(_ContractRun):
             )
         self.assertFalse(self.receipt_path.exists())
         self.assertIn("edge contract invalid", err.getvalue())
+
+
+class TransportPhaseTests(unittest.TestCase):
+    """Offline failure-phase evidence never converts a failed check to PASS."""
+
+    class FakeHTTPS:
+        """Inert connection; no socket, TLS session or provider traffic."""
+
+        def __init__(self, host, port, *, timeout, context):
+            self.host, self.port, self.timeout = host, port, timeout
+
+        def connect(self):
+            return None
+
+        def request(self, *args, **kwargs):
+            return None
+
+        def close(self):
+            return None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        contract = load_contract(CONTRACT)
+        cls.check = next(item for item in contract.checks if item.id == "ntfy-root")
+        cls.client = contract.client
+        cls.terms = contract.terms
+
+    def assert_failure(self, obs: Observation, phase: str, reason: str) -> None:
+        self.assertIsNone(obs.status)
+        self.assertEqual(obs.failure_phase, phase)
+        self.assertEqual(obs.failure_class, reason)
+        self.assertIsNotNone(obs.error)
+        row = evaluate(self.check, "GET", obs, self.terms)
+        self.assertEqual(row["verdict"], "FAIL")
+        self.assertEqual(row["outcome"], "transport-error")
+        self.assertEqual(row["status"], None)
+        self.assertEqual(row["transport_failure"], {
+            "attempted_phase": phase,
+            "exception_class": reason,
+            "phase_completed": False,
+            "provider_or_origin_attribution": "NOT_ESTABLISHED",
+        })
+        self.assertEqual(row["expected"]["accept"], ["ok", "redirect", "origin-auth"])
+
+    def test_dns_failure_is_not_reported_as_worker_error(self) -> None:
+        with patch("edge.check_contract.socket.create_connection",
+                   side_effect=socket.gaierror(-2, "synthetic DNS failure")):
+            obs = fetch("GET", self.check, self.client)
+        self.assert_failure(obs, "DNS_LOOKUP", "gaierror")
+
+    def test_tcp_connection_refusal_is_not_dns_or_waf(self) -> None:
+        with patch("edge.check_contract.socket.create_connection",
+                   side_effect=ConnectionRefusedError("synthetic socket refusal")):
+            obs = fetch("GET", self.check, self.client)
+        self.assert_failure(obs, "TCP_CONNECT", "ConnectionRefusedError")
+
+    def test_tcp_connection_timeout_is_not_a_payment_challenge(self) -> None:
+        with patch("edge.check_contract.socket.create_connection",
+                   side_effect=TimeoutError("synthetic connection timeout")):
+            obs = fetch("GET", self.check, self.client)
+        self.assert_failure(obs, "TCP_CONNECT", "TimeoutError")
+
+    def test_tls_handshake_failure_is_not_falsely_attributed_to_origin(self) -> None:
+        class HandshakeFailure(self.FakeHTTPS):
+            def connect(self):
+                # Exercise the exact TCP hook installed by the audited fetch.
+                self._create_connection((self.host, self.port), self.timeout)
+                raise ssl.SSLError("synthetic invalid TLS handshake")
+
+        with patch("edge.check_contract.http.client.HTTPSConnection", HandshakeFailure), \
+             patch("edge.check_contract.socket.create_connection", return_value=object()) as socket_call:
+            obs = fetch("GET", self.check, self.client)
+        self.assertEqual(socket_call.call_count, 1)
+        self.assert_failure(obs, "TLS_HANDSHAKE", "SSLError")
+
+    def test_http_request_write_failure_remains_unavailable(self) -> None:
+        class RequestFailure(self.FakeHTTPS):
+            def connect(self):
+                return None
+
+            def request(self, *args, **kwargs):
+                raise BrokenPipeError("synthetic disconnect")
+
+        with patch("edge.check_contract.http.client.HTTPSConnection", RequestFailure):
+            obs = fetch("GET", self.check, self.client)
+        self.assert_failure(obs, "HTTP_REQUEST_WRITE", "BrokenPipeError")
+
+    def test_http_response_header_timeout_is_not_a_5xx(self) -> None:
+        class HeaderTimeout(self.FakeHTTPS):
+            def connect(self):
+                return None
+
+            def request(self, *args, **kwargs):
+                return None
+
+            def getresponse(self):
+                raise TimeoutError("synthetic zero response bytes")
+
+        with patch("edge.check_contract.http.client.HTTPSConnection", HeaderTimeout):
+            obs = fetch("GET", self.check, self.client)
+        self.assert_failure(obs, "HTTP_RESPONSE_HEADERS", "TimeoutError")
+
+    def test_http_body_timeout_is_not_a_completed_response(self) -> None:
+        class BodyTimeout(self.FakeHTTPS):
+            def connect(self):
+                return None
+
+            def request(self, *args, **kwargs):
+                return None
+
+            def getresponse(self):
+                class Response:
+                    def read(self, max_bytes):
+                        raise TimeoutError("synthetic body stream timeout")
+                return Response()
+
+        with patch("edge.check_contract.http.client.HTTPSConnection", BodyTimeout):
+            obs = fetch("GET", self.check, self.client)
+        self.assert_failure(obs, "HTTP_RESPONSE_BODY", "TimeoutError")
+
+    def test_legacy_missing_phase_never_improves_classification(self) -> None:
+        obs = Observation(status=None, error="old transport failure")
+        row = evaluate(self.check, "GET", obs, self.terms)
+        self.assertEqual(row["verdict"], "FAIL")
+        self.assertEqual(row["transport_failure"]["attempted_phase"], "UNOBSERVED")
+        self.assertEqual(row["transport_failure"]["exception_class"], "UNOBSERVED")
 
 
 class WorkflowContractTests(unittest.TestCase):
