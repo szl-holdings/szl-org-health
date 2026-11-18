@@ -11,8 +11,7 @@ import datetime as dt
 import http.client
 import json
 import threading
-import unittest
-from unittest import mock
+import unittest.mock
 
 import app
 from census.portal_projection import project_portal_index
@@ -155,7 +154,7 @@ class SystemDesignCacheTests(unittest.TestCase):
 
     def test_one_existing_public_refresh_supplies_json_and_html(self):
         cache = app.PublicResponses()
-        with mock.patch.object(app, "build_report", return_value=self.public) as build:
+        with unittest.mock.patch.object(app, "build_report", return_value=self.public) as build:
             cache._refresh()
         build.assert_called_once_with(exposure="public", use_cache=False)
         health = json.loads(cache.get("/api/health"))
@@ -171,8 +170,8 @@ class SystemDesignCacheTests(unittest.TestCase):
     def test_optional_design_failure_does_not_poison_existing_owners(self):
         cache = app.PublicResponses()
         with (
-            mock.patch.object(app, "build_report", return_value=self.public) as build,
-            mock.patch.object(app, "project_system_design", side_effect=RuntimeError(SECRET)),
+            unittest.mock.patch.object(app, "build_report", return_value=self.public) as build,
+            unittest.mock.patch.object(app, "project_system_design", side_effect=RuntimeError(SECRET)),
         ):
             cache._refresh()
         build.assert_called_once()
@@ -185,7 +184,7 @@ class SystemDesignCacheTests(unittest.TestCase):
 
     def test_missing_or_expired_data_never_reuses_positive_html(self):
         cache = app.PublicResponses()
-        with mock.patch.object(app, "build_report", return_value=self.public):
+        with unittest.mock.patch.object(app, "build_report", return_value=self.public):
             cache._refresh()
         self.assertTrue(cache.get("/system-design"))
         cache._expires_at = 0
@@ -199,13 +198,13 @@ class SystemDesignHTTPTests(unittest.TestCase):
     def test_real_http_serves_same_cached_result_with_csp_and_denied_mutations(self):
         cache = app.PublicResponses()
         now = dt.datetime.now(dt.UTC).replace(microsecond=0)
-        with mock.patch.object(app, "build_report", return_value=fresh_public_report(now)):
+        with unittest.mock.patch.object(app, "build_report", return_value=fresh_public_report(now)):
             cache._refresh()
         server = app.BoundedHTTPServer(("127.0.0.1", 0), app.Handler)
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         thread.start()
         try:
-            with mock.patch.object(app, "PUBLIC_RESPONSES", cache):
+            with unittest.mock.patch.object(app, "PUBLIC_RESPONSES", cache):
                 def request(method, path):
                     connection = http.client.HTTPConnection(*server.server_address, timeout=2)
                     try:

@@ -71,6 +71,8 @@ class PublicResponses:
                 ).encode()
                 responses["/system-design"] = render_system_design(design)
             except Exception:
+                # Do not reveal upstream details or serve a stale map.
+                # Missing optional entry keeps the proven endpoints authoritative.
                 pass
             try:
                 # A new optional graph projection must not poison the existing

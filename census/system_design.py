@@ -73,7 +73,6 @@ _PLATFORMS = (
     ("cloudflare", "Cloudflare monetization", "https://developers.cloudflare.com/monetization-gateway/"),
     ("pypi", "PyPI", "https://pypi.org/org/szl-holdings/"),
 )
-_SHA = re.compile(r"^[a-f0-9]{40}$")
 _DATE = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 _ROLES = frozenset({"PUBLIC_SUBSET_OBSERVED", "HTTP_TRANSPORT_OBSERVED", "UNKNOWN"})
 _LAYER_SCOPE = {"github": "public-repository-subset", "huggingface": "public-asset-subsets",
