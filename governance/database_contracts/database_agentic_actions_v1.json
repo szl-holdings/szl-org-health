@@ -1,0 +1,24 @@
+{
+  "schema": "szl.database-agent-policy/v1",
+  "source_binding": {
+    "repository": "szl-holdings/a11oy",
+    "path": "migrations/20260820_memory_covenant_v2_postmerge_hardening.sql",
+    "git_blob_sha1": "162cd077150c58f008b568bb530628ec799ecdff"
+  },
+  "catalog_contract_id": "a11oy-memory-covenant-v2",
+  "frontier_contract_id": "a11oy_memory_causal_frontier_v1",
+  "max_age_seconds": 7200,
+  "max_actions": 14,
+  "allowed_actions": [
+    "INSTRUMENT_OUTBOX_ACK",
+    "INSTRUMENT_SOURCE_EPOCH",
+    "QUALIFY_AUDIT_ROLE",
+    "RECOLLECT_CATALOG",
+    "REHEARSE_BINDING_MIGRATION",
+    "REVERIFY_SOURCE_IDENTITY",
+    "REVIEW_RLS_POLICY",
+    "TRACE_VERSION_GAPS",
+    "VERIFY_API_PROJECTION",
+    "VERIFY_RETRIEVAL_FRONTIER"
+  ]
+}
