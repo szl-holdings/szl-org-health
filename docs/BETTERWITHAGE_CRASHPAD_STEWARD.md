@@ -16,13 +16,13 @@ under C:\SZL\edge-cdp-profile-ops\Crashpad\reports. Reports are generated
 automatically by the SZL-specific Edge automation profile. Only files older
 than 30 minutes, between 1 KiB and 10 MiB, with unchanged inode/mtime/size
 and exclusive-open checks are eligible; the 200 newest eligible-format files
-are always preserved. Execution is bounded at 1,200 entries and is serialized
+are always preserved. Execution is bounded at 2,000 entries and is serialized
 with an exclusive local lock. No recursive deletion or arbitrary path flag.
 At or above 50 GiB free the program never executes deletions. Neither dry
 run nor execution opens or parses dump contents. The program does not change
 the Crashpad process or browser launch settings.
 
-The steward's current release has 17 Windows unit tests: 15 passed and two
+The steward's current release has 18 Windows unit tests: 16 passed and two
 symlink-specific tests skipped because this user lacks symlink privileges.
 Ruff passed. These results demonstrate local unit behavior, NOT an independent
 security audit or operational proof that the Edge crash loop is repaired.
