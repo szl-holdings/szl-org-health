@@ -813,8 +813,10 @@ def _repo_census(
         }
     else:
         sampled = name in HEAD_SAMPLE_REPOS
+        # Hard ceiling: zero retries on each of the two sampled HEAD reads.
+        # A transient/denied response stays UNAVAILABLE, never a blind retry.
         before_sha = (_read_default_head(
-            name, default, request_timeout=request_timeout, retries=retries
+            name, default, request_timeout=request_timeout, retries=0
         ) if sampled else None)
         aggregate = _workflow_census(
             name, default, request_timeout=request_timeout, retries=retries,
@@ -822,7 +824,7 @@ def _repo_census(
         )
         if sampled and before_sha is not None:
             after_sha = _read_default_head(
-                name, default, request_timeout=request_timeout, retries=retries
+                name, default, request_timeout=request_timeout, retries=0
             )
             # A moving HEAD or failed second read voids the observation.
             if after_sha != before_sha:
