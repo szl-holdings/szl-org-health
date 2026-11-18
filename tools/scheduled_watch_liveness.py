@@ -20,7 +20,10 @@ missing or malformed evidence) is never HEALTHY. Exit 0 only when every entry
 is HEALTHY, 1 otherwise, 2 when the watch list itself is invalid.
 
 Strictly read-only: GET requests to api.github.com repository endpoints only,
-at most four per entry. It never re-enables a workflow, dispatches a run, or
+at most five per entry (the fifth only for optional dispatch+partial rerun). A
+missing required job in a completed successful rerun may trigger one independent
+same-run, same-attempt job-list read; failed/absent jobs remain non-healthy.
+It never re-enables a workflow, dispatches a run, or
 writes to any repository. Standard library only.
 """
 from __future__ import annotations
@@ -321,6 +324,48 @@ def check_watch(reader, watch: Watch, now: datetime) -> dict:
         or not all(isinstance(job, dict) for job in jobs)
     ):
         return done("UNKNOWN", f"job list for run {newest['id']} malformed")
+    result["job_readback"] = "latest"
+
+    # GitHub's latest-job index can temporarily omit one job after a successful
+    # rerun. Do not accept the run's aggregate success as proof of that job.
+    # If—and only if—the latest index lacks a required job, no required job
+    # already has an explicit failure, and this is an identified rerun,
+    # independently read the jobs of that exact run attempt. Never combine
+    # earlier attempts, ignore 401/403/429, or silently truncate a job page.
+    names = {name for _, name in watch.required_jobs}
+    missing = any(not any(j.get("name") == name for j in jobs) for name in names)
+    observed_failure = any(
+        j.get("name") in names
+        and _nonempty_str(j.get("conclusion"))
+        and j.get("conclusion") != "success"
+        for j in jobs
+    )
+    attempt = newest["run_attempt"]
+    if missing and not observed_failure and isinstance(attempt, int) and attempt > 1:
+        status, attempt_body = reader.get(
+            f"{API}/repos/{watch.repo}/actions/runs/{newest['id']}"
+            f"/attempts/{attempt}/jobs?per_page={JOBS_PER_PAGE}"
+        )
+        if status != 200:
+            return done("UNKNOWN", f"exact-attempt job read failed (HTTP {status})")
+        attempt_jobs = attempt_body.get("jobs") if isinstance(attempt_body, dict) else None
+        attempt_total = attempt_body.get("total_count") if isinstance(attempt_body, dict) else None
+        if (
+            not isinstance(attempt_jobs, list)
+            or not isinstance(attempt_total, int)
+            or attempt_total != len(attempt_jobs)
+            or not all(
+                isinstance(job, dict)
+                and _positive_int(job.get("id"))
+                and job.get("run_attempt") == attempt
+                and job.get("status") == "completed"
+                for job in attempt_jobs
+            )
+            or len({job["id"] for job in attempt_jobs}) != len(attempt_jobs)
+        ):
+            return done("UNKNOWN", "exact-attempt job list incomplete or malformed")
+        jobs, total = attempt_jobs, attempt_total
+        result["job_readback"] = f"exact_attempt_{attempt}"
 
     failed: list[str] = []
     unknown: list[str] = []
@@ -343,7 +388,8 @@ def check_watch(reader, watch: Watch, now: datetime) -> dict:
         return done("UNKNOWN", "; ".join(unknown))
     return done(
         "HEALTHY",
-        f"newest {newest['event']} run is {age_hours:.1f}h old and every required job succeeded",
+        f"newest {newest['event']} run is {age_hours:.1f}h old and every required job succeeded "
+        f"(readback={result['job_readback']})",
     )
 
 

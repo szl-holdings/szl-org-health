@@ -62,6 +62,7 @@ class FakeGitHub:
         }
         self.runs: list[dict] = []
         self.jobs: dict[int, list[dict]] = {}
+        self.attempt_jobs: dict[tuple[int, int], list[dict]] = {}
         self.errors: dict[str, tuple[int, object]] = {}
         self.calls: list[str] = []
         self._next_id = 1000
@@ -120,13 +121,18 @@ class FakeGitHub:
         if match and query == {"filter": "latest", "per_page": "30"}:
             jobs = self.jobs[int(match.group(1))]
             return 200, {"total_count": len(jobs), "jobs": copy.deepcopy(jobs)}
+        attempt_match = re.fullmatch(rf"{base}/runs/(\d+)/attempts/(\d+)/jobs", parsed.path)
+        if attempt_match and query == {"per_page": "30"}:
+            key = (int(attempt_match.group(1)), int(attempt_match.group(2)))
+            jobs = self.attempt_jobs.get(key, [])
+            return 200, {"total_count": len(jobs), "jobs": copy.deepcopy(jobs)}
         raise AssertionError(f"unexpected request: {url}")
 
 
 class ScheduledWatchVerdictTests(unittest.TestCase):
     def verdict(self, github: FakeGitHub, watch: Watch = GRID) -> dict:
         result = check_watch(github, watch, NOW)
-        self.assertLessEqual(len(github.calls), 4, "API calls per entry must stay bounded")
+        self.assertLessEqual(len(github.calls), 5, "API calls per entry must stay bounded")
         self.assertTrue(all(call.startswith(f"{API}/repos/") for call in github.calls))
         return result
 
@@ -204,6 +210,78 @@ class ScheduledWatchVerdictTests(unittest.TestCase):
         result = self.verdict(github)
         self.assertEqual(result["verdict"], "UNKNOWN", result)
         self.assertIn("required job drift absent", result["detail"])
+
+    @staticmethod
+    def partial_latest_rerun() -> tuple[FakeGitHub, int]:
+        """Recorded November 18 GitHub shape: success run, partial latest list."""
+        github = FakeGitHub()
+        run_id = github.add_run(hours_ago=23.9, jobs={CREDENTIAL: "success"})
+        github.runs[-1]["run_attempt"] = 2
+        github.attempt_jobs[(run_id, 2)] = [
+            {"id": run_id * 20, "name": CREDENTIAL,
+             "status": "completed", "conclusion": "success", "run_attempt": 2},
+            {"id": run_id * 20 + 1, "name": DRIFT,
+             "status": "completed", "conclusion": "success", "run_attempt": 2},
+        ]
+        return github, run_id
+
+    def test_partial_latest_index_recovers_only_from_same_run_attempt(self) -> None:
+        github, _ = self.partial_latest_rerun()
+        result = self.verdict(github)
+        self.assertEqual(result["verdict"], "HEALTHY", result)
+        self.assertEqual(result["job_readback"], "exact_attempt_2")
+        self.assertEqual(result["jobs"][0]["conclusions"], ["success"])
+        self.assertEqual(result["jobs"][1]["conclusions"], ["success"])
+        self.assertEqual(len(github.calls), 4)
+        self.assertIn("/attempts/2/jobs?per_page=30", github.calls[-1])
+
+    def test_partial_latest_without_actual_drift_remains_unknown(self) -> None:
+        github, run_id = self.partial_latest_rerun()
+        github.attempt_jobs[(run_id, 2)] = github.attempt_jobs[(run_id, 2)][:1]
+        result = self.verdict(github)
+        self.assertEqual(result["verdict"], "UNKNOWN")
+        self.assertIn("required job drift absent", result["detail"])
+
+    def test_exact_attempt_detects_failed_required_job_not_fake_green(self) -> None:
+        github, run_id = self.partial_latest_rerun()
+        github.attempt_jobs[(run_id, 2)][1]["conclusion"] = "failure"
+        result = self.verdict(github)
+        self.assertEqual(result["verdict"], "FAILED")
+        self.assertIn("required job drift concluded failure", result["detail"])
+
+    def test_exact_attempt_other_attempt_or_missing_completion_is_unknown(self) -> None:
+        for attribute, wrong in (("run_attempt", 1), ("status", "in_progress")):
+            with self.subTest(attribute=attribute):
+                github, run_id = self.partial_latest_rerun()
+                github.attempt_jobs[(run_id, 2)][1][attribute] = wrong
+                result = self.verdict(github)
+                self.assertEqual(result["verdict"], "UNKNOWN")
+                self.assertIn("exact-attempt job list incomplete", result["detail"])
+
+    def test_exact_attempt_auth_denial_stops_without_retry(self) -> None:
+        github, _ = self.partial_latest_rerun()
+        github.errors["/attempts/2/jobs"] = (403, None)
+        result = self.verdict(github)
+        self.assertEqual(result["verdict"], "UNKNOWN")
+        self.assertIn("exact-attempt job read failed (HTTP 403)", result["detail"])
+        self.assertEqual(len(github.calls), 4)
+
+    def test_existing_known_failure_is_not_overridden_by_rerun_read(self) -> None:
+        github, run_id = self.partial_latest_rerun()
+        github.jobs[run_id][0]["conclusion"] = "failure"
+        result = self.verdict(github)
+        self.assertEqual(result["verdict"], "FAILED")
+        self.assertIn("required job credential concluded failure", result["detail"])
+        self.assertEqual(len(github.calls), 3, "failed evidence forbids fallback")
+
+    def test_no_extra_reads_when_latest_index_is_complete(self) -> None:
+        github = FakeGitHub()
+        github.add_run(hours_ago=3)
+        github.runs[-1]["run_attempt"] = 2
+        result = self.verdict(github)
+        self.assertEqual(result["verdict"], "HEALTHY")
+        self.assertEqual(result["job_readback"], "latest")
+        self.assertEqual(len(github.calls), 3)
 
     def test_api_errors_are_unknown_never_healthy(self) -> None:
         cases = {
