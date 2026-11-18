@@ -11,6 +11,7 @@ from typing import Any
 from .common import paginate_json, request_json, token_header
 from .github_inventory import discover_repositories
 from .github_ci import CI_SCOPE, MAX_CI_RUN_PAGES, MAX_CI_RUNS, RUN_WINDOW
+from .head_ci import classify_head_push_runs, witness, SHA40
 
 ORG = "szl-holdings"
 GH = "https://api.github.com"
@@ -18,6 +19,13 @@ API_VERSION = "2022-11-28"
 MAX_PAGES = 20
 # Alert reads use 100-item API pages and the shared 10,000-item ceiling.
 MAX_ALERT_PAGES = 100
+
+# Separate exact-head reads are bracketed for this bounded critical subset only.
+# This adds at most 2 * len(HEAD_SAMPLE_REPOS) API reads per full census.
+HEAD_SAMPLE_REPOS = frozenset({
+    ".github", "a11oy", "a11oy-net", "szl-build-env", "szl-cram",
+    "platform", "szl-org-health", "killinchu", "szl-router", "hatun-mcp",
+})
 
 KEY_REPOS_FALLBACK = [
     "a11oy",
@@ -684,6 +692,7 @@ def _branch_governance(
 
 def _workflow_census(
     name: str, default: str, *, request_timeout: float, retries: int,
+    head_sha: str | None = None, head_sampled: bool = False,
 ) -> dict[str, Any]:
     """Read at most ten stable, uniquely identified pages; retain partial red."""
     path = f"/repos/{ORG}/{urllib.parse.quote(name, safe='')}/actions/runs"
@@ -744,6 +753,9 @@ def _workflow_census(
             state, error = "INCOMPLETE", "workflow run page cap reached"
 
     aggregate = aggregate_workflow_runs(observed)
+    aggregate.update(classify_head_push_runs(
+        observed, default_head_sha=head_sha, default_branch=default, coverage=state
+    ) if head_sampled else witness("NOT_SAMPLED", coverage=state))
     if not observed and state != "COMPLETE":
         aggregate["workflow_count"] = None
     if state != "COMPLETE" and aggregate["ci"] != "failure":
@@ -752,6 +764,27 @@ def _workflow_census(
                       "ci_coverage": state, "run_window_observed": len(observed) if pages_observed else None,
                       "default_branch_push_runs_total": total})
     return aggregate
+
+
+def _read_default_head(
+    name: str, default: str, *, request_timeout: float, retries: int,
+) -> str | None:
+    """Independent default-branch commit read; never trust a run as HEAD."""
+    if not (re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", name)
+            and isinstance(default, str)
+            and re.fullmatch(r"[A-Za-z0-9_./-]{1,180}", default)
+            and not default.startswith("/") and ".." not in default):
+        return None
+    path = (f"/repos/{ORG}/{urllib.parse.quote(name, safe='')}/commits/"
+            f"{urllib.parse.quote(default, safe='')}")
+    data, _, error = request_json(
+        f"{GH}{path}", headers=github_headers(),
+        timeout=request_timeout, retries=retries,
+        redirect_origin=("https", "api.github.com", 443),
+        redirect_path=path,
+    )
+    sha = data.get("sha") if isinstance(data, dict) and error is None else None
+    return sha if isinstance(sha, str) and SHA40.fullmatch(sha) else None
 
 
 def _repo_census(
@@ -776,10 +809,26 @@ def _repo_census(
             "ci_coverage": "NOT_APPLICABLE",
             "run_window_observed": None,
             "default_branch_push_runs_total": None,
+            **witness("ARCHIVED"),
         }
     else:
-        aggregate = _workflow_census(name, default, request_timeout=request_timeout,
-                                     retries=retries)
+        sampled = name in HEAD_SAMPLE_REPOS
+        before_sha = (_read_default_head(
+            name, default, request_timeout=request_timeout, retries=retries
+        ) if sampled else None)
+        aggregate = _workflow_census(
+            name, default, request_timeout=request_timeout, retries=retries,
+            head_sha=before_sha, head_sampled=sampled,
+        )
+        if sampled and before_sha is not None:
+            after_sha = _read_default_head(
+                name, default, request_timeout=request_timeout, retries=retries
+            )
+            # A moving HEAD or failed second read voids the observation.
+            if after_sha != before_sha:
+                aggregate.update(witness(
+                    "UNAVAILABLE", coverage=aggregate["ci_coverage"]
+                ))
 
     branch_governance = _branch_governance_result(
         protected=None,

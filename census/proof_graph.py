@@ -90,6 +90,11 @@ def project_proof_graph(report):
     sources = public.get("sources", {})
     github = sources.get("github", {}) if isinstance(sources, dict) else {}
     repos = (github.get("data") or {}).get("repos") if isinstance(github, dict) else None
+    head_sample_fresh = (
+        github.get("diagnostic_state") == "PUBLIC_SUBSET"
+        and github.get("error") is None
+        and portal["freshness"]["within_24h"] is True
+    )
     if isinstance(repos, Mapping):
         for name, data in sorted(repos.items()):
             if len(nodes) >= MAX_PUBLIC_NODES:
@@ -106,6 +111,8 @@ def project_proof_graph(report):
                           "url": url, "archived": data.get("archived"),
                           "evidence_class": portal["layers"]["github"]["evidence_class"],
                           "claim_scope": "public-repository-subset",
+                          "head_ci": (data.get("head_ci", "UNAVAILABLE")
+                                      if head_sample_fresh else "UNAVAILABLE"),
                           "runtime_verified": False})
             edges.append({"source": "hub:github", "target": uid,
                           "relation": "public_membership_observed",

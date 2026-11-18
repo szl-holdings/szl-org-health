@@ -41,6 +41,22 @@ The GitHub collector follows pagination instead of maintaining a hand-written re
 
 ### Bounded GitHub CI coverage
 
+The historical `ci` status and `ci_coverage` are **not current-head readiness**.
+A separate `head_ci` witness now samples exactly ten critical repositories
+with at most **20 extra GitHub commit reads** per census (one default-branch
+HEAD read before and one after each run-window read). A failed/denied commit
+read, moving HEAD, malformed SHA or inconsistent run metadata results in
+`UNAVAILABLE`; unsampled repositories remain `NOT_SAMPLED`, never zero
+or green. The source SHA is compared only to current branch push runs and is
+not exposed in the public projection. A historical red run is separated
+from a red run at the exact current HEAD. Cancelled, skipped and manual
+checks cannot turn an unmeasured head green. `OBSERVED_HEAD_GREEN` covers
+only latest push-run heads visible within a COMPLETE returned window; it
+**does not** prove required PR CI, branch-rule satisfaction, signed HF
+publication, production readiness, or settlement. The public 3D proof graph
+shows this separate witness only on public GitHub repository nodes.
+
+
 For each active repository, the collector reads default-branch `push` runs in
 pages of 100, stopping at ten pages (1,000 runs). Requests retain the same query
 filters and lock redirects to the GitHub API origin and run-list path. Existing
