@@ -16,3 +16,4 @@
 /.github/workflows/pypi-artifact-transport.yml text eol=lf
 /governance/pypi/canonical/gen_publish_workflow.py text eol=lf
 /governance/pypi/canonical/szl_pypi_release_gate.py text eol=lf
+/edge/contract.yaml text eol=lf
