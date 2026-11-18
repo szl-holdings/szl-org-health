@@ -18,7 +18,6 @@ from tools.database_causal_frontier import (
     evaluate,
     main,
     policy_data,
-    snapshot_data,
     strict_json,
 )
 
