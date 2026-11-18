@@ -1,0 +1,128 @@
+{
+  "schema": "szl.database-ouroboros-braid-policy/v1",
+  "doctrine": "bounded, terminating, receipt-closed",
+  "max_steps": 5,
+  "source_owner": "szl-holdings/szl-org-health",
+  "source_refs": [
+    {
+      "id": "ancient_lineage",
+      "repository": "szl-holdings/a11oy",
+      "commit": "5ac8033b0caa8f630f1fe7e68d6b9383fc9c2972",
+      "path": "docs/ANCIENT_TEXTS_FORMULA_LINEAGE.md",
+      "blob_sha1": "de7ddf67d5226ccc4ef4b9d2f3b57f6cf60285b6",
+      "tier": "HISTORICAL_LINEAGE"
+    },
+    {
+      "id": "db_agent_planner",
+      "repository": "szl-holdings/szl-org-health",
+      "commit": "575b7072266922806a5fff1304c996defc298a87",
+      "path": "tools/database_agentic_planner.py",
+      "blob_sha1": "3561cdb4d38cf107054b01059174e989df159f56",
+      "tier": "CODE"
+    },
+    {
+      "id": "formula_atlas",
+      "repository": "szl-holdings/szl-formulas",
+      "commit": "9c74b29de9c061ac599a7349c079599a3c298af5",
+      "path": "atlas/formula-atlas.v1.json",
+      "blob_sha1": "2a70d047b51b1f4cc292395c029603bbfe724a3c",
+      "tier": "FORMULA_REGISTRY"
+    },
+    {
+      "id": "formula_reference",
+      "repository": "szl-holdings/szl-formulas",
+      "commit": "9c74b29de9c061ac599a7349c079599a3c298af5",
+      "path": "contracts/locked-formula-reference.v1.json",
+      "blob_sha1": "61eca5b6d531ad758ff557b881ff49ec2b9af3ea",
+      "tier": "FORMULA_REGISTRY"
+    },
+    {
+      "id": "hatun_governance",
+      "repository": "szl-holdings/hatun-mcp",
+      "commit": "1cec84742e07c151a34c329ae2fb50dd5f87c7ab",
+      "path": "hatun_mcp/governance.py",
+      "blob_sha1": "aac0b8ff819d5400d99c36eac7044bfd09963243",
+      "tier": "CODE"
+    },
+    {
+      "id": "hatun_loop",
+      "repository": "szl-holdings/hatun-mcp",
+      "commit": "1cec84742e07c151a34c329ae2fb50dd5f87c7ab",
+      "path": "hatun_mcp/loop.py",
+      "blob_sha1": "cba23202226300462eae8023b9c9e9a7427ec5f8",
+      "tier": "CODE"
+    },
+    {
+      "id": "invariants_kernel",
+      "repository": "szl-holdings/szl-invariants",
+      "commit": "233833d00163b255836ec72b5a0b4f53b8f11e17",
+      "path": "torch-ext/szl_invariants/__init__.py",
+      "blob_sha1": "9c2de3aef5c7cfd3e3a02c9dabfe1edda84da151",
+      "tier": "CODE"
+    },
+    {
+      "id": "khipu_loop",
+      "repository": "szl-holdings/szl-khipu",
+      "commit": "5a6a3843008906051e7b3289767078cd04d26ac3",
+      "path": "szl_khipu/ouroboros.py",
+      "blob_sha1": "9ac1f96d71c49a1ef828558e84590add205bb1bf",
+      "tier": "CODE"
+    },
+    {
+      "id": "khipu_math",
+      "repository": "szl-holdings/szl-khipu",
+      "commit": "5a6a3843008906051e7b3289767078cd04d26ac3",
+      "path": "docs/KHIPU_NUMERICAL_INSPIRATION.md",
+      "blob_sha1": "49696d9676743ad7d971e1f93ba0e53a75e23be0",
+      "tier": "HISTORICAL_LINEAGE"
+    },
+    {
+      "id": "lake_pcgi",
+      "repository": "szl-holdings/szl-lake",
+      "commit": "7e19e7f0d56d98fb78c7af6b9369819edaf37262",
+      "path": "szl_lake_receipt.py",
+      "blob_sha1": "186111f123eb19b2aa0cfa057de9dd8494ffd56d",
+      "tier": "CODE"
+    },
+    {
+      "id": "lean_cross_component",
+      "repository": "szl-holdings/lutar-lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "path": "Lutar/Doctrine/CrossComponentInvariant.lean",
+      "blob_sha1": "4605cfa3a3b06316f617a1d015f5b64b53ace897",
+      "tier": "LEAN_CARRIER"
+    },
+    {
+      "id": "lean_experimental_scope",
+      "repository": "szl-holdings/szl-papers",
+      "commit": "39c228dc3a29c6cfd831d43be6a8531e718692ac",
+      "path": "thesis/EXPERIMENTAL_LEAN_THEOREMS.md",
+      "blob_sha1": "6791b3ed10e16afb5837794db1cabb94e2b8f65b",
+      "tier": "RESEARCH_SCOPE"
+    },
+    {
+      "id": "lean_khipu",
+      "repository": "szl-holdings/lutar-lean",
+      "commit": "80e35f859801d80fce7cf81e4d9b0c8bdf91cfea",
+      "path": "Lutar/Khipu/SummationInvariant.lean",
+      "blob_sha1": "c1bee9704c86165da928a6dc5ec5a448b884f4c6",
+      "tier": "LEAN_CARRIER"
+    },
+    {
+      "id": "ouroboros_kernel",
+      "repository": "szl-holdings/szl-ouroboros",
+      "commit": "f3713283d6ef8fb00acd46f1430ba095e12016c9",
+      "path": "torch-ext/szl_ouroboros/__init__.py",
+      "blob_sha1": "3d711845beb8927545a988b935a8dbda867e9658",
+      "tier": "CODE"
+    }
+  ],
+  "source_refs_required": 14,
+  "khipu_conservation": "ONE_UNIT_PER_PRESENT_PINNED_SOURCE",
+  "lambda_claim": "UNCONDITIONAL_UNIQUENESS_DISPROVEN_AS_STATED",
+  "lean_proof_admission": "NOT_EXECUTED_THIS_RUN",
+  "hatun_effect_authority": "NOT_ATTACHED",
+  "lake_receipt_emission": "NOT_EMITTED",
+  "archaeological_data_rights": "NOT_GRANTED",
+  "external_effects": "DENIED"
+}
