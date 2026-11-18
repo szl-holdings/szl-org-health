@@ -9,7 +9,7 @@ really came from a database. Runtime snapshots require separate authentication.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
