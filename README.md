@@ -250,16 +250,19 @@ Endpoints:
 - `GET /api/health` — cached, versioned public projection; never the credential-derived internal census.
 - `GET /api/proof-graph` — read-only public source/asset topology with an explicit UNSIGNED checksum, dashed UNKNOWN cross-provider edges, and no private repositories or execution authority. The interactive `/proof-graph` viewer projects a 3D layout in a self-hosted canvas; its positions are illustrative, not real-world spatial coordinates. It consumes the existing bounded cache and performs no additional provider reads.
 - `GET /api/portal` — a small public-only investor/developer index derived from the same cached projection. It labels collection age and HTTP transport separately from source parity, runtime readiness, evaluation, and release authority; a missing or older-than-24-hour collection leaves current observations `UNKNOWN`.
+- `GET /api/system-design` — source-pinned, read-only Python architecture review mapped to the existing public portal projection; eleven **NOT_EVALUATED** control obligations, explicit GitHub/HF/product/proof/Cloudflare/PyPI evidence boundaries, zero action authority. Source research and contract: [docs/SYSTEM_DESIGN_EVIDENCE.md](docs/SYSTEM_DESIGN_EVIDENCE.md).
+- `GET /system-design` — accessible Python-rendered frontend for the same cached evidence; no JavaScript, no forms, strict CSP, no direct provider requests.
 - `GET /healthz` — service liveness and schema version.
 
 Public API requests never run or wait for provider collection. A cold or expired
 response schedules at most one background refresh shared by `/api/health`,
-`/api/portal`, and `/api/proof-graph`; until that refresh succeeds, all three return HTTP 503 with
-`{"error":"UNAVAILABLE"}` and `Retry-After: 60`. The refresh precomputes all three
-public response bodies when the graph is admissible. A graph-only projection
-failure leaves the existing health and portal readbacks available while the
-graph endpoint returns bounded HTTP 503; it never leaks error details or serves
-an expired graph. Successful responses are cached for 60 seconds from
+`/api/portal`, `/api/proof-graph`, `/api/system-design`, and `/system-design`;
+until that refresh succeeds, the unavailable routes return HTTP 503 with
+`{"error":"UNAVAILABLE"}` and `Retry-After: 60`. The refresh precomputes
+public response bodies when each optional projection is admissible. A graph-only
+or system-design-only projection failure leaves existing health and portal
+readbacks available while the affected optional endpoint returns HTTP 503;
+no internal exception or expired optional projection is disclosed. Successful responses are cached for 60 seconds from
 completion. A failed refresh backs off for 60 seconds and never serves expired
 data as a current observation. Provider timestamps, coverage states, public
 projection and governance rules are unchanged. `/healthz` remains a liveness

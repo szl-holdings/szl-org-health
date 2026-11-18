@@ -12,6 +12,7 @@ from census import SCHEMA_VERSION, build_report
 from census.common import resolve_txt as _resolve_txt
 from census.portal_projection import project_portal_index
 from census.proof_graph import project_proof_graph
+from census.system_design import project_system_design, render_html as render_system_design
 from census.sites import DOMAINS
 
 
@@ -61,6 +62,18 @@ class PublicResponses:
                 path: json.dumps(value, separators=(",", ":"), allow_nan=False).encode()
                 for path, value in (("/api/health", report), ("/api/portal", portal))
             }
+            try:
+                # Optional source-only architecture research must not poison
+                # proven existing health/portal/proof-graph responses.
+                design = project_system_design(portal)
+                responses["/api/system-design"] = json.dumps(
+                    design, separators=(",", ":"), allow_nan=False
+                ).encode()
+                responses["/system-design"] = render_system_design(design)
+            except Exception:
+                # Do not reveal upstream details or serve a stale map.
+                # Missing optional entry keeps the proven endpoints authoritative.
+                pass
             try:
                 # A new optional graph projection must not poison the existing
                 # health/portal readbacks when its own contract is unavailable.
@@ -140,7 +153,8 @@ def collect_dns():
 class Handler(BaseHTTPRequestHandler):
     server_version = "szl-org-health"
 
-    def _send(self, code: int, body: str | bytes, ctype: str = "application/json"):
+    def _send(self, code: int, body: str | bytes, ctype: str = "application/json", *,
+              csp: str | None = None):
         payload = body if isinstance(body, bytes) else body.encode()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -148,6 +162,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
+        if csp is not None:
+            self.send_header("Content-Security-Policy", csp)
+            self.send_header("Referrer-Policy", "no-referrer")
         if code == 503:
             self.send_header("Retry-After", "60")
         self.end_headers()
@@ -155,7 +172,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler API
         path = self.path.split("?", 1)[0]
-        if path in ("/api/health", "/api/portal", "/api/proof-graph"):
+        if path in ("/api/health", "/api/portal", "/api/proof-graph", "/api/system-design"):
+            if path == "/api/system-design" and "?" in self.path:
+                self._send(400, '{"error":"UNSUPPORTED_QUERY"}')
+                return
             try:
                 payload = PUBLIC_RESPONSES.get(path)
             except ReportUnavailable:
@@ -168,6 +188,21 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, source.read(), "text/html; charset=utf-8")
             except FileNotFoundError:
                 self._send(404, "not found", "text/plain; charset=utf-8")
+        elif path == "/system-design":
+            # No query-supplied model, URL, signer, SQL or source path can be used.
+            if "?" in self.path:
+                self._send(400, '{"error":"UNSUPPORTED_QUERY"}')
+                return
+            try:
+                payload = PUBLIC_RESPONSES.get(path)
+            except ReportUnavailable:
+                self._send(503, '{"error":"UNAVAILABLE"}')
+            else:
+                self._send(200, payload, "text/html; charset=utf-8", csp=(
+                    "default-src 'none'; style-src 'unsafe-inline'; script-src 'none'; "
+                    "object-src 'none'; base-uri 'none'; form-action 'none'; "
+                    "frame-ancestors 'none'"
+                ))
         elif path in ("/", "/index.html"):
             try:
                 with open("static/index.html", "rb") as source:
