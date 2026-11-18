@@ -169,6 +169,8 @@ class BracketedCollectorTests(unittest.TestCase):
                 include_branch_protection=False,
             )
         self.assertEqual(get_head.call_count, 2)
+        self.assertTrue(all(call.kwargs["retries"] == 0
+                            for call in get_head.call_args_list))
         self.assertEqual(result["head_ci"], "OBSERVED_HEAD_GREEN")
 
     def test_head_drift_after_run_invalidates_even_green(self):
