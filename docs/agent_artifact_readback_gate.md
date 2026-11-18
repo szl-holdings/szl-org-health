@@ -104,3 +104,51 @@ Docker/WSL volumes and protected system files.
 4. Introduce a separately reviewed disposal plan only after all predicates
    are independently satisfied. Never remove the V13 safety hold as a
    shortcut; never delete based on this gate alone.
+
+
+## Broader agent production references and SZL proof graph (design only)
+
+- Palantir AIP / Foundry / Apollo integrates operational objects, actions,
+  security, model context, tracing, evaluation and deployment. Its core AIP
+  platform is proprietary, so do not claim to have obtained its source
+  code or undisclosed formulas. Public architecture:
+  https://www.palantir.com/docs/foundry/architecture-center/aip-architecture
+  and observability:
+  https://www.palantir.com/docs/foundry/aip-observability/overview .
+  SZL adaptation: model code revisions, HF models, job artifacts, meter
+  readings, evidence receipts, Cloudflare deployments and settlement
+  outcomes as typed, linked objects with source-bound state transitions.
+- Temporal (https://github.com/temporalio/temporal ;
+  https://docs.temporal.io/encyclopedia/event-history) maintains durable
+  workflow event history and deterministic replay. SZL adaptation: idempotent,
+  crash-recoverable agent runs with explicit approval boundaries before
+  any irreversible action. This PR does not integrate Temporal or claim
+  operational replay.
+- NVIDIA NeMo Relay (https://github.com/NVIDIA/NeMo-Relay) exposes agent
+  model/tool call events and policy middleware. NeMo Fabric
+  (https://github.com/NVIDIA/NeMo-Fabric) normalizes harness execution.
+  Both are newer reference points than the deprecated NeMo Agent Toolkit.
+  Evaluate them in a separate licensed, pinned, sandboxed prototype;
+  do not install scripts from remote URLs into this production workstation.
+
+Proposed normalized cross-estate graph:
+  G = (V, E)
+  V = {GitRevision, HFRevision, TrainingRun, Dataset, ModelWeight,
+       AgentRun, Artifact, Receipt, Deployment, APIProduct, Settlement}
+  E = {produced_by, depends_on, published_as, deployed_as,
+       measured_by, verified_by, retained_at, claimed_by, settled_by}
+
+Proposed action fingerprint (Bazel-inspired, not yet implemented):
+  K_action = SHA256(canonical_json({
+      source_revision, toolchain_digest, declared_input_digests,
+      parameters, policy_version, environment_allowlist
+  }))
+
+Proposed gating invariant:
+  no deployment, cleanup, training promotion, or monetized availability
+  claim may be emitted unless an independently checked path exists in G
+  from the claim to immutable source and required evidence nodes.
+
+This representation is a design hypothesis, not an evaluated system, and
+must be tested for false-positive admission, missing subjects, privacy,
+clock skew, concurrency, replay and authority-boundary failures.
