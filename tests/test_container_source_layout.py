@@ -34,9 +34,9 @@ socket.socket.connect_ex = network_forbidden
 urllib.request.urlopen = network_forbidden
 
 import app
-from census import github, github_ci, governance, report, portal_projection
+from census import github, github_ci, head_ci, governance, report, portal_projection
 
-modules = [app, github, github_ci, governance, report, portal_projection]
+modules = [app, github, github_ci, head_ci, governance, report, portal_projection]
 for module in modules:
     assert Path(module.__file__).resolve().is_relative_to(root), module.__name__
 for name, module in list(sys.modules.items()):
@@ -88,7 +88,17 @@ class ContainerSourceLayoutTests(unittest.TestCase):
             result = self.probe(root)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("census/github_ci.py", copied)
+            self.assertIn("census/head_ci.py", copied)
             self.assertEqual(json.loads(result.stdout)["healthz"], 200)
+
+    def test_checkout_cannot_mask_missing_head_witness(self):
+        with tempfile.TemporaryDirectory(prefix="org-health-container-layout-") as directory:
+            root, _ = self.assemble(directory)
+            (root / "census" / "head_ci.py").unlink(missing_ok=True)
+            result = self.probe(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("ModuleNotFoundError", result.stderr)
+            self.assertIn("census.head_ci", result.stderr)
 
     def test_checkout_cannot_mask_a_missing_container_module(self):
         with tempfile.TemporaryDirectory(prefix="org-health-container-layout-") as directory:

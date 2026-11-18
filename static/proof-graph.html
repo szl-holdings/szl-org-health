@@ -48,6 +48,7 @@ footer{font-size:12px;color:var(--muted)}@media(max-width:870px){.layout{grid-te
 <a id="node-url" rel="noopener noreferrer" target="_blank" hidden></a>
 <div class="k">Evidence boundary</div><div class="value warning" id="node-evidence">UNKNOWN</div>
 <div class="value muted" id="node-runtime">Runtime, deployment and settlement unverified.</div>
+<div class="value warning" id="node-head-ci" hidden></div>
 <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
 <div class="k">Public observation</div><div class="mono" id="facts">No live graph payload.</div>
 <div class="legend">
@@ -96,8 +97,13 @@ function inspect(node){$('node-name').textContent=node.label;$('node-kind').text
 $('node-scope').textContent='Scope: '+node.claim_scope;
 $('node-evidence').textContent='Evidence: '+node.evidence_class;
 $('node-runtime').textContent='No signed source/deployment parity, live model inference, settlement or release authority is established by this node.';
+const ci=$('node-head-ci');if(node.kind==='github_repository'){
+const head=headStates.has(node.head_ci)?node.head_ci:'UNAVAILABLE';
+ci.hidden=false;ci.textContent='Default-head push-run witness: '+head+' (sample only; not required PR CI, signing, or release readiness).';
+}else{ci.hidden=true;ci.textContent='';}
 const link=$('node-url');let allowed=false;try{const u=new URL(node.url);allowed=u.protocol==='https:'&&['github.com','huggingface.co','a-11-oy.com','a11oy.net'].includes(u.hostname)&&!u.username&&!u.password}catch(_){}
 link.hidden=!allowed;if(allowed){link.href=node.url;link.textContent='Open public source ↗'}else{link.removeAttribute('href');link.textContent=''}}
+const headStates=new Set(['ARCHIVED','NOT_SAMPLED','UNAVAILABLE','CURRENT_HEAD_RED','CURRENT_HEAD_PENDING','CURRENT_HEAD_INCOMPLETE','NO_CURRENT_HEAD_RUN','HISTORICAL_FAILURE_ONLY','OBSERVED_HEAD_GREEN']);
 let startX=0,startY=0;
 cvs.addEventListener('pointerdown',e=>{drag=true;mx=e.clientX;my=e.clientY;startX=mx;startY=my;cvs.setPointerCapture(e.pointerId)});
 cvs.addEventListener('pointermove',e=>{if(!drag)return;yaw+=(e.clientX-mx)*.007;pitch=Math.max(-1.25,Math.min(1.25,pitch+(e.clientY-my)*.007));mx=e.clientX;my=e.clientY;draw()});

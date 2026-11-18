@@ -20,6 +20,7 @@ from typing import Any
 
 from .github import collect_github
 from .github_ci import ci_evidence
+from .head_ci import SCOPE as HEAD_CI_SCOPE, STATES as HEAD_CI_STATES
 from .governance import evaluate_report
 from .huggingface import collect_huggingface
 from .sites import collect_dns, collect_sites
@@ -504,6 +505,13 @@ def _public_github_repo(name: Any, value: Any) -> dict[str, Any] | None:
         "archived": archived if isinstance(archived, bool) else None,
         "fork": fork if isinstance(fork, bool) else None,
         "ci": ci if ci in _GITHUB_CI_STATES else "unknown",
+        # Head observation is a separate, bracketed, explicitly non-release claim.
+        "head_ci": (
+            value.get("head_ci")
+            if value.get("head_ci_scope") == HEAD_CI_SCOPE
+            and value.get("head_ci") in HEAD_CI_STATES else "UNAVAILABLE"
+        ),
+        "head_ci_scope": HEAD_CI_SCOPE,
         **coverage,
         "protected": protected if isinstance(protected, bool) else None,
         "classification": (
@@ -626,13 +634,21 @@ def _public_source(
                 and isinstance(raw.get("data"), Mapping)
             )
         )
+        projected = projector(data)
+        if not subset_observed:
+            # An error-bearing source wrapper cannot lend its old rows a
+            # CURRENT_HEAD_GREEN observation. Preserve historical failures.
+            projected["repos"] = {
+                repo: {**row, "head_ci": "UNAVAILABLE"}
+                for repo, row in projected.get("repos", {}).items()
+            }
         return {
             "ok": False,
             "diagnostic_state": (
                 "PUBLIC_SUBSET" if subset_observed else "SOURCE_UNAVAILABLE"
             ),
             "error": None if subset_observed else "SOURCE_UNAVAILABLE",
-            "data": projector(data),
+            "data": projected,
         }
 
     ok = (raw.get("ok") is True and isinstance(raw.get("data"), Mapping)
