@@ -1035,6 +1035,38 @@ def _paid_problems(decoded: dict[str, Any], check: Check, terms: PaymentTerms) -
     return problems
 
 
+def _hatun_readiness_claim(body: bytes) -> tuple[bool, str]:
+    """Validate a runtime's public readiness declaration without logging body.
+
+    A matching JSON claim is NOT an independent operator-key test, exact-source
+    pin, or deployment attestation; it is still more specific than HTTP 200.
+    """
+    try:
+        doc = json.loads(body.decode("utf-8"))
+    except (ValueError, UnicodeError):
+        return False, "INVALID_JSON"
+    if not isinstance(doc, dict):
+        return False, "INVALID_OBJECT"
+    if doc.get("service") != "hatun-mcp":
+        return False, "WRONG_SERVICE"
+    if doc.get("status") != "ready" or doc.get("ready") is not True:
+        return False, "NOT_READY"
+    if doc.get("signer_mode") != "ECDSA-P256":
+        return False, "SIGNER_UNAVAILABLE"
+    checks = doc.get("checks")
+    if not isinstance(checks, dict):
+        return False, "READINESS_CHECKS_UNAVAILABLE"
+    required = {
+        "receipt_chain": "VERIFIED",
+        "signer": "CONFIGURED",
+        "authentication": "CONFIGURED",
+    }
+    for key, expected in required.items():
+        if checks.get(key) != expected:
+            return False, "READINESS_" + key.upper() + "_NOT_CONFIGURED"
+    return True, "RUNTIME_READINESS_SELF_REPORT_ADMISSIBLE"
+
+
 def evaluate(check: Check, method: str, observation: Observation, terms: PaymentTerms) -> dict[str, Any]:
     """Apply the contract to one observation. Returns a receipt result row."""
     outcome, evidence = classify(observation)
@@ -1119,6 +1151,21 @@ def evaluate(check: Check, method: str, observation: Observation, terms: Payment
             message = f"transport-error: {evidence}"
         else:
             message = f"{label}: HTTP {status}; expected a 403 refusal that is not a challenge"
+    # The public /readyz route is the live Hatun admission signal, not a
+    # generic free webpage. A 2xx with ready=false or missing authenticated
+    # operator configuration must remain FAIL; use fixed non-secret codes.
+    # This checks the runtime's claim only, never independent key usability.
+    if (check.cls == "free" and check.host == "mcp.a-11-oy.com"
+            and check.path == "/readyz" and verdict == "PASS"):
+        ready, reason = _hatun_readiness_claim(observation.body)
+        if ready:
+            message = (
+                "2xx: Hatun /readyz declares chain VERIFIED, signer CONFIGURED "
+                "and authentication CONFIGURED (runtime self-report only)"
+            )
+        else:
+            verdict = "FAIL"
+            message = "2xx Hatun readiness assertion refused: " + reason
     row: dict[str, Any] = {
         "id": check.id,
         "class": check.cls,
