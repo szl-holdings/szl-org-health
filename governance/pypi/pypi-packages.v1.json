@@ -23,7 +23,7 @@
                      },
     "counts":  {
                    "hold":  5,
-                   "published":  41,
+                   "published":  42,
                    "internal":  51,
                    "never":  9,
                    "third-party":  1,
@@ -1418,6 +1418,21 @@
                          "tag_pattern":  "v\u003cversion\u003e",
                          "reason":  "queued 2026-11-17 (owner order): CRAM classical-energy reasoning package (arXiv:2611.17309 audit line); first tag v0.1.0 deferred pending PyPI pending-publisher registration, pypi environment, tag ruleset",
                          "source":  "https://github.com/szl-holdings/szl-cram"
+                     },
+                     {
+                         "name":  "szl-inference-gateway",
+                         "repo":  "szl-inference-gateway",
+                         "path":  "pyproject.toml",
+                         "status":  "published",
+                         "github_environment":  "pypi",
+                         "workflow":  ".github/workflows/publish-pypi.yml",
+                         "tag_pattern":  "v<version>",
+                         "pypi_url":  "https://pypi.org/project/szl-inference-gateway/",
+                         "pypi_version":  "0.1.0",
+                         "pypi_releases": ["0.1.0"],
+                         "pypi_latest_provenance":  "dee2ac5c15d721a275712449d23569f8aa2469f8",
+                         "pypi_latest_source_ref":  "refs/tags/v0.1.0",
+                         "source":  "https://github.com/szl-holdings/szl-inference-gateway"
                      }
                  ],
     "history":  [
@@ -1440,6 +1455,10 @@
                     {
                         "at":  "2026-11-17T20:00:04Z",
                         "event":  "szl-cram queued: CRAM classical-energy reasoning package (from arXiv:2611.17309 audit) added as queued; publish-pypi.yml measured canonical (built from szl-pin HEAD); first tag v0.1.0 held pending PyPI pending-publisher registration by owner"
+                    },
+                    {
+                        "at":  "2026-11-19T08:36:14Z",
+                        "event":  "szl-inference-gateway published 2026-11-19: SaladCloud x402 inference gateway tooling open-sourced (repo public, README live receipts); pending publisher registered by owner on pypi.org (GitHub OIDC, publish-pypi.yml, environment pypi); GitHub Release v0.1.0 (tag v0.1.0 at dee2ac5c15d721a275712449d23569f8aa2469f8) published the project via Trusted Publishing with PEP 740 provenance; publish-pypi.yml measured canonical (szl.pypi-release.v2 render); CI pytest 3.12/3.13 green on main"
                     }
                 ]
 }

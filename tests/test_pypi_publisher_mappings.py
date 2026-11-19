@@ -1,15 +1,16 @@
 """Every PyPI publisher mapping, rendered by the REAL canonical generator.
 
-governance/pypi/pypi-packages.v1.json declares 42 releasable packages (41
+governance/pypi/pypi-packages.v1.json declares 43 releasable packages (42
 published: the 2026-11-15 release wave plus szl-atelier and szl-drift,
 measured live on PyPI on 2026-11-16; szl-cram queued 2026-11-17, held pending
-PyPI pending-publisher registration) in 41 repositories, each releasing through exactly one
+PyPI pending-publisher registration) in 42 repositories, each releasing through exactly one
 `.github/workflows/publish-pypi.yml`. CONSUMER_SPECS is the exact SZL_PACKAGES
-line of each of those 41 committed workflows, read at each repository's HEAD (36 on
+line of each of those 42 committed workflows, read at each repository's HEAD (36 on
 2026-10-14, all then byte-identical to this renderer at org-health 9bf5447;
 szl-formulas and szl-provctl on 2026-11-16, both byte-identical to this renderer;
 szl-atelier and szl-drift on 2026-11-16, both byte-identical to this renderer;
-szl-cram on 2026-11-17, byte-identical to this renderer). The table and the manifest are bound in both directions, so a package
+szl-cram on 2026-11-17, byte-identical to this renderer;
+szl-inference-gateway on 2026-11-19, byte-identical to this renderer). The table and the manifest are bound in both directions, so a package
 cannot be queued, published or moved without its workflow mapping being stated.
 
 For every mapping the shipped generator renders the workflow and the shipped
@@ -92,6 +93,7 @@ CONSUMER_SPECS = {
     "szl-formulas": "szl-formulas=.:pypi",
     "szl-frontier": "szl-frontier-control-plane=.:pypi",
     "szl-guardrail-receipt": "szl-guardrail-receipt=.:pypi",
+    "szl-inference-gateway": "szl-inference-gateway=.:pypi",
     "szl-invariants": "szl-invariants=.:pypi",
     "szl-kernels": "szl-kernels=.:pypi",
     "szl-khipu": "szl-khipu=.:pypi",
