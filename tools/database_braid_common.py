@@ -178,7 +178,7 @@ def write_exclusive(path: Path, value, *, max_bytes: int, checkout: Path | None 
 def write_new_bytes(path: Path, raw: bytes) -> None:
     """Create ``path`` with ``raw``; refuses to follow a symlink or replace a file."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(str(path), flags, 0o644)
+    fd = os.open(str(path), flags, 0o600)
     with os.fdopen(fd, "wb") as stream:
         stream.write(raw)
 
