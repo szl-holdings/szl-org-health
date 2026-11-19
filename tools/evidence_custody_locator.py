@@ -59,6 +59,10 @@ def _pairs_unique(pairs):
     return result
 
 
+def _reject_json_constant(_value: str):
+    raise Hold("INVALID_JSON_CONSTANT")
+
+
 def load_manifest(path: Path) -> tuple[dict, str]:
     try:
         info = path.lstat()
@@ -73,11 +77,17 @@ def load_manifest(path: Path) -> tuple[dict, str]:
     except OSError as exc:
         raise Hold("MANIFEST_UNAVAILABLE") from exc
     try:
-        doc = json.loads(raw.decode("utf-8"), object_pairs_hook=_pairs_unique)
+        doc = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_pairs_unique,
+            parse_constant=_reject_json_constant,
+        )
     except (ValueError, UnicodeError) as exc:
         raise Hold("INVALID_MANIFEST_JSON") from exc
     if not isinstance(doc, dict) or doc.get("schema") != SCHEMA:
         raise Hold("MANIFEST_SCHEMA_MISMATCH")
+    if set(doc) != {"schema", "artifacts"}:
+        raise Hold("MANIFEST_UNEXPECTED_FIELDS")
     items = doc.get("artifacts")
     if not isinstance(items, list) or not 1 <= len(items) <= MAX_ARTIFACTS:
         raise Hold("INVALID_ARTIFACT_COUNT")
@@ -106,6 +116,8 @@ def load_manifest(path: Path) -> tuple[dict, str]:
 def check_root(root: Path) -> Path:
     if not root.is_absolute() or root == Path(root.anchor):
         raise Hold("ROOT_MUST_BE_EXPLICIT_DIRECTORY")
+    if str(root).startswith("\\\\"):
+        raise Hold("NETWORK_ROOT_NOT_ADMITTED")
     if any(piece.casefold() in PROTECTED_DIRECTORIES for piece in root.parts):
         raise Hold("PROTECTED_ROOT")
     for path in (*reversed(root.parents), root):
