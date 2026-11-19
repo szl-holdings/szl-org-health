@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Synthetic, offline tests for Neon recovery/security admission. Never query users."""
-import copy
 from datetime import datetime, timezone
-import json
 import unittest
 
 from tools import neon_resilience_admission as gate
