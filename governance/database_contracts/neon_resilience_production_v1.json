@@ -1,0 +1,11 @@
+{
+  "schema": "szl.neon-resilience-policy/v1",
+  "environment": "PRODUCTION",
+  "max_age_seconds": 900,
+  "min_history_seconds": 604800,
+  "require_protected_branch": true,
+  "require_automatic_backups": true,
+  "max_snapshot_age_seconds": 86400,
+  "min_snapshot_remaining_seconds": 172800,
+  "max_restore_drill_age_seconds": 2592000
+}
