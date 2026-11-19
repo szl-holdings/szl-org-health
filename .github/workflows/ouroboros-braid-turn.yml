@@ -1,0 +1,272 @@
+name: Ouroboros braid turn
+
+# One bounded, no-effect turn of the Ouroboros DB braid v2 (docs/OUROBOROS_DB_BRAID_V2_20261119.md).
+# It checks out the estate's source repositories at their current default
+# branches, byte-checks every in-scope file, runs the Lean kernel over the
+# whole Lean corpus (including files the default build never reaches), runs
+# the committed Hatun veto ladder locally, braids the five-phase turn against
+# the previous turn's receipt, and wraps the result in the canonical Lake
+# receipt. The turn's evidence directory is uploaded as an artifact.
+#
+# Read-only by construction: `contents: read`, no repository secret, no push,
+# no issue or comment, no database, no deployment, no model call. The turn
+# cannot authorize anything; it closes on HOLD or on
+# EVIDENCE_THRESHOLD_MET_NO_AUTHORITY and the receipt it emits is UNSIGNED.
+# The keyless attestation job is a separate job that runs no repository code
+# and stays off until the owner sets the repository variable
+# BRAID_ATTEST_PROVIDER to `github`.
+#
+# Offline contracts: tests/test_database_braid_*.py and
+# tests/test_database_ouroboros_braid_v2.py (run by ci.yml).
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      genesis:
+        description: "Start a new chain instead of consuming the previous turn"
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: ouroboros-braid-turn
+  cancel-in-progress: false
+
+jobs:
+  turn:
+    name: Run one braid turn (no effects)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout the braid
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: braid
+          persist-credentials: false
+
+      - name: Checkout a11oy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: szl-holdings/a11oy
+          path: sources/a11oy
+          persist-credentials: false
+
+      - name: Checkout hatun-mcp
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: szl-holdings/hatun-mcp
+          path: sources/hatun-mcp
+          persist-credentials: false
+
+      - name: Checkout lutar-lean
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: szl-holdings/lutar-lean
+          path: sources/lutar-lean
+          persist-credentials: false
+
+      - name: Checkout platform
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: szl-holdings/platform
+          path: sources/platform
+          persist-credentials: false
+
+      - name: Checkout szl-formulas
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: szl-holdings/szl-formulas
+          path: sources/szl-formulas
+          persist-credentials: false
+
+      - name: Checkout szl-invariants
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: szl-holdings/szl-invariants
+          path: sources/szl-invariants
+          persist-credentials: false
+
+      - name: Checkout szl-khipu
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: szl-holdings/szl-khipu
+          path: sources/szl-khipu
+          persist-credentials: false
+
+      - name: Checkout szl-khipu-scholar
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: szl-holdings/szl-khipu-scholar
+          path: sources/szl-khipu-scholar
+          persist-credentials: false
+
+      - name: Checkout szl-lake
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: szl-holdings/szl-lake
+          path: sources/szl-lake
+          persist-credentials: false
+
+      - name: Checkout szl-ouroboros
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: szl-holdings/szl-ouroboros
+          path: sources/szl-ouroboros
+          persist-credentials: false
+
+      - name: Checkout szl-papers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: szl-holdings/szl-papers
+          path: sources/szl-papers
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install the hash-locked optional libraries into an isolated environment
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/braid-venv"
+          "$RUNNER_TEMP/braid-venv/bin/python" -m pip install --quiet --require-hashes \
+            --only-binary=:all: -r braid/requirements-braid.lock
+
+      - name: Install elan (release tarball, SHA-256 checked before it runs)
+        run: |
+          set -euo pipefail
+          # Same pinned installer and digest that lutar-lean's own lake-build.yml uses.
+          ELAN_VER=v4.2.3
+          ELAN_TARBALL=elan-x86_64-unknown-linux-gnu.tar.gz
+          EXPECTED=df0b2b3a439961ffcbb3985214365ffe40f49bc871df04dff268c7d8e21ca8b2
+          curl -sSfL "https://github.com/leanprover/elan/releases/download/$ELAN_VER/$ELAN_TARBALL" \
+            -o "$RUNNER_TEMP/elan.tar.gz"
+          echo "$EXPECTED  $RUNNER_TEMP/elan.tar.gz" | sha256sum -c
+          mkdir -p "$RUNNER_TEMP/elan-init"
+          tar xzf "$RUNNER_TEMP/elan.tar.gz" -C "$RUNNER_TEMP/elan-init"
+          "$RUNNER_TEMP/elan-init/elan-init" -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Install the toolchain pinned by lutar-lean and fetch its dependency cache
+        working-directory: sources/lutar-lean
+        run: |
+          set -euo pipefail
+          PIN="$(cat lean-toolchain)"
+          elan toolchain install "$PIN" || true
+          elan toolchain list | grep -q "$PIN"
+          git diff --exit-code HEAD -- lake-manifest.json
+          # Dependencies come from the published cache only; the witness tool
+          # refuses to compile them from source when the cache is absent.
+          lake exe cache get
+          git diff --exit-code HEAD -- lake-manifest.json
+
+      - name: Fetch the previous turn (the tail this turn consumes)
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GENESIS: ${{ inputs.genesis }}
+        run: |
+          set -euo pipefail
+          if [ "${GENESIS:-false}" = "true" ]; then
+            echo "::notice::genesis requested; this turn starts a new chain"
+            exit 0
+          fi
+          RUN_ID="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ouroboros-braid-turn.yml \
+            --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          if [ -z "$RUN_ID" ]; then
+            echo "::notice::no earlier successful turn; this turn is a genesis turn"
+            exit 0
+          fi
+          if gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name braid-turn \
+              --dir "$RUNNER_TEMP/previous-turn"; then
+            echo "dir=$RUNNER_TEMP/previous-turn" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::the previous turn's artifact is no longer retained; genesis turn"
+          fi
+
+      - name: Run the turn (census, Lean kernel, known answers, Hatun ladder, braid, Lake receipt)
+        env:
+          PREVIOUS_DIR: ${{ steps.previous.outputs.dir }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/braid-turn"
+          PREVIOUS=()
+          if [ -n "${PREVIOUS_DIR:-}" ]; then PREVIOUS=(--previous-dir "$PREVIOUS_DIR"); fi
+          python -I -B braid/tools/database_braid_turn.py \
+            --policy braid/governance/database_contracts/ouroboros_braid_v2.json \
+            --family-map braid/governance/database_contracts/braid_family_map_v1.json \
+            --answers braid/governance/database_contracts/braid_codex_known_answers_v1.json \
+            --checkout "szl-holdings/a11oy=$GITHUB_WORKSPACE/sources/a11oy" \
+            --checkout "szl-holdings/hatun-mcp=$GITHUB_WORKSPACE/sources/hatun-mcp" \
+            --checkout "szl-holdings/lutar-lean=$GITHUB_WORKSPACE/sources/lutar-lean" \
+            --checkout "szl-holdings/platform=$GITHUB_WORKSPACE/sources/platform" \
+            --checkout "szl-holdings/szl-formulas=$GITHUB_WORKSPACE/sources/szl-formulas" \
+            --checkout "szl-holdings/szl-invariants=$GITHUB_WORKSPACE/sources/szl-invariants" \
+            --checkout "szl-holdings/szl-khipu=$GITHUB_WORKSPACE/sources/szl-khipu" \
+            --checkout "szl-holdings/szl-khipu-scholar=$GITHUB_WORKSPACE/sources/szl-khipu-scholar" \
+            --checkout "szl-holdings/szl-lake=$GITHUB_WORKSPACE/sources/szl-lake" \
+            --checkout "szl-holdings/szl-org-health=$GITHUB_WORKSPACE/braid" \
+            --checkout "szl-holdings/szl-ouroboros=$GITHUB_WORKSPACE/sources/szl-ouroboros" \
+            --checkout "szl-holdings/szl-papers=$GITHUB_WORKSPACE/sources/szl-papers" \
+            --lean-toolchain-bin "$HOME/.elan/bin" \
+            --python "$RUNNER_TEMP/braid-venv/bin/python" \
+            "${PREVIOUS[@]}" \
+            --out-dir "$RUNNER_TEMP/braid-turn" | tee "$RUNNER_TEMP/braid-turn-summary.json"
+          {
+            echo "## Ouroboros braid turn"
+            echo
+            echo "Unsigned evidence. HOLD is an honest outcome; nothing here authorizes anything."
+            echo
+            echo '```json'
+            cat "$RUNNER_TEMP/braid-turn-summary.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the turn's evidence directory
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: braid-turn
+          path: ${{ runner.temp }}/braid-turn
+          if-no-files-found: error
+          retention-days: 90
+
+  attest:
+    name: Attest the evidence files (keyless, owner opt-in)
+    needs: turn
+    if: ${{ vars.BRAID_ATTEST_PROVIDER == 'github' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      # No checkout and no repository code in this job: it only receives the
+      # files the turn job produced and asks GitHub to attest their digests.
+      - name: Download the turn's evidence directory
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: braid-turn
+          path: braid-turn
+
+      - name: Attest the evidence files
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: braid-turn/*.json
