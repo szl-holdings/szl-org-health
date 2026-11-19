@@ -1,0 +1,5 @@
+scanned 3897 Lutar-module constants; dependents of Lutar.Wave4.BlockConsistency.A6'_block_consistent: 1
+DEPENDENT Lutar.Wave4.BlockConsistency.lambda_unique_under_block  (module Lutar.Wave4.LambdaBlockConsistency)
+real 350.13
+user 327.14
+sys 5.99

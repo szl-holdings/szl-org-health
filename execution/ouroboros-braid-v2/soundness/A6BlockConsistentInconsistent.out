@@ -1,0 +1,13 @@
+'Soundness.A6BlockConsistent.maxAgg_lutarAxioms' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Soundness.A6BlockConsistent.maxAgg_not_factors' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Soundness.A6BlockConsistent.a6_inconsistent_via_corpus_uniqueness' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound,
+ Lutar.Wave4.BlockConsistency.A6'_block_consistent]
+'Soundness.A6BlockConsistent.a6_inconsistent' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound,
+ Lutar.Wave4.BlockConsistency.A6'_block_consistent]
+real 3.05
+user 2.10
+sys 1.03

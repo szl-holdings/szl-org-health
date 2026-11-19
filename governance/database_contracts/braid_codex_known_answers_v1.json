@@ -1,0 +1,2880 @@
+{
+  "schema": "szl.database-braid-codex-kat-set/v1",
+  "review_status": "MACHINE_TRANSCRIBED_UNRATIFIED",
+  "answers": [
+    {
+      "id": "axiom-audit-probe",
+      "family": "AXIOM_SOURCE",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Uniqueness/LambdaEquiv.lean",
+        "line": 104,
+        "blob_sha1": "d6685d08eaffed8c7833889c7cf4b1d753fd0b08"
+      },
+      "anchor": "`maxAgg` is `\u2249\u039b` to `\u039b 2`. They disagree at the audit probe `(4,1)` \u2014 `maxAgg = 4`,",
+      "statement": "Docstring of lambdaEquiv_nondegenerate: at the audit probe (4,1) maxAgg = 4 and Lambda 2 = (4*1)^(1/2) = 2 (next line), so they disagree; encoded as max(4,1)=4, 2^2=4*1, max(4,1)!=2.",
+      "claim": {
+        "and": [
+          {
+            "eq": [
+              {
+                "max": [
+                  4,
+                  1
+                ]
+              },
+              4
+            ]
+          },
+          {
+            "eq": [
+              {
+                "pow": [
+                  2,
+                  2
+                ]
+              },
+              {
+                "mul": [
+                  4,
+                  1
+                ]
+              }
+            ]
+          },
+          {
+            "ne": [
+              {
+                "max": [
+                  4,
+                  1
+                ]
+              },
+              2
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "axiom-conjecture1-open",
+      "family": "AXIOM_SOURCE",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Uniqueness/AxiomCheck.lean",
+        "line": 109,
+        "blob_sha1": "4182d602a5e0be4890ba79db24fa2540333049d8"
+      },
+      "anchor": "theorem conjecture1_still_open : openConjectures.length = 1 := by decide",
+      "statement": "Theorem conjecture1_still_open states openConjectures [Conjecture1_LambdaUnique] has length 1; the item counted is the conjecture index 1.",
+      "claim": {
+        "eq": [
+          {
+            "count": [
+              1
+            ]
+          },
+          1
+        ]
+      }
+    },
+    {
+      "id": "axiom-locked-count-eight",
+      "family": "AXIOM_SOURCE",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Uniqueness/AxiomCheck.lean",
+        "line": 96,
+        "blob_sha1": "4182d602a5e0be4890ba79db24fa2540333049d8"
+      },
+      "anchor": "theorem locked_count_eight : lockedNames.length = 8 := by decide",
+      "statement": "Theorem locked_count_eight states lockedNames [F1, F4, F7, F11, F12, F18, F19, F22] has length 8; the items counted are the formula indices.",
+      "claim": {
+        "eq": [
+          {
+            "count": [
+              1,
+              4,
+              7,
+              11,
+              12,
+              18,
+              19,
+              22
+            ]
+          },
+          8
+        ]
+      }
+    },
+    {
+      "id": "axiom-maxagg-ne-lambda",
+      "family": "AXIOM_SOURCE",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Round13/Lambda_Uniqueness.lean",
+        "line": 186,
+        "blob_sha1": "a94742e35523d50346359ee350b12007be793d7a"
+      },
+      "anchor": "`maxAgg (4,1) = 4` but `\u039b 2 (4,1) = (4\u00b71)^(1/2) = 2`. Hence `maxAgg \u2260 \u039b 2`, even though",
+      "statement": "Docstring of maxAgg_ne_Lambda: maxAgg (4,1) = 4 but Lambda 2 (4,1) = (4*1)^(1/2) = 2, hence maxAgg != Lambda 2; encoded as max(4,1)=4, 2^2=4*1, max(4,1)!=2.",
+      "claim": {
+        "and": [
+          {
+            "eq": [
+              {
+                "max": [
+                  4,
+                  1
+                ]
+              },
+              4
+            ]
+          },
+          {
+            "eq": [
+              {
+                "pow": [
+                  2,
+                  2
+                ]
+              },
+              {
+                "mul": [
+                  4,
+                  1
+                ]
+              }
+            ]
+          },
+          {
+            "ne": [
+              {
+                "max": [
+                  4,
+                  1
+                ]
+              },
+              2
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "bab-sexagesimal-2-regular",
+      "family": "BABYLONIAN",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/SexagesimalReciprocal.lean",
+        "line": 38,
+        "blob_sha1": "b189663e5851c4ff70a89e5c3c3c12aa1fc6594c"
+      },
+      "anchor": "theorem two_is_60regular : is60Regular 2 := by",
+      "statement": "Theorem two_is_60regular states is60Regular 2 (every prime factor of 2 is 2, 3 or 5); encoded as the equivalent divisibility n | 60^n for n = 2.",
+      "claim": {
+        "eq": [
+          {
+            "mod": [
+              {
+                "pow": [
+                  60,
+                  2
+                ]
+              },
+              2
+            ]
+          },
+          0
+        ]
+      }
+    },
+    {
+      "id": "bab-sexagesimal-60-regular",
+      "family": "BABYLONIAN",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/SexagesimalReciprocal.lean",
+        "line": 21,
+        "blob_sha1": "b189663e5851c4ff70a89e5c3c3c12aa1fc6594c"
+      },
+      "anchor": "-- 60 = 2^2 * 3 * 5; primes dividing 60 are exactly {2,3,5}",
+      "statement": "Proof comment under theorem sixty_is_60regular (is60Regular 60, line 18) states 60 = 2^2 * 3 * 5, so the primes dividing 60 are exactly 2, 3 and 5.",
+      "claim": {
+        "eq": [
+          60,
+          {
+            "mul": [
+              {
+                "pow": [
+                  2,
+                  2
+                ]
+              },
+              3,
+              5
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "bab-sexagesimal-comment-instances",
+      "family": "BABYLONIAN",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/SexagesimalReciprocal.lean",
+        "line": 37,
+        "blob_sha1": "b189663e5851c4ff70a89e5c3c3c12aa1fc6594c"
+      },
+      "anchor": "/-- Concrete instances: 2, 3, 4, 5, 6, 8, 9, 10, 12 are all 60-regular. -/",
+      "statement": "Docstring states 2, 3, 4, 5, 6, 8, 9, 10, 12 are all 60-regular (only prime factors 2, 3, 5); encoded as the equivalent divisibility n | 60^n for each listed n. The theorem under it proves only n = 2.",
+      "claim": {
+        "and": [
+          {
+            "eq": [
+              {
+                "mod": [
+                  {
+                    "pow": [
+                      60,
+                      2
+                    ]
+                  },
+                  2
+                ]
+              },
+              0
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mod": [
+                  {
+                    "pow": [
+                      60,
+                      3
+                    ]
+                  },
+                  3
+                ]
+              },
+              0
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mod": [
+                  {
+                    "pow": [
+                      60,
+                      4
+                    ]
+                  },
+                  4
+                ]
+              },
+              0
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mod": [
+                  {
+                    "pow": [
+                      60,
+                      5
+                    ]
+                  },
+                  5
+                ]
+              },
+              0
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mod": [
+                  {
+                    "pow": [
+                      60,
+                      6
+                    ]
+                  },
+                  6
+                ]
+              },
+              0
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mod": [
+                  {
+                    "pow": [
+                      60,
+                      8
+                    ]
+                  },
+                  8
+                ]
+              },
+              0
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mod": [
+                  {
+                    "pow": [
+                      60,
+                      9
+                    ]
+                  },
+                  9
+                ]
+              },
+              0
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mod": [
+                  {
+                    "pow": [
+                      60,
+                      10
+                    ]
+                  },
+                  10
+                ]
+              },
+              0
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mod": [
+                  {
+                    "pow": [
+                      60,
+                      12
+                    ]
+                  },
+                  12
+                ]
+              },
+              0
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "bab-ybc-close",
+      "family": "BABYLONIAN",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/YBCHeronConvergence.lean",
+        "line": 22,
+        "blob_sha1": "bf4a9924451db142badf00cde1e115a3a9cf03bf"
+      },
+      "anchor": "theorem babylonian_close_to_2 : (577 : \u211a) / 408 * (577 / 408) < 2 + 1 / 100000 := by decide",
+      "statement": "Theorem babylonian_close_to_2 states (577/408) * (577/408) < 2 + 1/100000.",
+      "claim": {
+        "lt": [
+          {
+            "mul": [
+              {
+                "div": [
+                  577,
+                  408
+                ]
+              },
+              {
+                "div": [
+                  577,
+                  408
+                ]
+              }
+            ]
+          },
+          {
+            "add": [
+              2,
+              {
+                "div": [
+                  1,
+                  100000
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "bab-ybc-heron-iterate-header",
+      "family": "BABYLONIAN",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/YBCHeronConvergence.lean",
+        "line": 6,
+        "blob_sha1": "bf4a9924451db142badf00cde1e115a3a9cf03bf"
+      },
+      "anchor": "-- This is the 2nd iterate of Heron's method from x\u2080 = 1.",
+      "statement": "Header comment line 6 states that the value written on line 5 (1;24,51,10 base 60, which line 5 itself attributes to 'the tablet') is the 2nd iterate of Heron's method x' = (x + 2/x)/2 from x0 = 1; encoded as exact equality with that 2nd iterate.",
+      "claim": {
+        "eq": [
+          {
+            "sexagesimal": {
+              "digits": [
+                1,
+                24,
+                51,
+                10
+              ],
+              "integer_places": 1
+            }
+          },
+          {
+            "div": [
+              {
+                "add": [
+                  {
+                    "div": [
+                      {
+                        "add": [
+                          1,
+                          {
+                            "div": [
+                              2,
+                              1
+                            ]
+                          }
+                        ]
+                      },
+                      2
+                    ]
+                  },
+                  {
+                    "div": [
+                      2,
+                      {
+                        "div": [
+                          {
+                            "add": [
+                              1,
+                              {
+                                "div": [
+                                  2,
+                                  1
+                                ]
+                              }
+                            ]
+                          },
+                          2
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              2
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "bab-ybc-overestimate",
+      "family": "BABYLONIAN",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/YBCHeronConvergence.lean",
+        "line": 19,
+        "blob_sha1": "bf4a9924451db142badf00cde1e115a3a9cf03bf"
+      },
+      "anchor": "theorem babylonian_overestimates : (577 : \u211a) / 408 * (577 / 408) > 2 := by decide",
+      "statement": "Theorem babylonian_overestimates states (577/408) * (577/408) > 2.",
+      "claim": {
+        "gt": [
+          {
+            "mul": [
+              {
+                "div": [
+                  577,
+                  408
+                ]
+              },
+              {
+                "div": [
+                  577,
+                  408
+                ]
+              }
+            ]
+          },
+          2
+        ]
+      }
+    },
+    {
+      "id": "bab-ybc-sexagesimal-header",
+      "family": "BABYLONIAN",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/YBCHeronConvergence.lean",
+        "line": 5,
+        "blob_sha1": "bf4a9924451db142badf00cde1e115a3a9cf03bf"
+      },
+      "anchor": "-- The tablet encodes \u221a2 \u2248 1;24,51,10 (base-60) = 1.41421296..., error < 6e-7.",
+      "statement": "Header comment states sqrt(2) ~ 1;24,51,10 (base 60) = 1.41421296... with error < 6e-7; encoded as 1.41421296 <= v < 1.41421297 and (v - 6e-7)^2 < 2 < (v + 6e-7)^2 for v = 1;24,51,10.",
+      "claim": {
+        "and": [
+          {
+            "ge": [
+              {
+                "sexagesimal": {
+                  "digits": [
+                    1,
+                    24,
+                    51,
+                    10
+                  ],
+                  "integer_places": 1
+                }
+              },
+              "141421296/100000000"
+            ]
+          },
+          {
+            "lt": [
+              {
+                "sexagesimal": {
+                  "digits": [
+                    1,
+                    24,
+                    51,
+                    10
+                  ],
+                  "integer_places": 1
+                }
+              },
+              "141421297/100000000"
+            ]
+          },
+          {
+            "lt": [
+              {
+                "pow": [
+                  {
+                    "sub": [
+                      {
+                        "sexagesimal": {
+                          "digits": [
+                            1,
+                            24,
+                            51,
+                            10
+                          ],
+                          "integer_places": 1
+                        }
+                      },
+                      {
+                        "mul": [
+                          6,
+                          {
+                            "pow": [
+                              10,
+                              -7
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  2
+                ]
+              },
+              2
+            ]
+          },
+          {
+            "gt": [
+              {
+                "pow": [
+                  {
+                    "add": [
+                      {
+                        "sexagesimal": {
+                          "digits": [
+                            1,
+                            24,
+                            51,
+                            10
+                          ],
+                          "integer_places": 1
+                        }
+                      },
+                      {
+                        "mul": [
+                          6,
+                          {
+                            "pow": [
+                              10,
+                              -7
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  2
+                ]
+              },
+              2
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "cn-liuhui-sidecount",
+      "family": "CHINESE",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Banach/LiuHuiPi.lean",
+        "line": 52,
+        "blob_sha1": "66093b3f6686e60ff8a9cbb4a8aca7f27b0789da"
+      },
+      "anchor": "/-- The 96-gon (Liu Hui's documented choice): `k = 4` since `6 \u00b7 2^4 = 96`. -/",
+      "statement": "Docstring of liuHui96Gon states the 96-gon is doubling step k = 4 since 6 * 2^4 = 96 (sideCount k := 6 * 2^k on line 46).",
+      "claim": {
+        "eq": [
+          {
+            "mul": [
+              6,
+              {
+                "pow": [
+                  2,
+                  4
+                ]
+              }
+            ]
+          },
+          96
+        ]
+      }
+    },
+    {
+      "id": "cn-sunzi-modulus",
+      "family": "CHINESE",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/CRTReceiptShard.lean",
+        "line": 39,
+        "blob_sha1": "4bb8424baa9dc5c1a0779ae22bc95514993b3513"
+      },
+      "anchor": "theorem sunzi_modulus : 3 * 5 * 7 = 105 := by decide",
+      "statement": "Theorem sunzi_modulus states 3 * 5 * 7 = 105.",
+      "claim": {
+        "eq": [
+          {
+            "mul": [
+              3,
+              5,
+              7
+            ]
+          },
+          105
+        ]
+      }
+    },
+    {
+      "id": "cn-sunzi-residues",
+      "family": "CHINESE",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/CRTReceiptShard.lean",
+        "line": 36,
+        "blob_sha1": "4bb8424baa9dc5c1a0779ae22bc95514993b3513"
+      },
+      "anchor": "theorem sunzi_original_problem : 23 % 3 = 2 \u2227 23 % 5 = 3 \u2227 23 % 7 = 2 := by decide",
+      "statement": "Theorem sunzi_original_problem states 23 % 3 = 2 and 23 % 5 = 3 and 23 % 7 = 2.",
+      "claim": {
+        "and": [
+          {
+            "eq": [
+              {
+                "mod": [
+                  23,
+                  3
+                ]
+              },
+              2
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mod": [
+                  23,
+                  5
+                ]
+              },
+              3
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mod": [
+                  23,
+                  7
+                ]
+              },
+              2
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "egy-akhmim-2over101",
+      "family": "EGYPTIAN_MATH",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Egyptian/AkhmimTable.lean",
+        "line": 77,
+        "blob_sha1": "876a99120bd1ea0dd00c5b3601fdd2b225f79e3b"
+      },
+      "anchor": "`2/101 = 1/101 + 1/202 + 1/303 + 1/606`. -/",
+      "statement": "Docstring of twoOverOneOhOne_correct states 2/101 = 1/101 + 1/202 + 1/303 + 1/606 (the theorem on the next lines states the same sum).",
+      "claim": {
+        "eq": [
+          {
+            "div": [
+              2,
+              101
+            ]
+          },
+          {
+            "unit_sum": [
+              101,
+              202,
+              303,
+              606
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "egy-akhmim-2over13",
+      "family": "EGYPTIAN_MATH",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Egyptian/AkhmimTable.lean",
+        "line": 73,
+        "blob_sha1": "876a99120bd1ea0dd00c5b3601fdd2b225f79e3b"
+      },
+      "anchor": "((1 : \u211a) / 8 + (1 : \u211a) / 52 + (1 : \u211a) / 104) = (2 : \u211a) / 13 := by",
+      "statement": "Theorem twoOverThirteen_correct states 1/8 + 1/52 + 1/104 = 2/13 over the rationals.",
+      "claim": {
+        "eq": [
+          {
+            "add": [
+              {
+                "div": [
+                  1,
+                  8
+                ]
+              },
+              {
+                "div": [
+                  1,
+                  52
+                ]
+              },
+              {
+                "div": [
+                  1,
+                  104
+                ]
+              }
+            ]
+          },
+          {
+            "div": [
+              2,
+              13
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "egy-akhmim-2over3",
+      "family": "EGYPTIAN_MATH",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Egyptian/AkhmimTable.lean",
+        "line": 58,
+        "blob_sha1": "876a99120bd1ea0dd00c5b3601fdd2b225f79e3b"
+      },
+      "anchor": "((1 : \u211a) / 2 + (1 : \u211a) / 6) = (2 : \u211a) / 3 := by",
+      "statement": "Theorem twoOverThree_correct states 1/2 + 1/6 = 2/3 over the rationals.",
+      "claim": {
+        "eq": [
+          {
+            "add": [
+              {
+                "div": [
+                  1,
+                  2
+                ]
+              },
+              {
+                "div": [
+                  1,
+                  6
+                ]
+              }
+            ]
+          },
+          {
+            "div": [
+              2,
+              3
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "egy-akhmim-2over5",
+      "family": "EGYPTIAN_MATH",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Egyptian/AkhmimTable.lean",
+        "line": 63,
+        "blob_sha1": "876a99120bd1ea0dd00c5b3601fdd2b225f79e3b"
+      },
+      "anchor": "((1 : \u211a) / 3 + (1 : \u211a) / 15) = (2 : \u211a) / 5 := by",
+      "statement": "Theorem twoOverFive_correct states 1/3 + 1/15 = 2/5 over the rationals.",
+      "claim": {
+        "eq": [
+          {
+            "add": [
+              {
+                "div": [
+                  1,
+                  3
+                ]
+              },
+              {
+                "div": [
+                  1,
+                  15
+                ]
+              }
+            ]
+          },
+          {
+            "div": [
+              2,
+              5
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "egy-akhmim-2over7",
+      "family": "EGYPTIAN_MATH",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Egyptian/AkhmimTable.lean",
+        "line": 68,
+        "blob_sha1": "876a99120bd1ea0dd00c5b3601fdd2b225f79e3b"
+      },
+      "anchor": "((1 : \u211a) / 4 + (1 : \u211a) / 28) = (2 : \u211a) / 7 := by",
+      "statement": "Theorem twoOverSeven_correct states 1/4 + 1/28 = 2/7 over the rationals.",
+      "claim": {
+        "eq": [
+          {
+            "add": [
+              {
+                "div": [
+                  1,
+                  4
+                ]
+              },
+              {
+                "div": [
+                  1,
+                  28
+                ]
+              }
+            ]
+          },
+          {
+            "div": [
+              2,
+              7
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "egy-akhmim-representatives",
+      "family": "EGYPTIAN_MATH",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Egyptian/AkhmimTable.lean",
+        "line": 95,
+        "blob_sha1": "876a99120bd1ea0dd00c5b3601fdd2b225f79e3b"
+      },
+      "anchor": "theorem akhmim_2n_correct_representatives :",
+      "statement": "Theorem akhmim_2n_correct_representatives states the conjunction 1/2+1/6=2/3, 1/3+1/15=2/5, 1/8+1/52+1/104=2/13 and 1/101+1/202+1/303+1/606=2/101.",
+      "claim": {
+        "and": [
+          {
+            "eq": [
+              {
+                "unit_sum": [
+                  2,
+                  6
+                ]
+              },
+              {
+                "div": [
+                  2,
+                  3
+                ]
+              }
+            ]
+          },
+          {
+            "eq": [
+              {
+                "unit_sum": [
+                  3,
+                  15
+                ]
+              },
+              {
+                "div": [
+                  2,
+                  5
+                ]
+              }
+            ]
+          },
+          {
+            "eq": [
+              {
+                "unit_sum": [
+                  8,
+                  52,
+                  104
+                ]
+              },
+              {
+                "div": [
+                  2,
+                  13
+                ]
+              }
+            ]
+          },
+          {
+            "eq": [
+              {
+                "unit_sum": [
+                  101,
+                  202,
+                  303,
+                  606
+                ]
+              },
+              {
+                "div": [
+                  2,
+                  101
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "egy-horus-count",
+      "family": "EGYPTIAN_MATH",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Egyptian/HorusEye.lean",
+        "line": 39,
+        "blob_sha1": "bfc3e2c77dbd7090d7c6995bf1e0e229a14dfa0e"
+      },
+      "anchor": "horusEyeUnits.length = 6 := by",
+      "statement": "Theorem horus_eye_unit_count states horusEyeUnits [1/2, 1/4, 1/8, 1/16, 1/32, 1/64] has length 6.",
+      "claim": {
+        "eq": [
+          {
+            "count": [
+              "1/2",
+              "1/4",
+              "1/8",
+              "1/16",
+              "1/32",
+              "1/64"
+            ]
+          },
+          6
+        ]
+      }
+    },
+    {
+      "id": "egy-horus-nonneg",
+      "family": "EGYPTIAN_MATH",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Egyptian/HorusEye.lean",
+        "line": 45,
+        "blob_sha1": "bfc3e2c77dbd7090d7c6995bf1e0e229a14dfa0e"
+      },
+      "anchor": "\u2200 u \u2208 horusEyeUnits, (0 : \u211a) \u2264 u := by",
+      "statement": "Theorem horus_eye_units_nonneg states 0 <= u for every u in horusEyeUnits [1/2, 1/4, 1/8, 1/16, 1/32, 1/64].",
+      "claim": {
+        "and": [
+          {
+            "le": [
+              0,
+              "1/2"
+            ]
+          },
+          {
+            "le": [
+              0,
+              "1/4"
+            ]
+          },
+          {
+            "le": [
+              0,
+              "1/8"
+            ]
+          },
+          {
+            "le": [
+              0,
+              "1/16"
+            ]
+          },
+          {
+            "le": [
+              0,
+              "1/32"
+            ]
+          },
+          {
+            "le": [
+              0,
+              "1/64"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "egy-horus-roundtrip",
+      "family": "EGYPTIAN_MATH",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Egyptian/HorusEye.lean",
+        "line": 59,
+        "blob_sha1": "bfc3e2c77dbd7090d7c6995bf1e0e229a14dfa0e"
+      },
+      "anchor": "theorem horus_eye_decode_encode (code : \u2115) (h : code \u2264 63) :",
+      "statement": "Theorem horus_eye_decode_encode states (code/64)*64 = code for natural code <= 63; encoded as the conjunction over every code 0..63.",
+      "claim": {
+        "and": [
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      0,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              0
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      1,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              1
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      2,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              2
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      3,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              3
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      4,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              4
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      5,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              5
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      6,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              6
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      7,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              7
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      8,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              8
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      9,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              9
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      10,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              10
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      11,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              11
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      12,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              12
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      13,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              13
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      14,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              14
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      15,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              15
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      16,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              16
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      17,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              17
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      18,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              18
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      19,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              19
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      20,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              20
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      21,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              21
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      22,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              22
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      23,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              23
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      24,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              24
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      25,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              25
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      26,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              26
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      27,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              27
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      28,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              28
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      29,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              29
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      30,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              30
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      31,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              31
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      32,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              32
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      33,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              33
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      34,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              34
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      35,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              35
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      36,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              36
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      37,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              37
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      38,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              38
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      39,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              39
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      40,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              40
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      41,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              41
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      42,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              42
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      43,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              43
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      44,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              44
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      45,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              45
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      46,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              46
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      47,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              47
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      48,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              48
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      49,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              49
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      50,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              50
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      51,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              51
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      52,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              52
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      53,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              53
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      54,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              54
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      55,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              55
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      56,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              56
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      57,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              57
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      58,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              58
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      59,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              59
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      60,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              60
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      61,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              61
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      62,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              62
+            ]
+          },
+          {
+            "eq": [
+              {
+                "mul": [
+                  {
+                    "div": [
+                      63,
+                      64
+                    ]
+                  },
+                  64
+                ]
+              },
+              63
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "egy-horus-sum",
+      "family": "EGYPTIAN_MATH",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Egyptian/HorusEye.lean",
+        "line": 33,
+        "blob_sha1": "bfc3e2c77dbd7090d7c6995bf1e0e229a14dfa0e"
+      },
+      "anchor": "horusEyeUnits.sum = 63/64 := by",
+      "statement": "Theorem horus_eye_sum_eq_63_over_64 states the sum of horusEyeUnits [1/2, 1/4, 1/8, 1/16, 1/32, 1/64] is 63/64.",
+      "claim": {
+        "eq": [
+          {
+            "unit_sum": [
+              2,
+              4,
+              8,
+              16,
+              32,
+              64
+            ]
+          },
+          "63/64"
+        ]
+      }
+    },
+    {
+      "id": "lambda-nine-axis-denominators-regular",
+      "family": "LAMBDA_CORE",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Precision/SexagesimalRegular.lean",
+        "line": 56,
+        "blob_sha1": "032996c8cf732b3e316f48df85c6d5aa861fc98c"
+      },
+      "anchor": "\u2200 n \u2208 nineAxisDenominators, IsRegularBase60Bounded n = true := by",
+      "statement": "Theorem nine_axis_weight_is_sex_regular states every n in nineAxisDenominators (list on lines 31-32) satisfies IsRegularBase60Bounded n, i.e. n | 60^8; encoded as lcm of the list dividing 60^8.",
+      "claim": {
+        "eq": [
+          {
+            "mod": [
+              {
+                "pow": [
+                  60,
+                  8
+                ]
+              },
+              {
+                "lcm": [
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  6,
+                  8,
+                  9,
+                  10,
+                  12,
+                  15,
+                  16,
+                  18,
+                  20,
+                  24,
+                  25,
+                  27,
+                  30,
+                  32,
+                  36,
+                  40,
+                  45,
+                  48,
+                  50,
+                  54,
+                  60,
+                  64,
+                  72,
+                  75,
+                  80,
+                  81,
+                  90,
+                  96,
+                  100
+                ]
+              }
+            ]
+          },
+          0
+        ]
+      }
+    },
+    {
+      "id": "lambda-nine-axis-weight-sum",
+      "family": "LAMBDA_CORE",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Thesis/TH_V18_04_EgyptianWeightSum.lean",
+        "line": 34,
+        "blob_sha1": "fcdaa8743e5b80264c0b3211cf8f3adabe629b8a"
+      },
+      "anchor": "(9 : \u211a) * (1 / 9) = 1 := by norm_num",
+      "statement": "Theorem th_v18_04b_nine_axis_weight_sum states 9 * (1/9) = 1 over the rationals.",
+      "claim": {
+        "eq": [
+          {
+            "mul": [
+              9,
+              {
+                "div": [
+                  1,
+                  9
+                ]
+              }
+            ]
+          },
+          1
+        ]
+      }
+    },
+    {
+      "id": "lean-enoch-52-weeks",
+      "family": "CALENDAR_ASTRONOMY",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/EnochEpochAlignment.lean",
+        "line": 15,
+        "blob_sha1": "c3bd44a5cf9321fcfdc9cc4fc9ba04b07bf28014"
+      },
+      "anchor": "theorem enoch_epoch_is_52_weeks : 364 = 52 * 7 := by decide",
+      "statement": "Theorem enoch_epoch_is_52_weeks states that 364 equals 52 times 7.",
+      "claim": {
+        "eq": [
+          364,
+          {
+            "mul": [
+              52,
+              7
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "lean-enoch-mod7",
+      "family": "CALENDAR_ASTRONOMY",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/EnochEpochAlignment.lean",
+        "line": 18,
+        "blob_sha1": "c3bd44a5cf9321fcfdc9cc4fc9ba04b07bf28014"
+      },
+      "anchor": "theorem enoch_epoch_divisible_by_seven : 364 % 7 = 0 := by decide",
+      "statement": "Theorem enoch_epoch_divisible_by_seven states that 364 modulo 7 equals 0.",
+      "claim": {
+        "eq": [
+          {
+            "mod": [
+              364,
+              7
+            ]
+          },
+          0
+        ]
+      }
+    },
+    {
+      "id": "lean-enoch-quarter-weeks",
+      "family": "CALENDAR_ASTRONOMY",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/EnochEpochAlignment.lean",
+        "line": 31,
+        "blob_sha1": "c3bd44a5cf9321fcfdc9cc4fc9ba04b07bf28014"
+      },
+      "anchor": "theorem enoch_quarter_is_13_weeks : 91 = 13 * 7 := by decide",
+      "statement": "Theorem enoch_quarter_is_13_weeks states that 91 equals 13 times 7.",
+      "claim": {
+        "eq": [
+          91,
+          {
+            "mul": [
+              13,
+              7
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "lean-enoch-quarters",
+      "family": "CALENDAR_ASTRONOMY",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/EnochEpochAlignment.lean",
+        "line": 28,
+        "blob_sha1": "c3bd44a5cf9321fcfdc9cc4fc9ba04b07bf28014"
+      },
+      "anchor": "theorem enoch_four_quarters : 364 = 4 * 91 := by decide",
+      "statement": "Theorem enoch_four_quarters states that 364 equals 4 times 91.",
+      "claim": {
+        "eq": [
+          364,
+          {
+            "mul": [
+              4,
+              91
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ledger-horus-sum",
+      "family": "EGYPTIAN_MATH",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "LedgerIdentities.lean",
+        "line": 62,
+        "blob_sha1": "334c9e1d91d7238cbeaade9109dae08de8d3274c"
+      },
+      "anchor": "(1 : \u211a) / 2 + 1 / 4 + 1 / 8 + 1 / 16 + 1 / 32 + 1 / 64 = 63 / 64 := by",
+      "statement": "Theorem horus_eye_sum states 1/2 + 1/4 + 1/8 + 1/16 + 1/32 + 1/64 = 63/64 over the rationals.",
+      "claim": {
+        "eq": [
+          {
+            "add": [
+              {
+                "div": [
+                  1,
+                  2
+                ]
+              },
+              {
+                "div": [
+                  1,
+                  4
+                ]
+              },
+              {
+                "div": [
+                  1,
+                  8
+                ]
+              },
+              {
+                "div": [
+                  1,
+                  16
+                ]
+              },
+              {
+                "div": [
+                  1,
+                  32
+                ]
+              },
+              {
+                "div": [
+                  1,
+                  64
+                ]
+              }
+            ]
+          },
+          {
+            "div": [
+              63,
+              64
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ledger-kraft",
+      "family": "CODING_THEORY",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "LedgerIdentities.lean",
+        "line": 70,
+        "blob_sha1": "334c9e1d91d7238cbeaade9109dae08de8d3274c"
+      },
+      "anchor": "(1 : \u211a) / 2 + 1 / 4 + 1 / 8 + 1 / 8 = 1 := by",
+      "statement": "Theorem kraft_prefix_complete states 1/2 + 1/4 + 1/8 + 1/8 = 1 over the rationals (Kraft sum of the prefix code with lengths 1,2,3,3).",
+      "claim": {
+        "eq": [
+          {
+            "add": [
+              {
+                "div": [
+                  1,
+                  2
+                ]
+              },
+              {
+                "div": [
+                  1,
+                  4
+                ]
+              },
+              {
+                "div": [
+                  1,
+                  8
+                ]
+              },
+              {
+                "div": [
+                  1,
+                  8
+                ]
+              }
+            ]
+          },
+          1
+        ]
+      }
+    },
+    {
+      "id": "ledger-shor-correctable",
+      "family": "CODING_THEORY",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "LedgerIdentities.lean",
+        "line": 82,
+        "blob_sha1": "334c9e1d91d7238cbeaade9109dae08de8d3274c"
+      },
+      "anchor": "theorem shor_913_correctable : (3 - 1) / 2 = 1 := by decide",
+      "statement": "Theorem shor_913_correctable states (3 - 1) / 2 = 1 in natural-number (floor) division.",
+      "claim": {
+        "eq": [
+          {
+            "floordiv": [
+              {
+                "sub": [
+                  3,
+                  1
+                ]
+              },
+              2
+            ]
+          },
+          1
+        ]
+      }
+    },
+    {
+      "id": "ledger-shor-singleton",
+      "family": "CODING_THEORY",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "LedgerIdentities.lean",
+        "line": 86,
+        "blob_sha1": "334c9e1d91d7238cbeaade9109dae08de8d3274c"
+      },
+      "anchor": "theorem shor_913_singleton_ok : 3 \u2264 9 - 1 + 1 := by decide",
+      "statement": "Theorem shor_913_singleton_ok states 3 <= 9 - 1 + 1.",
+      "claim": {
+        "le": [
+          3,
+          {
+            "add": [
+              {
+                "sub": [
+                  9,
+                  1
+                ]
+              },
+              1
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "locked-f18-parity",
+      "family": "CODING_THEORY",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Puriq/Formulas/ProvedFormulas.lean",
+        "line": 72,
+        "blob_sha1": "0f5693c8146faaaf8da7382f978c4f87d19c1319"
+      },
+      "anchor": "theorem f18_reed_solomon_parity_count : (10 - 6 : Nat) = 4 := by decide",
+      "statement": "Theorem f18_reed_solomon_parity_count states that the natural-number difference 10 - 6 equals 4 (RS(10,6) parity shards).",
+      "claim": {
+        "eq": [
+          {
+            "sub": [
+              10,
+              6
+            ]
+          },
+          4
+        ]
+      }
+    },
+    {
+      "id": "maya-calendar-round-lcm",
+      "family": "MAYA",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/MayaLCMEpochSync.lean",
+        "line": 16,
+        "blob_sha1": "6eebc342553be4d8a3c7909b722bd7d52d670a17"
+      },
+      "anchor": "theorem maya_calendar_round : Nat.lcm 365 260 = 18980 := by decide",
+      "statement": "Theorem maya_calendar_round states that the least common multiple of 365 and 260 is 18980; 'Calendar Round' is the source file's own name for this number.",
+      "claim": {
+        "eq": [
+          {
+            "lcm": [
+              365,
+              260
+            ]
+          },
+          18980
+        ]
+      }
+    },
+    {
+      "id": "maya-gcd",
+      "family": "MAYA",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/MayaLCMEpochSync.lean",
+        "line": 42,
+        "blob_sha1": "6eebc342553be4d8a3c7909b722bd7d52d670a17"
+      },
+      "anchor": "theorem maya_gcd : Nat.gcd 365 260 = 5 := by decide",
+      "statement": "Theorem maya_gcd states that the greatest common divisor of 365 and 260 is 5.",
+      "claim": {
+        "eq": [
+          {
+            "gcd": [
+              365,
+              260
+            ]
+          },
+          5
+        ]
+      }
+    },
+    {
+      "id": "maya-haab-cycles",
+      "family": "MAYA",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/MayaLCMEpochSync.lean",
+        "line": 19,
+        "blob_sha1": "6eebc342553be4d8a3c7909b722bd7d52d670a17"
+      },
+      "anchor": "theorem calendar_round_haab_cycles : 18980 / 365 = 52 := by decide",
+      "statement": "Theorem calendar_round_haab_cycles states that natural-number division 18980 / 365 equals 52.",
+      "claim": {
+        "eq": [
+          {
+            "floordiv": [
+              18980,
+              365
+            ]
+          },
+          52
+        ]
+      }
+    },
+    {
+      "id": "maya-tzolkin-cycles",
+      "family": "MAYA",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/MayaLCMEpochSync.lean",
+        "line": 22,
+        "blob_sha1": "6eebc342553be4d8a3c7909b722bd7d52d670a17"
+      },
+      "anchor": "theorem calendar_round_tzolkin_cycles : 18980 / 260 = 73 := by decide",
+      "statement": "Theorem calendar_round_tzolkin_cycles states that natural-number division 18980 / 260 equals 73.",
+      "claim": {
+        "eq": [
+          {
+            "floordiv": [
+              18980,
+              260
+            ]
+          },
+          73
+        ]
+      }
+    },
+    {
+      "id": "vedic-sulba-error",
+      "family": "INDIAN",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/SulbaSqrtBound.lean",
+        "line": 32,
+        "blob_sha1": "aab087cb806edcdfd6c0567b76ab2da7d420e83d"
+      },
+      "anchor": "theorem sulba_square_error_exact : sulbaSqrt2 ^ 2 - 2 = 1 / 166464 := by decide",
+      "statement": "Theorem sulba_square_error_exact states sulbaSqrt2^2 - 2 = 1/166464, where sulbaSqrt2 is defined as 577/408 on line 16.",
+      "claim": {
+        "eq": [
+          {
+            "sub": [
+              {
+                "pow": [
+                  {
+                    "div": [
+                      577,
+                      408
+                    ]
+                  },
+                  2
+                ]
+              },
+              2
+            ]
+          },
+          {
+            "div": [
+              1,
+              166464
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "vedic-sulba-error-small",
+      "family": "INDIAN",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/SulbaSqrtBound.lean",
+        "line": 35,
+        "blob_sha1": "aab087cb806edcdfd6c0567b76ab2da7d420e83d"
+      },
+      "anchor": "theorem sulba_square_error_small : sulbaSqrt2 ^ 2 - 2 < 1 / 100000 := by decide",
+      "statement": "Theorem sulba_square_error_small states sulbaSqrt2^2 - 2 < 1/100000, where sulbaSqrt2 is defined as 577/408 on line 16.",
+      "claim": {
+        "lt": [
+          {
+            "sub": [
+              {
+                "pow": [
+                  {
+                    "div": [
+                      577,
+                      408
+                    ]
+                  },
+                  2
+                ]
+              },
+              2
+            ]
+          },
+          {
+            "div": [
+              1,
+              100000
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "vedic-sulba-formula",
+      "family": "INDIAN",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/SulbaSqrtBound.lean",
+        "line": 19,
+        "blob_sha1": "aab087cb806edcdfd6c0567b76ab2da7d420e83d"
+      },
+      "anchor": "theorem sulba_formula_eq : (1 : \u211a) + 1/3 + 1/(3*4) - 1/(3*4*34) = sulbaSqrt2 := by",
+      "statement": "Theorem sulba_formula_eq states 1 + 1/3 + 1/(3*4) - 1/(3*4*34) = sulbaSqrt2, where sulbaSqrt2 is defined as 577/408 on line 16.",
+      "claim": {
+        "eq": [
+          {
+            "sub": [
+              {
+                "add": [
+                  1,
+                  {
+                    "div": [
+                      1,
+                      3
+                    ]
+                  },
+                  {
+                    "div": [
+                      1,
+                      {
+                        "mul": [
+                          3,
+                          4
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "div": [
+                  1,
+                  {
+                    "mul": [
+                      3,
+                      4,
+                      34
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "div": [
+              577,
+              408
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "vedic-sulba-gt-one",
+      "family": "INDIAN",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/SulbaSqrtBound.lean",
+        "line": 41,
+        "blob_sha1": "aab087cb806edcdfd6c0567b76ab2da7d420e83d"
+      },
+      "anchor": "theorem sulba_greater_than_one : sulbaSqrt2 > 1 := by decide",
+      "statement": "Theorem sulba_greater_than_one states sulbaSqrt2 > 1, where sulbaSqrt2 is defined as 577/408 on line 16.",
+      "claim": {
+        "gt": [
+          {
+            "div": [
+              577,
+              408
+            ]
+          },
+          1
+        ]
+      }
+    },
+    {
+      "id": "vedic-sulba-lt-three-halves",
+      "family": "INDIAN",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/SulbaSqrtBound.lean",
+        "line": 38,
+        "blob_sha1": "aab087cb806edcdfd6c0567b76ab2da7d420e83d"
+      },
+      "anchor": "theorem sulba_less_than_threehalves : sulbaSqrt2 < 3 / 2 := by decide",
+      "statement": "Theorem sulba_less_than_threehalves states sulbaSqrt2 < 3/2, where sulbaSqrt2 is defined as 577/408 on line 16.",
+      "claim": {
+        "lt": [
+          {
+            "div": [
+              577,
+              408
+            ]
+          },
+          {
+            "div": [
+              3,
+              2
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "vedic-sulba-over",
+      "family": "INDIAN",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/SulbaSqrtBound.lean",
+        "line": 29,
+        "blob_sha1": "aab087cb806edcdfd6c0567b76ab2da7d420e83d"
+      },
+      "anchor": "theorem sulba_overestimates_2 : sulbaSqrt2 ^ 2 > 2 := by decide",
+      "statement": "Theorem sulba_overestimates_2 states sulbaSqrt2^2 > 2, where sulbaSqrt2 is defined as 577/408 on line 16.",
+      "claim": {
+        "gt": [
+          {
+            "pow": [
+              {
+                "div": [
+                  577,
+                  408
+                ]
+              },
+              2
+            ]
+          },
+          2
+        ]
+      }
+    },
+    {
+      "id": "vedic-sulba-square",
+      "family": "INDIAN",
+      "source": {
+        "repository": "szl-holdings/lutar-lean",
+        "path": "Lutar/Innovations/round4/SulbaSqrtBound.lean",
+        "line": 26,
+        "blob_sha1": "aab087cb806edcdfd6c0567b76ab2da7d420e83d"
+      },
+      "anchor": "theorem sulba_square_exact : sulbaSqrt2 ^ 2 = 332929 / 166464 := by decide",
+      "statement": "Theorem sulba_square_exact states sulbaSqrt2^2 = 332929/166464, where sulbaSqrt2 is defined as 577/408 on line 16.",
+      "claim": {
+        "eq": [
+          {
+            "pow": [
+              {
+                "div": [
+                  577,
+                  408
+                ]
+              },
+              2
+            ]
+          },
+          {
+            "div": [
+              332929,
+              166464
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

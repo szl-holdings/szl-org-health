@@ -1,0 +1,17 @@
+# Optional libraries for the Ouroboros braid v2 turn (tools/database_braid_turn.py).
+# Never needed by the unit tests or by ci.yml: the braid tools import with the
+# standard library only and report UNAVAILABLE when these are absent.
+#   szl-receipt-dsse: the estate's canonical receipt library used by the pinned
+#     szl-lake adapter (szl-lake/requirements-attest.txt pins the same version).
+#   the rest: runtime dependencies declared by hatun-mcp/pyproject.toml, needed
+#     for the in-memory MCP session against the committed Hatun server.
+# Regenerate the lock: uv pip compile requirements-braid.in --generate-hashes \
+#   --python-version 3.12 --python-platform x86_64-manylinux_2_28 -o requirements-braid.lock
+szl-receipt-dsse==0.3.1
+mcp>=2.3.0,<3
+httpx>=0.28.1
+starlette>=1.10.0
+uvicorn[standard]>=0.54.0
+cryptography==50.0.1
+PyJWT>=2.15.1,<3
+py_ecc>=8.0.0
