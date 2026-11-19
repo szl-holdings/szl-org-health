@@ -260,17 +260,17 @@ ALL_CANONICAL_PASS = {
 
 
 class PublisherMappingCensusTests(unittest.TestCase):
-    def test_manifest_declares_42_packages_in_41_workflows(self):
+    def test_manifest_declares_43_packages_in_42_workflows(self):
         packages = releasable()
-        self.assertEqual(len(packages), 42)
-        self.assertEqual(len({(m["repo"], m["workflow"]) for m in packages}), 41)
+        self.assertEqual(len(packages), 43)
+        self.assertEqual(len({(m["repo"], m["workflow"]) for m in packages}), 42)
         self.assertEqual(
             collections.Counter(m["status"] for m in packages),
-            {"published": 41, "queued": 1},
+            {"published": 42, "queued": 1},
         )
         self.assertEqual({m["workflow"] for m in packages}, {WORKFLOW})
         self.assertEqual(WORKFLOW, ".github/workflows/publish-pypi.yml")
-        self.assertEqual(len({m["name"] for m in packages}), 42)
+        self.assertEqual(len({m["name"] for m in packages}), 43)
 
     def test_every_releasable_package_has_exactly_one_workflow_mapping(self):
         grouped = manifest_by_repo()
@@ -310,7 +310,7 @@ class PublisherMappingCensusTests(unittest.TestCase):
             self.assertLessEqual(len(parsed), 2, repo)
             shapes[shape].append(repo)
         self.assertEqual({shape: len(repos) for shape, repos in shapes.items()},
-                         {"root": 39, "subdirectory": 1, "dual": 1})
+                         {"root": 40, "subdirectory": 1, "dual": 1})
         self.assertEqual(shapes["subdirectory"], ["khipu-consensus"])
         self.assertEqual(shapes["dual"], ["szl-evidence-litellm"])
 
@@ -396,7 +396,7 @@ class ConsumerParityTests(unittest.TestCase):
                 checked[kind] += 1
         self.assertEqual(checked, expected)
         # The explicit evidence-mandate SBOM adds one shared-pin upload site.
-        self.assertEqual(checked, {"pin": 249, "comment": 249})
+        self.assertEqual(checked, {"pin": 255, "comment": 255})
 
     def test_one_byte_and_line_ending_drift_fail(self):
         for repo, spec in CONSUMER_SPECS.items():
