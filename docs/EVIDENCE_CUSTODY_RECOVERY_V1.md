@@ -74,11 +74,11 @@ An illustrative test fixture (NOT a production manifest):
         "id": "demo-ledger-1",
         "basename": "synthetic.ndjson",
         "size_bytes": 10,
-        "sha256": "777bdbf8fd08bb6907dc81076bb52f0f7c769258e33b6ad838a3ac89fd4a63b8"
+        "sha256": "18c4f85a180cf29ddc1f8e3a3143ff54d643d1c306dbe610f4f70482632071d4"
       }]
     }
 
-The fixture must not be presented as a matched real-world result.
+The example hash is for exactly the 10 bytes `synthetic\\n` (nine ASCII letters followed by LF); it is not a real evidence file. The fixture must not be presented as a matched real-world result.
 Production must supply exact historical hashes and sizes from an
 independently supported source. It is appropriate to leave the
 nine real artifacts on custody HOLD until verified.
