@@ -86,6 +86,27 @@ def ok(title: str = "page") -> dict:
     }
 
 
+def mcp_ready(*, authentication: str = "CONFIGURED", ready: bool = True,
+              signer_mode: str = "ECDSA-P256") -> dict:
+    """Synthetic self-reported Hatun readiness; no live authentication."""
+    body = {
+        "service": "hatun-mcp",
+        "status": "ready" if ready else "not_ready",
+        "ready": ready,
+        "checks": {
+            "receipt_chain": "VERIFIED",
+            "signer": "CONFIGURED",
+            "authentication": authentication,
+        },
+        "signer_mode": signer_mode,
+    }
+    return {
+        "status": 200,
+        "headers": [("Content-Type", "application/json")],
+        "body": json.dumps(body).encode(),
+    }
+
+
 def redirect(location: str) -> dict:
     return {"status": 301, "headers": [("Location", location)], "body": b""}
 
@@ -187,6 +208,7 @@ def intended_edge(contract) -> dict:
     special = {
         "www-redirect": redirect("https://a-11-oy.com/"),
         "proof-www-redirect": redirect("https://a11oy.net/"),
+        "mcp-readyz": mcp_ready(),
         "gdw-root": origin_json(401),
         "killinchu-root": origin_json(403),
     }
@@ -370,13 +392,17 @@ class ContractFileTests(unittest.TestCase):
             ("agents-store.a-11-oy.com", "/healthz"),
             ("mcp.a-11-oy.com", "/"),
             ("mcp.a-11-oy.com", "/healthz"),
+            ("mcp.a-11-oy.com", "/readyz"),
             ("mcp.a-11-oy.com", "/.well-known/mcp/server-card.json"),
             ("ntfy.a11oy.net", "/"),
         }
         self.assertLessEqual(required, free)
         for check in self.contract.checks:
             if check.cls == "free":
-                self.assertEqual(check.accept, ("ok", "redirect", "origin-auth"), check.id)
+                expected = ("ok",) if check.id == "mcp-readyz" else (
+                    "ok", "redirect", "origin-auth",
+                )
+                self.assertEqual(check.accept, expected, check.id)
 
     def test_every_host_is_in_an_estate_zone_and_probed_without_exempt_agents(self) -> None:
         for check in self.contract.checks:
@@ -800,6 +826,43 @@ class LiveShapeRunTests(_ContractRun):
             self.assertIn("Cloudflare Error 1033", row["message"])
             self.assertIn("not a paywall decision", row["message"])
             self.assertNotIn("error code: 1033", json.dumps(row["observed"]))
+
+    def test_mcp_liveness_can_pass_while_readiness_is_unavailable(self) -> None:
+        routes = intended_edge(self.contract)
+        ready_check = next(x for x in self.contract.checks if x.id == "mcp-readyz")
+        variants = [
+            ("HTTP_503", {"status": 503, "headers": [], "body": b'{"ready":false}'}),
+            ("UNREADY_200", mcp_ready(ready=False)),
+            ("AUTH_UNAVAILABLE", mcp_ready(authentication="UNAVAILABLE")),
+            ("SIGNER_UNAVAILABLE", mcp_ready(signer_mode="PLACEHOLDER")),
+            ("ORIGIN_AUTH_REFUSAL", origin_json(403)),
+            ("MALFORMED_200", {"status": 200, "headers": [], "body": b"no-json"}),
+        ]
+        for label, spec in variants:
+            with self.subTest(label=label):
+                current = dict(routes)
+                current[(ready_check.host, "GET", ready_check.path)] = spec
+                code, receipt, _, _ = self.run_checker(current)
+                self.assertEqual(code, 1)
+                self.assertEqual(receipt["summary"]["failed"], 1)
+                self.assertEqual(self.rows(receipt, "mcp-healthz")["GET"]["verdict"], "PASS")
+                verdict = self.rows(receipt, "mcp-readyz")["GET"]
+                self.assertEqual(verdict["verdict"], "FAIL")
+                self.assertNotIn("PLACEHOLDER", verdict["message"])
+                if label == "AUTH_UNAVAILABLE":
+                    self.assertIn("READINESS_AUTHENTICATION_NOT_CONFIGURED", verdict["message"])
+                if label == "UNREADY_200":
+                    self.assertIn("NOT_READY", verdict["message"])
+
+    def test_mcp_readyz_strict_body_validates_configured_self_report(self) -> None:
+        routes = intended_edge(self.contract)
+        code, receipt, _, _ = self.run_checker(routes)
+        self.assertEqual(code, 0)
+        row = self.rows(receipt, "mcp-readyz")["GET"]
+        self.assertEqual(row["verdict"], "PASS")
+        self.assertIn("runtime self-report only", row["message"])
+        self.assertEqual(row["expected"]["accept"], ["ok"])
+
 
     def test_origin_failures_and_access_walls_are_distinguished_on_free_surfaces(self) -> None:
         routes = intended_edge(self.contract)
