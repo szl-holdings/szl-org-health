@@ -201,55 +201,55 @@ def inspect(manifest: dict, roots: list[Path], *,
                 # Iterate lazily: never materialize a huge attacker-controlled directory.
                 with os.scandir(folder) as iterator:
                     for entry in iterator:
-                    count += 1
-                    if count > max_entries or time.monotonic() - start >= max_seconds:
-                        incomplete_reason = "SCAN_BUDGET_EXHAUSTED"
-                        break
-                    if entry.name.casefold() in PROTECTED_DIRECTORIES:
-                        excluded += 1
-                        continue
-                    try:
-                        info = os.lstat(entry.path)
-                    except OSError:
-                        inaccessible += 1
-                        incomplete_reason = "ENTRY_UNAVAILABLE"
-                        continue
-                    if _is_link(info):
-                        excluded += 1
-                        continue
-                    if stat.S_ISDIR(info.st_mode):
-                        stack.append(Path(entry.path))
-                        continue
-                    if not stat.S_ISREG(info.st_mode):
-                        continue
-                    applicable = [
-                        item for item in targets.get(entry.name.casefold(), [])
-                        if item["size_bytes"] == info.st_size
-                    ]
-                    if not applicable:
-                        continue
-                    candidates += 1
-                    if info.st_size > max_bytes - hashed:
-                        incomplete_reason = "HASH_BUDGET_EXHAUSTED"
-                        break
-                    try:
-                        actual, consumed = read_digest(Path(entry.path), max_bytes - hashed)
-                    except Hold as exc:
-                        inaccessible += 1
-                        incomplete_reason = str(exc)
-                        continue
-                    hashed += consumed
-                    for item in applicable:
-                        if actual != item["sha256"]:
+                        count += 1
+                        if count > max_entries or time.monotonic() - start >= max_seconds:
+                            incomplete_reason = "SCAN_BUDGET_EXHAUSTED"
+                            break
+                        if entry.name.casefold() in PROTECTED_DIRECTORIES:
+                            excluded += 1
                             continue
-                        state = states[item["id"]]
-                        state["matched_count"] += 1
-                        state["status"] = "HASH_MATCH_UNATTESTED"
-                        if show_paths:
-                            state["locations"].append({
-                                "root_index": root_index,
-                                "relative_path": str(Path(entry.path).relative_to(root)),
-                            })
+                        try:
+                            info = os.lstat(entry.path)
+                        except OSError:
+                            inaccessible += 1
+                            incomplete_reason = "ENTRY_UNAVAILABLE"
+                            continue
+                        if _is_link(info):
+                            excluded += 1
+                            continue
+                        if stat.S_ISDIR(info.st_mode):
+                            stack.append(Path(entry.path))
+                            continue
+                        if not stat.S_ISREG(info.st_mode):
+                            continue
+                        applicable = [
+                            item for item in targets.get(entry.name.casefold(), [])
+                            if item["size_bytes"] == info.st_size
+                        ]
+                        if not applicable:
+                            continue
+                        candidates += 1
+                        if info.st_size > max_bytes - hashed:
+                            incomplete_reason = "HASH_BUDGET_EXHAUSTED"
+                            break
+                        try:
+                            actual, consumed = read_digest(Path(entry.path), max_bytes - hashed)
+                        except Hold as exc:
+                            inaccessible += 1
+                            incomplete_reason = str(exc)
+                            continue
+                        hashed += consumed
+                        for item in applicable:
+                            if actual != item["sha256"]:
+                                continue
+                            state = states[item["id"]]
+                            state["matched_count"] += 1
+                            state["status"] = "HASH_MATCH_UNATTESTED"
+                            if show_paths:
+                                state["locations"].append({
+                                    "root_index": root_index,
+                                    "relative_path": str(Path(entry.path).relative_to(root)),
+                                })
             except OSError:
                 inaccessible += 1
                 incomplete_reason = "DIRECTORY_UNAVAILABLE"
