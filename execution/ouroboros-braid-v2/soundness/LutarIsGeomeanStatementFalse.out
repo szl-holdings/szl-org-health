@@ -1,0 +1,11 @@
+'Soundness.LutarIsGeomeanFalse.maxAgg2_lutarAxioms' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Soundness.LutarIsGeomeanFalse.maxAgg2_ne_Lambda' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Soundness.LutarIsGeomeanFalse.transcription_matches' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Soundness.LutarIsGeomeanFalse.lutar_unique_type_false' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Soundness.LutarIsGeomeanFalse.lutar_is_geomean_type_false' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Soundness.LutarIsGeomeanFalse.lutar_is_geomean_statement_false' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+real 3.67
+user 2.58
+sys 1.19
