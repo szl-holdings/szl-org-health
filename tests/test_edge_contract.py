@@ -638,6 +638,31 @@ class PaymentHeaderTests(unittest.TestCase):
                 self.assertEqual(classify(observe(spec))[0], expected)
         self.assertEqual(classify(Observation(status=None, error="ConnectionRefusedError"))[0], "transport-error")
 
+    def test_explicit_530_1033_identifies_tunnel_without_guessing(self) -> None:
+        # The bounded, real 2026-11-19 08:26 UTC response was text/plain,
+        # HTTP 530, 17 bytes, and contained the Error 1033 marker.
+        observed = Observation(
+            status=530, headers={"content-type": ["text/plain"]},
+            body=b"error code: 1033",
+        )
+        outcome, evidence = classify(observed)
+        self.assertEqual(outcome, "origin-5xx")
+        self.assertIn("Cloudflare Error 1033", evidence)
+        self.assertIn("connector unavailable", evidence)
+        self.assertEqual(classify(Observation(status=530, body=b"error code: 1031"))[0], "origin-5xx")
+        self.assertNotIn(
+            "Tunnel connector unavailable",
+            classify(Observation(status=530, body=b"error code: 1031"))[1],
+        )
+        self.assertNotIn(
+            "Tunnel connector unavailable",
+            classify(Observation(status=530, body=b""))[1],
+        )
+        self.assertNotIn(
+            "Tunnel connector unavailable",
+            classify(Observation(status=502, body=b"error code: 1033"))[1],
+        )
+
     def test_connect_to_accepts_loopback_only(self) -> None:
         self.assertEqual(parse_connect_to("127.0.0.1:8080"), ("127.0.0.1", 8080))
         self.assertEqual(parse_connect_to("[::1]:9"), ("::1", 9))
@@ -747,6 +772,34 @@ class LiveShapeRunTests(_ContractRun):
         self.assertEqual(self.rows(receipt, "inference-docs")["GET"]["verdict"], "FAIL")
         self.assertEqual(self.rows(receipt, "inference-openapi")["GET"]["verdict"], "PASS")
         self.assertEqual(self.rows(receipt, "inference-redoc")["GET"]["verdict"], "PASS")
+
+    def test_four_mcp_1033_routes_remain_red_with_root_cause_evidence(self) -> None:
+        routes = intended_edge(self.contract)
+        targets = {
+            "mcp-root", "mcp-healthz", "mcp-pubkey", "mcp-server-card",
+        }
+        matched = 0
+        for check in self.contract.checks:
+            if check.id in targets:
+                self.assertEqual(check.cls, "free")
+                self.assertEqual(check.methods, ("GET",))
+                routes[(check.host, "GET", check.path)] = {
+                    "status": 530,
+                    "headers": [("Content-Type", "text/plain")],
+                    "body": b"error code: 1033",
+                }
+                matched += 1
+        self.assertEqual(matched, 4)
+        code, receipt, _, _ = self.run_checker(routes)
+        self.assertEqual(code, 1)
+        self.assertEqual(receipt["summary"]["failed"], 4)
+        for identifier in targets:
+            row = self.rows(receipt, identifier)["GET"]
+            self.assertEqual(row["verdict"], "FAIL")
+            self.assertEqual((row["status"], row["label"]), (530, "5xx-origin"))
+            self.assertIn("Cloudflare Error 1033", row["message"])
+            self.assertIn("not a paywall decision", row["message"])
+            self.assertNotIn("error code: 1033", json.dumps(row["observed"]))
 
     def test_origin_failures_and_access_walls_are_distinguished_on_free_surfaces(self) -> None:
         routes = intended_edge(self.contract)

@@ -871,6 +871,10 @@ _CF_ERROR_PAGE_MARKERS = (
 )
 _TITLE_RE = re.compile(rb"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _ORIGIN_TIMING_RE = re.compile(r"cfOrigin;dur=([0-9]+(?:\.[0-9]+)?)")
+# Cloudflare 530 may carry an Error 1033 (Tunnel disconnected) in a small
+# text/plain response. Classify only when the returned body explicitly says so:
+# a bare 530 is NOT proof of tunnel ownership or connector state.
+_CF_TUNNEL_1033_RE = re.compile(rb"\berror(?:\s+code)?\s*[:#]?\s*1033\b", re.IGNORECASE)
 
 
 def decode_payment_required(values: list[str]) -> tuple[dict[str, Any] | None, str]:
@@ -955,6 +959,12 @@ def classify(observation: Observation) -> tuple[str, str]:
     if 400 <= status < 500:
         return "client-error", ""
     if 500 <= status < 600:
+        if status == 530 and _CF_TUNNEL_1033_RE.search(body):
+            return (
+                "origin-5xx",
+                "Cloudflare Error 1033: Tunnel connector unavailable; verify "
+                "the admitted tunnel and DNS binding before starting a service",
+            )
         if any(pattern.search(body) for pattern in _CF_ERROR_PAGE_MARKERS):
             return "origin-5xx", "Cloudflare error page: the edge could not get a valid origin response"
         return "origin-5xx", "5xx response body without a Cloudflare error page"

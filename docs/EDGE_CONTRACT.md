@@ -70,6 +70,36 @@ the body. The receipt records the evidence each classification used
 `403-origin-auth`, not as a pass on its own: free and internal checks accept
 it only because the contract says an origin refusal is acceptable there.
 
+## Cloudflare Tunnel 1033 — owner-bound recovery (2026-11-19)
+
+At 2026-11-19 08:26:58 UTC, a no-credential, read-only GET from the
+BETTERWITHAGE workstation observed `mcp.a-11-oy.com/healthz`: **HTTP 530**,
+Cloudflare response header present, `text/plain` body of 17 bytes containing
+`error code: 1033`. No response body, secret, Cloudflare tunnel token, or
+private key was persisted. This is a **Cloudflare Tunnel connectivity/route
+incident**, not a 402 payment challenge or an origin application 500.
+
+The contract now distinguishes this diagnosis only when **both** HTTP 530
+and an explicit `error code: 1033` response body are observed. The outcome
+remains `5xx-origin`, the free-surface verdict stays **FAIL**, and no
+unrelated 530, WAF 403, or 402 is reclassified. The receipt records only
+this fixed non-sensitive diagnostic, not arbitrary error-page text.
+
+Cloudflare's own reference states Error 1033 means no healthy connector is
+available to serve the tunnel. The owner's next gate is to inspect the
+**currently admitted** Cloudflare Tunnel configuration and DNS binding,
+identify the authorized origin and identity, and verify a connector is
+healthy before testing `/healthz`, `/readyz`, and authenticated `/mcp/`.
+See <https://developers.cloudflare.com/tunnel/troubleshooting/> and
+<https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1033/>.
+
+**Do not** assume a stopped local Windows Cloudflared service owns this
+hostname. It has not been bound to an admitted source/route; starting an
+unknown service or repointing DNS is not an authorized remediation.
+Preserve the retired standalone Hatun HF publisher architecture documented
+in `hatun-mcp/docs/HATUN_SURFACE_CONTRACT.md`; do not recreate it to
+hide the edge failure.
+
 ## Requests
 
 - One request per declared method. GET everywhere; POST as well on the paid
