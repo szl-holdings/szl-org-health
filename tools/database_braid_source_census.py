@@ -314,7 +314,8 @@ def export_tree(directory: Path, commit: str, dest: Path, *, max_blob_bytes: int
         require(body is not None and git_blob_sha1(body) == sha, "EXPORT_BLOB_UNAVAILABLE")
         for mode, target in targets[sha]:
             target.parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(str(target), flags, 0o755 if mode == "100755" else 0o644)
+            # Owner-only: the export is built and imported by the same user, never shared.
+            fd = os.open(str(target), flags, 0o700 if mode == "100755" else 0o600)
             with os.fdopen(fd, "wb") as stream:
                 stream.write(body)
             written += len(body)

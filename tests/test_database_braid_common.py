@@ -289,6 +289,7 @@ class EscapedGrandchildTests(_Scratch):
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError):
+                    # Already gone: the cleanup this branch exists for has happened.
                     pass
             return
         self.assertTrue(marker.exists())

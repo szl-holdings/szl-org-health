@@ -178,7 +178,8 @@ def write_exclusive(path: Path, value, *, max_bytes: int, checkout: Path | None 
 def write_new_bytes(path: Path, raw: bytes) -> None:
     """Create ``path`` with ``raw``; refuses to follow a symlink or replace a file."""
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(str(path), flags, 0o644)
+    # Owner-only: evidence and logs are read back by the same user, never by others.
+    fd = os.open(str(path), flags, 0o600)
     with os.fdopen(fd, "wb") as stream:
         stream.write(raw)
 
@@ -328,11 +329,13 @@ def _feed(stream, raw: bytes) -> None:
     try:
         stream.write(raw)
     except OSError:
+        # The child closed its stdin early (or was killed): what it read is all it gets.
         pass
     finally:
         try:
             stream.close()
         except OSError:
+            # Closing a pipe whose reader is gone can fail; there is nothing left to release.
             pass
 
 
@@ -354,6 +357,7 @@ def _kill_group(pid: int) -> None:
     try:
         os.killpg(pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
+        # The group is already gone, or no longer ours to signal: nothing left to kill.
         pass
 
 
