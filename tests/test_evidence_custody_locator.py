@@ -157,6 +157,20 @@ class CustodyLocatorTests(unittest.TestCase):
         with self.assertRaisesRegex(custody.Hold, "DUPLICATE_JSON_KEY"):
             custody.load_manifest(self.manifest)
 
+    def test_json_nan_constant_is_rejected(self):
+        self.manifest.write_bytes(
+            b'{"schema":"szl.custody.recovery-locator/v1",'
+            b'"artifacts":[],"extra":NaN}'
+        )
+        with self.assertRaisesRegex(custody.Hold, "INVALID_JSON_CONSTANT"):
+            custody.load_manifest(self.manifest)
+
+    def test_unexpected_root_fields_rejected(self):
+        self.doc["untrusted_status"] = "PRODUCTION_READY"
+        self.save()
+        with self.assertRaisesRegex(custody.Hold, "MANIFEST_UNEXPECTED_FIELDS"):
+            custody.load_manifest(self.manifest)
+
     def test_duplicate_artifact_ids_case_insensitive_rejected(self):
         self.doc["artifacts"].append({
             "id": "LEDGER-1", "basename": self.name,
