@@ -3,7 +3,8 @@ name: Ouroboros braid turn
 # One bounded, no-effect turn of the Ouroboros DB braid v2 (docs/OUROBOROS_DB_BRAID_V2_20261119.md).
 # It checks out the estate's source repositories at their current default
 # branches, byte-checks every in-scope file, runs the Lean kernel over the
-# whole Lean corpus (including files the default build never reaches), runs
+# lutar-lean corpus (including files the default build never reaches; its
+# dependencies are loaded from the published cache, not re-checked), runs
 # the committed Hatun veto ladder locally, braids the five-phase turn against
 # the previous turn's receipt, and wraps the result in the canonical Lake
 # receipt. The turn's evidence directory is uploaded as an artifact.
@@ -16,8 +17,19 @@ name: Ouroboros braid turn
 # and stays off until the owner sets the repository variable
 # BRAID_ATTEST_PROVIDER to `github`.
 #
-# Offline contracts: tests/test_database_braid_*.py and
-# tests/test_database_ouroboros_braid_v2.py (run by ci.yml).
+# Network: harden-runner runs with egress-policy audit, which only logs
+# outbound connections and does not block them. The braid's child processes
+# (Lean, the Hatun ladder, the receipt adapter) start in an empty network
+# namespace only when this runner allows unprivileged user namespaces; each
+# witness records which happened (EMPTY_NETWORK_NAMESPACE or
+# NOT_AVAILABLE_ON_THIS_HOST) and never claims isolation it did not get.
+#
+# Offline contracts (run by ci.yml): tests/test_database_braid_common.py,
+# tests/test_database_braid_source_census.py, tests/test_database_braid_exact.py,
+# tests/test_database_braid_khipu_tree.py, tests/test_database_braid_codex_kat.py,
+# tests/test_database_braid_lean_witness.py, tests/test_database_braid_hatun_gate.py,
+# tests/test_database_braid_lake_receipt.py, tests/test_database_braid_turn.py,
+# tests/test_database_braid_workflow.py and tests/test_database_ouroboros_braid_v2.py.
 
 on:
   schedule:
@@ -196,6 +208,19 @@ jobs:
             echo "::notice::the previous turn's artifact is no longer retained; genesis turn"
           fi
 
+      - name: Let the turn's children start in an empty network namespace
+        run: |
+          set -euo pipefail
+          # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor. Lifting
+          # that on this ephemeral runner lets the witness tools start Lean, Hatun and the
+          # receipt adapter in a new network namespace with only loopback. Each witness
+          # records what it observed, so if this does not take effect the turn says
+          # NOT_AVAILABLE_ON_THIS_HOST instead of claiming isolation.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 ||
+            echo "::notice::unprivileged user namespaces stay restricted on this runner"
+          unshare --user --map-root-user --net -- cat /proc/net/dev ||
+            echo "::notice::no empty network namespace on this runner"
+
       - name: Run the turn (census, Lean kernel, known answers, Hatun ladder, braid, Lake receipt)
         env:
           PREVIOUS_DIR: ${{ steps.previous.outputs.dir }}
@@ -241,6 +266,15 @@ jobs:
           path: ${{ runner.temp }}/braid-turn
           if-no-files-found: error
           retention-days: 90
+
+      - name: Upload a refused attempt's partial files (never a turn)
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: braid-turn-refused
+          path: ${{ runner.temp }}/braid-turn.refused
+          if-no-files-found: ignore
+          retention-days: 30
 
   attest:
     name: Attest the evidence files (keyless, owner opt-in)

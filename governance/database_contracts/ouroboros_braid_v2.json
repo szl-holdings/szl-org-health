@@ -208,6 +208,7 @@
       "lean_rejected",
       "lean_not_checked_by_policy",
       "lean_not_judged",
+      "lean_theorem_counts_unknown",
       "user_theorems",
       "theorems_trust_base_only",
       "theorems_sorry_tainted",
@@ -311,7 +312,7 @@
       },
       {
         "decl": "Lutar.Khipu.khipuReceipt_checksum_invariant",
-        "role": "KHIPU_SUM_OF_SUMS_TAMPER_EVIDENCE"
+        "role": "KHIPU_ROOT_BUMP_CHANGES_TOTAL_RELATED_MODEL"
       },
       {
         "decl": "Lutar.PACBayes.madhava_arctan_remainder",
@@ -473,7 +474,8 @@
         "id": "database_frontier_coverage",
         "weight": 1
       }
-    ]
+    ],
+    "evidence_window_seconds": 86400
   },
   "ratchet": {
     "floor": {
@@ -481,6 +483,9 @@
       "lean_rejected_max": 57,
       "theorems_sorry_tainted_max": 25,
       "direct_sorry_declarations_max": 23,
+      "theorems_declared_axiom_dependent_max": 37,
+      "theorems_native_decide_max": 3,
+      "theorems_trust_base_only_min": 1702,
       "declared_axioms_allowed": [
         "Lutar.Agentic.Pipeline.hashFn_collision_resistant",
         "Lutar.Banach.LiuHui.liu_hui_pi_converges",

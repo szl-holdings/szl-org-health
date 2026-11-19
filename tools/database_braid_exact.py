@@ -25,13 +25,13 @@ import sys
 
 try:
     from tools.database_braid_common import (
-        closed, parse_rational, rational_text, require,
+        canonical, closed, parse_rational, rational_text, require,
     )
     from tools.database_catalog_admission import InputError
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from tools.database_braid_common import (
-        closed, parse_rational, rational_text, require,
+        canonical, closed, parse_rational, rational_text, require,
     )
     from tools.database_catalog_admission import InputError
 
@@ -46,7 +46,8 @@ RUNG_AM = "ARITHMETIC_MEAN_REFUTES"
 RUNG_POWER = "EXACT_POWER_COMPARISON"
 MAX_AXES = 64
 MAX_WEIGHT = 64
-MAX_OPERAND_DIGITS = 20000
+MAX_AXIS_BITS = 1400
+MAX_OPERAND_BITS = 13000
 PPM = 10 ** 6
 _FIELDS = (
     "schema", "aggregate", "tau", "axes", "weights", "weight_sum", "min_axis",
@@ -79,15 +80,40 @@ def iroot(value: int, degree: int) -> int:
     return low
 
 
+def _small(value: Fraction) -> bool:
+    return max(value.numerator.bit_length(), value.denominator.bit_length()) <= MAX_AXIS_BITS
+
+
+def _bounded_text(value: Fraction) -> str:
+    """Text of a derived rational, refused before it could exceed Python's int-to-str limit."""
+    require(max(value.numerator.bit_length(), value.denominator.bit_length()) <= MAX_OPERAND_BITS,
+            "EXACT_OPERAND_TOO_LARGE")
+    try:
+        return rational_text(value)
+    except InputError as exc:
+        if exc.code != "RATIONAL_TOO_LARGE":
+            raise
+        raise InputError("EXACT_OPERAND_TOO_LARGE") from None
+
+
+def _int_text(value: int) -> str:
+    # The digit limit can be lowered by PYTHONINTMAXSTRDIGITS; a lower limit refuses, typed.
+    try:
+        return str(value)
+    except ValueError:
+        raise InputError("EXACT_OPERAND_TOO_LARGE") from None
+
+
 def _inputs(axes, weights, tau):
     require(type(axes) is dict and 0 < len(axes) <= MAX_AXES, "EXACT_AXES_INVALID")
+    require(all(type(name) is str and 0 < len(name) <= 64 for name in axes), "EXACT_AXES_INVALID")
     require(type(weights) is dict and set(weights) == set(axes), "EXACT_WEIGHTS_INVALID")
-    require(type(tau) is Fraction and 0 < tau <= 1, "EXACT_TAU_INVALID")
+    require(type(tau) is Fraction and 0 < tau <= 1 and _small(tau), "EXACT_TAU_INVALID")
     names = sorted(axes)
     for name in names:
-        require(type(name) is str and 0 < len(name) <= 64, "EXACT_AXES_INVALID")
         value, weight = axes[name], weights[name]
-        require(type(value) is Fraction and 0 <= value <= 1, "EXACT_AXIS_OUT_OF_RANGE")
+        require(type(value) is Fraction and 0 <= value <= 1 and _small(value),
+                "EXACT_AXIS_OUT_OF_RANGE")
         require(type(weight) is int and 1 <= weight <= MAX_WEIGHT, "EXACT_WEIGHTS_INVALID")
     return names
 
@@ -106,7 +132,7 @@ def decide(axes, weights, tau) -> dict:
         "weights": {n: weights[n] for n in names},
         "weight_sum": total,
         "min_axis": {"id": low_name, "value": rational_text(axes[low_name])},
-        "arithmetic_mean": rational_text(arithmetic),
+        "arithmetic_mean": _bounded_text(arithmetic),
         "authority_granted": False,
     }
     if axes[low_name] == 0:
@@ -122,13 +148,21 @@ def decide(axes, weights, tau) -> dict:
         })
         return record
     harmonic = total / sum((Fraction(weights[n]) / axes[n] for n in names), Fraction(0))
+    # Bit-length bounds before any product is formed: each side has at least its bound
+    # minus 2W - 1 bits, so this never refuses an input the exact check below would accept.
+    bound_left = (sum(weights[n] * axes[n].numerator.bit_length() for n in names) +
+                  total * tau.denominator.bit_length())
+    bound_right = (sum(weights[n] * axes[n].denominator.bit_length() for n in names) +
+                   total * tau.numerator.bit_length())
+    require(max(bound_left, bound_right) - 2 * total + 1 <= MAX_OPERAND_BITS,
+            "EXACT_OPERAND_TOO_LARGE")
     left_num = left_den = 1
     for name in names:
         left_num *= axes[name].numerator ** weights[name]
         left_den *= axes[name].denominator ** weights[name]
     left = left_num * tau.denominator ** total
     right = tau.numerator ** total * left_den
-    require(max(len(str(left)), len(str(right))) <= MAX_OPERAND_DIGITS,
+    require(max(left.bit_length(), right.bit_length()) <= MAX_OPERAND_BITS,
             "EXACT_OPERAND_TOO_LARGE")
     meets = left >= right
     if harmonic >= tau:
@@ -144,12 +178,12 @@ def decide(axes, weights, tau) -> dict:
     # floor(GM * 10^6) = floor(((left_num * 10^(6W)) // left_den) ** (1/W)), exactly.
     ppm_floor = iroot((left_num * PPM ** total) // left_den, total)
     record.update({
-        "harmonic_mean": rational_text(harmonic),
+        "harmonic_mean": _bounded_text(harmonic),
         "geometric_mean_meets_tau": meets,
         "geometric_mean_ppm_floor": ppm_floor,
         "rung": rung,
         "power_comparison": {
-            "left": str(left), "right": str(right),
+            "left": _int_text(left), "right": _int_text(right),
             "relation": "LEFT_AT_LEAST_RIGHT" if meets else "LEFT_BELOW_RIGHT",
             "meaning": "prod(num_i^w_i)*tau_den^W versus tau_num^W*prod(den_i^w_i)",
         },
@@ -171,5 +205,6 @@ def verify_decision(record) -> bool:
         require(type(name) is str, "EXACT_DECISION_FIELDS_INVALID")
         axes[name] = parse_rational(text)
     expected = decide(axes, record["weights"], parse_rational(record["tau"]))
-    require(expected == record, "EXACT_DECISION_DRIFT")
+    # Byte comparison, not ==: Python's == treats True as 1 and 0 as False.
+    require(canonical(expected) == canonical(record), "EXACT_DECISION_DRIFT")
     return True

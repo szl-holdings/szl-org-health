@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from unittest import TestCase, main as unittest_main, skipUnless
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,8 +27,8 @@ from tools.database_braid_common import (  # noqa: E402
     strict_json, write_exclusive,
 )
 from tools.database_braid_exact import (  # noqa: E402
-    AGGREGATE, PATH_BELOW, PATH_NONE, PATH_ZERO_PINNED, RUNG_AM, RUNG_HM, RUNG_POWER,
-    RUNG_ZERO, SCHEMA, decide, iroot, ratio, verify_decision,
+    AGGREGATE, MAX_AXIS_BITS, MAX_OPERAND_BITS, PATH_BELOW, PATH_NONE, PATH_ZERO_PINNED, RUNG_AM,
+    RUNG_HM, RUNG_POWER, RUNG_ZERO, SCHEMA, decide, iroot, ratio, verify_decision,
 )
 
 F = Fraction
@@ -803,6 +804,105 @@ class VerifyDecisionTests(TestCase):
             lowered = canonical(record).decode("ascii").lower()
             for word in ("signed", "signature", "authorized", "verified", "allow"):
                 self.assertNotIn(word, lowered)
+
+
+def operand_bits(axes, weights, tau):
+    """Bit lengths of both sides of the power comparison, computed directly."""
+    total = sum(weights.values())
+    left, right = tau.denominator ** total, tau.numerator ** total
+    for name, value in axes.items():
+        left *= value.numerator ** weights[name]
+        right *= value.denominator ** weights[name]
+    return max(left.bit_length(), right.bit_length())
+
+
+class SizeBoundTests(TestCase):
+    def refused(self, code, *args):
+        with self.assertRaises(InputError) as caught:
+            decide(*args)
+        self.assertEqual(caught.exception.code, code)
+
+    def test_axis_and_tau_bit_caps_are_exact(self):
+        edge = F(1, 2 ** (MAX_AXIS_BITS - 1))
+        self.assertEqual(edge.denominator.bit_length(), MAX_AXIS_BITS)
+        decide({"a": edge}, {"a": 1}, F(1, 2))
+        decide({"a": F(1, 2)}, {"a": 1}, edge)
+        over = F(1, 2 ** MAX_AXIS_BITS)
+        self.refused("EXACT_AXIS_OUT_OF_RANGE", {"a": over}, {"a": 1}, F(1, 2))
+        self.refused("EXACT_TAU_INVALID", {"a": F(1, 2)}, {"a": 1}, over)
+
+    def test_operand_cap_is_exact_at_the_boundary_and_never_a_value_error(self):
+        # right = (2^619)^21 = 2^12999 has exactly MAX_OPERAND_BITS bits; 2^13000 has one more.
+        record = decide({"a": F(1, 2 ** 619)}, {"a": 21}, F(1))
+        self.assertEqual(int(record["power_comparison"]["right"]).bit_length(), MAX_OPERAND_BITS)
+        self.assertGreater(len(record["power_comparison"]["right"]), 3900)
+        self.assertTrue(verify_decision(record))
+        self.refused("EXACT_OPERAND_TOO_LARGE", {"a": F(1, 2 ** 325)}, {"a": 40}, F(1))
+        previous = sys.get_int_max_str_digits()
+        sys.set_int_max_str_digits(640)
+        try:
+            # A lowered digit limit refuses with the typed code instead of raising ValueError.
+            self.refused("EXACT_OPERAND_TOO_LARGE", {"a": F(1, 2 ** 619)}, {"a": 21}, F(1))
+        finally:
+            sys.set_int_max_str_digits(previous)
+
+    def test_early_bound_never_refuses_what_the_exact_check_accepts(self):
+        rng = random.Random(20261119)
+        refused = accepted = 0
+        for _ in range(400):
+            size = rng.randint(1, 6)
+            axes = {}
+            for index in range(size):
+                den = rng.randrange(1, 1 << rng.randint(1, 700))
+                axes[f"x{index}"] = F(rng.randint(1, den), den)
+            weights = {name: rng.randint(1, 64) for name in axes}
+            tau_den = rng.randrange(1, 1 << rng.randint(1, 60))
+            tau = F(rng.randint(1, tau_den), tau_den)
+            bits = operand_bits(axes, weights, tau)
+            try:
+                decide(axes, weights, tau)
+                accepted += 1
+                self.assertLessEqual(bits, MAX_OPERAND_BITS)
+            except InputError as exc:
+                if exc.code != "EXACT_OPERAND_TOO_LARGE":
+                    raise
+                refused += 1
+                self.assertGreater(bits, MAX_OPERAND_BITS)
+        self.assertGreater(refused, 20)
+        self.assertGreater(accepted, 20)
+
+    def test_the_largest_inputs_are_refused_before_any_product_is_formed(self):
+        value = F(2 ** (MAX_AXIS_BITS - 1) - 1, 2 ** (MAX_AXIS_BITS - 1))
+        axes = {f"n{i:02d}": value for i in range(64)}
+        started = time.monotonic()
+        self.refused("EXACT_OPERAND_TOO_LARGE", axes, {name: 64 for name in axes}, value)
+        self.assertLess(time.monotonic() - started, 5)
+
+
+class VerifyDecisionTypeTests(TestCase):
+    def test_bool_and_int_aliases_are_refused(self):
+        single = decide({"a": F(9, 10)}, {"a": 1}, F(4, 5))
+        self.assertEqual((single["weight_sum"], single["geometric_mean_meets_tau"], single["dang"]),
+                         (1, True, False))
+        zero = decide({"a": F(0), "b": F(1)}, {"a": 1, "b": 1}, F(1, 2))
+        self.assertEqual((zero["geometric_mean_ppm_floor"], zero["dang"]), (0, True))
+        below = decide({"a": F(1, 10)}, {"a": 1}, F(4, 5))
+        cases = ((single, "geometric_mean_meets_tau", 1), (single, "dang", 0),
+                 (single, "weight_sum", True), (zero, "geometric_mean_ppm_floor", False),
+                 (zero, "geometric_mean_meets_tau", 0), (zero, "dang", 1),
+                 (below, "geometric_mean_meets_tau", 0), (below, "dang", 0))
+        for base, field, alias in cases:
+            with self.subTest(field=field, alias=alias):
+                record = deepcopy(base)
+                record[field] = alias
+                # Python's == calls these equal; the verifier must not.
+                self.assertEqual(record, base)
+                with self.assertRaisesRegex(InputError, "EXACT_DECISION_DRIFT"):
+                    verify_decision(record)
+        record = deepcopy(single)
+        record["weights"]["a"] = True
+        with self.assertRaisesRegex(InputError, "EXACT_WEIGHTS_INVALID"):
+            verify_decision(record)
 
 
 if __name__ == "__main__":

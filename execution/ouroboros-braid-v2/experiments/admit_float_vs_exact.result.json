@@ -1,0 +1,72 @@
+{
+ "exact_ties": {
+  "70/100": {
+   "exact_ties_unweighted": 135,
+   "exact_ties_weighted": 126,
+   "float_refuses_unweighted": 0,
+   "float_refuses_weighted": 0
+  },
+  "80/100": {
+   "exact_ties_unweighted": 29,
+   "exact_ties_weighted": 26,
+   "float_refuses_unweighted": 0,
+   "float_refuses_weighted": 0
+  }
+ },
+ "grid": {
+  "by_n": {
+   "1": {
+    "exactly_on_boundary": 1,
+    "float_admits_but_exact_refuses": 0,
+    "float_refuses_but_exact_admits": 0,
+    "multisets_tested": 100,
+    "range": [
+     "1/100",
+     "100/100"
+    ]
+   },
+   "2": {
+    "exactly_on_boundary": 2,
+    "float_admits_but_exact_refuses": 0,
+    "float_refuses_but_exact_admits": 0,
+    "multisets_tested": 5050,
+    "range": [
+     "1/100",
+     "100/100"
+    ]
+   },
+   "3": {
+    "exactly_on_boundary": 2,
+    "float_admits_but_exact_refuses": 0,
+    "float_refuses_but_exact_admits": 0,
+    "multisets_tested": 171700,
+    "range": [
+     "1/100",
+     "100/100"
+    ]
+   },
+   "4": {
+    "exactly_on_boundary": 3,
+    "float_admits_but_exact_refuses": 0,
+    "float_refuses_but_exact_admits": 0,
+    "multisets_tested": 135751,
+    "range": [
+     "60/100",
+     "100/100"
+    ]
+   }
+  },
+  "disagreements": 0,
+  "grid_step": "1/100",
+  "multisets_tested": 312601,
+  "tau": "80/100"
+ },
+ "schema": "szl.braid-experiment/admit-float-vs-exact/v1",
+ "scope": "TWO_DECIMAL_GRIDS_AND_EXACT_TIES_ONLY_NOT_A_PROOF",
+ "subject": {
+  "blob_sha1": "fa3291b516a6db677f2d3943d02861fc84ab80e2",
+  "commit": "02fe78903c859aa7ef570b96bcb36724b5d59bb4",
+  "path": "szl_verify_nine.py",
+  "repository": "szl-holdings/a11oy"
+ }
+}

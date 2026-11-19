@@ -7,16 +7,25 @@ every cord carries a vector of non-negative integer knots. The value on a
 pendant is the sum of its cords and the value on the primary cord is the sum
 of its pendants (sum-of-sums), checked at every node together with declared
 partition identities ("the coloured parts add up to the whole"). Each node
-hash binds its children's hashes AND their sums, so one leaf can be shown to
-be included in a stated total without revealing the other leaves' contents.
+hash binds its children's hashes AND their sums, and the primary hash also
+binds the knot names, the partition identities and the unavailable-cord list.
+One leaf can be shown to be included in a stated total without revealing
+other cords' keys or content digests. A proof does reveal every sibling
+cord's hash and knot vector, every pendant's hash and sum, the partition
+identities and the keys of the unavailable cords.
 
-Prior art, not ours: hash trees (Merkle 1987) and hash trees that carry sums
-(the Merkle-sum tree used for proof of liabilities, Maxwell 2013; Dagher et
-al. 2015) are standard. The three-tier summation structure follows published
-descriptions of Inka khipu accounting (Locke 1923; Ascher and Ascher 1981;
-Urton 2003). The estate's own Lean carrier for the summation law is
-``Lutar/Khipu/SummationInvariant.lean``. This is a modern accounting check
-inspired by that record, NOT a decipherment and NOT an ancient cipher.
+Prior art, not ours: hash trees (Merkle 1987, CRYPTO '87). Hash trees whose
+nodes also carry sums come from G. Maxwell's informal 2013 proposal for
+proving exchange reserves; a checkable written account is Z. Wilcox (2014),
+"Proving your bitcoin reserves", and the sum tree is discussed in Dagher,
+Bunz, Bonneau, Clark and Boneh (2015), "Provisions", ACM CCS 2015. The
+three-tier summation structure follows published accounts of Inka khipu
+accounting: Locke 1923; Ascher and Ascher 1981 (Code of the Quipu); Urton
+and Brezine 2005 (Science 309, "Khipu accounting in ancient Peru"). The
+estate's own Lean carrier for a related summation law is
+``Lutar/Khipu/SummationInvariant.lean``; it is about a different model and
+is not a proof of this code. This is a modern accounting check inspired by
+that record, NOT a decipherment and NOT an ancient cipher.
 
 A missing cord is listed as unavailable and is never counted as zero. The
 tree is unsigned: it identifies bytes and totals, it does not say who made
@@ -62,9 +71,11 @@ def pendant_hash(label, children) -> str:
     return _h(_PENDANT, {"label": label, "cords": children})
 
 
-def primary_hash(knot_names, children) -> str:
-    """``children`` is the ordered list of ``[pendant_hash, sum]`` pairs."""
-    return _h(_PRIMARY, {"knots": knot_names, "pendants": children})
+def primary_hash(knot_names, partitions, unavailable, children) -> str:
+    """Binds the knot names, the partition identities, the missing-cord list and,
+    in order, every pendant's ``[hash, sum]``, so none of them can be edited alone."""
+    return _h(_PRIMARY, {"knots": knot_names, "partitions": partitions,
+                         "unavailable": unavailable, "pendants": children})
 
 
 def _knot_names(names):
@@ -125,9 +136,11 @@ def build(knot_names, partitions, cords, *, unavailable=()) -> dict:
         grouped.setdefault(cord["pendant"], []).append(
             {"key": cord["key"], "digest": cord["digest"], "knots": knots,
              "hash": cord_hash(cord["key"], cord["digest"], knots)})
+    require(type(unavailable) in (list, tuple) and len(unavailable) <= MAX_CORDS and
+            all(type(k) is str and KEY.fullmatch(k) for k in unavailable),
+            "KHIPU_UNAVAILABLE_INVALID")
     missing = sorted(set(unavailable))
-    require(all(type(k) is str and KEY.fullmatch(k) for k in missing) and
-            not keys.intersection(missing), "KHIPU_UNAVAILABLE_INVALID")
+    require(not keys.intersection(missing), "KHIPU_UNAVAILABLE_INVALID")
     pendants, total = [], [0] * len(names)
     for label in sorted(grouped):
         leaves = sorted(grouped[label], key=lambda c: c["key"])
@@ -144,7 +157,8 @@ def build(knot_names, partitions, cords, *, unavailable=()) -> dict:
         "partitions": [dict(p) for p in parts], "missing_is_zero": False,
         "unavailable_cords": missing,
         "primary": {
-            "hash": primary_hash(names, [[p["hash"], p["sum"]] for p in pendants]),
+            "hash": primary_hash(names, [dict(p) for p in parts], missing,
+                                 [[p["hash"], p["sum"]] for p in pendants]),
             "sum": total, "pendant_count": len(pendants), "cord_count": len(keys),
         },
         "pendants": pendants,
@@ -204,12 +218,14 @@ def verify(tree) -> bool:
     require(type(primary["pendant_count"]) is int and primary["pendant_count"] == len(pendants)
             and type(primary["cord_count"]) is int and primary["cord_count"] == len(keys)
             and len(keys) <= MAX_CORDS, "KHIPU_COUNT_MISMATCH")
-    require(type(primary["hash"]) is str and
-            primary["hash"] == primary_hash(names, children), "KHIPU_PRIMARY_HASH_MISMATCH")
     missing = tree["unavailable_cords"]
-    require(type(missing) is list and missing == sorted(set(missing)) and
-            all(type(k) is str and KEY.fullmatch(k) for k in missing) and
-            not keys.intersection(missing), "KHIPU_UNAVAILABLE_INVALID")
+    require(type(missing) is list and len(missing) <= MAX_CORDS and
+            all(type(k) is str and KEY.fullmatch(k) for k in missing), "KHIPU_UNAVAILABLE_INVALID")
+    require(missing == sorted(set(missing)) and not keys.intersection(missing),
+            "KHIPU_UNAVAILABLE_INVALID")
+    require(type(primary["hash"]) is str and
+            primary["hash"] == primary_hash(names, parts, missing, children),
+            "KHIPU_PRIMARY_HASH_MISMATCH")
     return True
 
 
@@ -228,12 +244,15 @@ def cord_index(tree) -> dict:
 def prove(tree, key) -> dict:
     """Inclusion-with-sum proof for one cord of a verified tree."""
     verify(tree)
+    require(type(key) is str, "KHIPU_CORD_NOT_FOUND")
     place = cord_index(tree).get(key)
     require(place is not None, "KHIPU_CORD_NOT_FOUND")
     pendant = tree["pendants"][place[0]]
     cord = pendant["cords"][place[1]]
     return {
         "schema": PROOF_SCHEMA, "knots": list(tree["knots"]),
+        "partitions": [dict(p) for p in tree["partitions"]],
+        "unavailable_cords": list(tree["unavailable_cords"]),
         "cord": {"key": cord["key"], "digest": cord["digest"], "knots": list(cord["knots"])},
         "pendant": {"label": pendant["label"], "position": place[1],
                     "cords": [[c["hash"], list(c["knots"])] for c in pendant["cords"]]},
@@ -243,10 +262,20 @@ def prove(tree, key) -> dict:
 
 
 def verify_proof(proof, *, primary_hash_expected, primary_sum_expected) -> bool:
-    """Check a proof against a trusted primary hash and total. Reveals no other cord."""
-    closed(proof, ("schema", "knots", "cord", "pendant", "primary"), "KHIPU_PROOF_FIELDS_INVALID")
+    """Check a proof against a trusted primary hash and total.
+
+    The proof carries no other cord's key or content digest; it does carry the
+    siblings' hashes, knot vectors and pendant sums, which it needs to re-add.
+    """
+    closed(proof, ("schema", "knots", "partitions", "unavailable_cords", "cord", "pendant",
+                   "primary"), "KHIPU_PROOF_FIELDS_INVALID")
     require(proof["schema"] == PROOF_SCHEMA, "KHIPU_PROOF_FIELDS_INVALID")
     names = _knot_names(proof["knots"])
+    parts = _partitions(proof["partitions"], names)
+    missing = proof["unavailable_cords"]
+    require(type(missing) is list and len(missing) <= MAX_CORDS and
+            all(type(k) is str and KEY.fullmatch(k) for k in missing) and
+            missing == sorted(set(missing)), "KHIPU_PROOF_FIELDS_INVALID")
     width = len(names)
     cord = closed(proof["cord"], ("key", "digest", "knots"), "KHIPU_PROOF_FIELDS_INVALID")
     require(type(cord["key"]) is str and KEY.fullmatch(cord["key"]) and
@@ -281,8 +310,12 @@ def verify_proof(proof, *, primary_hash_expected, primary_sum_expected) -> bool:
     total = [0] * width
     for row in groups:
         total = _add(total, row[1])
+    # The same identities verify() holds at every tier also hold for what a proof reveals.
+    require(all(_partition_holds(row[1], names, parts) for row in leaves + groups) and
+            _partition_holds(total, names, parts), "KHIPU_PROOF_PARTITION_BROKEN")
     require(total == primary_sum_expected and
-            primary_hash(names, groups) == primary_hash_expected, "KHIPU_PROOF_PRIMARY_MISMATCH")
+            primary_hash(names, parts, missing, groups) == primary_hash_expected,
+            "KHIPU_PROOF_PRIMARY_MISMATCH")
     return True
 
 

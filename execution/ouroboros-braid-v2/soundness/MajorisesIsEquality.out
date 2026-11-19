@@ -1,0 +1,13 @@
+'Probe.majorises_pointwise_le' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Probe.majorises_forces_eq' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Probe.majorises_iff_eq' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Probe.lambda_schur_concave_n_axis_thm' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Probe.axiom_type_inhabited_without_axiom' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Probe.standard_pair_not_majorises' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Lutar.Lambda.lambda_schur_concave_n_axis' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound,
+ Lutar.Lambda.lambda_schur_concave_n_axis]
+real 3.06
+user 2.04
+sys 1.09

@@ -1,0 +1,4 @@
+'direction_check' depends on axioms: [propext, Classical.choice, Quot.sound]
+real 3.03
+user 2.00
+sys 0.98

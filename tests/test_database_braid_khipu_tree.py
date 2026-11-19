@@ -63,7 +63,7 @@ def reseal(tree):
     tree["primary"]["sum"] = total
     tree["primary"]["pendant_count"] = len(tree["pendants"])
     tree["primary"]["cord_count"] = sum(len(p["cords"]) for p in tree["pendants"])
-    tree["primary"]["hash"] = primary_hash(tree["knots"],
+    tree["primary"]["hash"] = primary_hash(tree["knots"], tree["partitions"], tree["unavailable_cords"],
                                            [[p["hash"], p["sum"]] for p in tree["pendants"]])
     return tree
 
@@ -360,7 +360,8 @@ class VerifyTamperTests(KhipuTreeCase):
         self.tampered("KHIPU_PRIMARY_HASH_MISMATCH", with_primary_sum)
         forged = deepcopy(self.tree)
         with_primary_sum(forged)
-        forged["primary"]["hash"] = primary_hash(forged["knots"],
+        forged["primary"]["hash"] = primary_hash(forged["knots"], forged["partitions"],
+                                                 forged["unavailable_cords"],
                                                  [[p["hash"], p["sum"]] for p in forged["pendants"]])
         self.assertTrue(verify(forged))
         self.assertNotEqual(forged["primary"]["hash"], self.tree["primary"]["hash"])
@@ -451,7 +452,7 @@ class ProofTests(KhipuTreeCase):
                 self.assertTrue(self.check(proof))
                 self.assertTrue(self.check(json.loads(canonical(proof))))
 
-    def test_proof_reveals_no_other_cord_and_claims_nothing(self):
+    def test_proof_hides_other_keys_and_digests_and_claims_nothing(self):
         proof = prove(self.tree, "a/2")
         text = canonical(proof).decode("ascii")
         for cord in cords_fixture():
@@ -461,6 +462,16 @@ class ProofTests(KhipuTreeCase):
         keys = {k.lower() for k in all_keys(proof)}
         for word in ("signed", "signature", "authorized", "authority"):
             self.assertFalse(any(word in k for k in keys), word)
+
+    def test_proof_reveals_sibling_hashes_knot_vectors_sums_and_unavailable_keys(self):
+        # What the docstring says a proof discloses, it does disclose.
+        proof = prove(self.tree, "a/2")
+        sibling = next(c for c in self.tree["pendants"][0]["cords"] if c["key"] == "a/1")
+        self.assertIn([sibling["hash"], sibling["knots"]], proof["pendant"]["cords"])
+        for pendant in self.tree["pendants"]:
+            self.assertIn([pendant["hash"], pendant["sum"]], proof["primary"]["pendants"])
+        self.assertEqual(proof["unavailable_cords"], ["z/9"])
+        self.assertEqual(proof["partitions"], PARTITIONS)
 
     def test_prove_refusals(self):
         self.refused("KHIPU_CORD_NOT_FOUND", prove, self.tree, "nope")
@@ -696,15 +707,59 @@ class DomainSeparationTests(TestCase):
                          khipu._h(khipu._PENDANT, {"label": "alpha", "cords": children}))
         self.assertNotEqual(pendant_hash("alpha", children),
                             khipu._h(khipu._PRIMARY, {"label": "alpha", "cords": children}))
-        self.assertEqual(primary_hash(["total"], children),
-                         khipu._h(khipu._PRIMARY, {"knots": ["total"], "pendants": children}))
-        self.assertNotEqual(primary_hash(["total"], children),
-                            khipu._h(khipu._CORD, {"knots": ["total"], "pendants": children}))
+        body = {"knots": ["total"], "partitions": [], "unavailable": [], "pendants": children}
+        self.assertEqual(primary_hash(["total"], [], [], children), khipu._h(khipu._PRIMARY, body))
+        self.assertNotEqual(primary_hash(["total"], [], [], children), khipu._h(khipu._CORD, body))
 
     def test_float_payload_refused(self):
         with self.assertRaises(InputError) as caught:
             cord_hash("a/1", sha("1"), [1.5])
         self.assertEqual(caught.exception.code, "FLOAT_VALUE_REFUSED")
+
+
+class BoundListsTests(KhipuTreeCase):
+    """The partition identities and the unavailable list are inside the primary hash."""
+
+    def setUp(self):
+        self.tree = tree_fixture()
+
+    def test_a_fabricated_unavailable_cord_changes_the_primary_hash(self):
+        for missing in (["y/1", "z/9"], ["z/9", "zz/1"], [], ["y/1"]):
+            with self.subTest(missing=missing):
+                self.tampered("KHIPU_PRIMARY_HASH_MISMATCH",
+                              lambda t: t.update(unavailable_cords=missing))
+                rebuilt = tree_fixture(unavailable=missing)
+                self.assertNotEqual(rebuilt["primary"]["hash"], self.tree["primary"]["hash"])
+                self.assertEqual(rebuilt["primary"]["sum"], self.tree["primary"]["sum"])
+
+    def test_a_deleted_or_edited_partition_changes_the_primary_hash(self):
+        def renamed(tree):
+            tree["partitions"][0]["name"] = "colors"
+
+        def reordered(tree):
+            tree["partitions"][0]["parts"].reverse()
+        for mutate in (lambda t: t.update(partitions=[]), renamed, reordered):
+            self.tampered("KHIPU_PRIMARY_HASH_MISMATCH", mutate)
+        bare = tree_fixture(partitions=[])
+        self.assertNotEqual(bare["primary"]["hash"], self.tree["primary"]["hash"])
+        self.assertEqual(bare["primary"]["sum"], self.tree["primary"]["sum"])
+
+    def test_a_proof_cannot_drop_or_invent_unavailable_cords_or_partitions(self):
+        expected = {"primary_hash_expected": self.tree["primary"]["hash"],
+                    "primary_sum_expected": self.tree["primary"]["sum"]}
+        for mutate in (lambda p: p.update(unavailable_cords=[]),
+                       lambda p: p.update(unavailable_cords=["y/1", "z/9"]),
+                       lambda p: p.update(partitions=[])):
+            proof = prove(self.tree, "a/1")
+            mutate(proof)
+            self.refused("KHIPU_PROOF_PRIMARY_MISMATCH", verify_proof, proof, **expected)
+
+    def test_a_proof_whose_partition_does_not_hold_is_refused(self):
+        proof = prove(self.tree, "a/1")
+        proof["partitions"].append({"name": "weights", "whole": "weight", "parts": ["red", "blue"]})
+        self.refused("KHIPU_PROOF_PARTITION_BROKEN", verify_proof, proof,
+                     primary_hash_expected=self.tree["primary"]["hash"],
+                     primary_sum_expected=self.tree["primary"]["sum"])
 
 
 if __name__ == "__main__":

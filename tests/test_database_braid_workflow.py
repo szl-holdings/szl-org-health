@@ -17,6 +17,12 @@ POLICY = ROOT / "governance/database_contracts/ouroboros_braid_v2.json"
 LOCK = ROOT / "requirements-braid.lock"
 USES = re.compile(r"^\s*(?:- )?uses:\s*(\S+)", re.M)
 PINNED = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}\Z")
+RUN_STEP = re.compile(r"^\s*(?:- )?run:", re.M)
+ATTEST_ACTIONS = (
+    "step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c",
+    "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+    "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
+)
 
 
 def job(text, name):
@@ -69,8 +75,38 @@ class BraidTurnWorkflowContract(TestCase):
         self.assertIn("if: ${{ vars.BRAID_ATTEST_PROVIDER == 'github' }}", self.attest)
         self.assertIn("needs: turn", self.attest)
         self.assertNotIn("actions/checkout@", self.attest)
-        self.assertNotRegex(self.attest, r"^\s*run:", )
+        self.assertNotRegex(self.attest, RUN_STEP)
         self.assertNotIn("python", self.attest)
+        self.assertEqual(sorted(USES.findall(self.attest)), sorted(ATTEST_ACTIONS))
+
+    def test_run_step_check_is_not_vacuous(self):
+        # The same check must see a run step anywhere in a job, not only at its first line.
+        self.assertRegex(self.turn, RUN_STEP)
+        planted = self.attest + "\n      - name: planted\n        run: curl https://example.invalid\n"
+        self.assertRegex(planted, RUN_STEP)
+        self.assertNotEqual(sorted(USES.findall(planted + "        uses: actions/checkout@" +
+                                                "3d3c42e5aac5ba805825da76410c181273ba90b1\n")),
+                            sorted(ATTEST_ACTIONS))
+
+    def test_header_names_suites_that_exist_and_claims_no_more_than_it_does(self):
+        header = self.text[:self.text.index("\non:")]
+        named = re.findall(r"tests/test_[a-z0-9_]+\.py", header)
+        self.assertIn("tests/test_database_braid_workflow.py", named)
+        self.assertIn("tests/test_database_ouroboros_braid_v2.py", named)
+        self.assertNotRegex(header, r"tests/test_\S*\*")
+        for relative in named:
+            self.assertTrue((ROOT / relative).is_file(), relative)
+        flat = " ".join(line.lstrip("# ") for line in header.splitlines())
+        self.assertNotIn("whole Lean corpus", flat)
+        self.assertIn("the lutar-lean corpus", flat)
+        self.assertIn("empty network namespace only when this runner allows", flat)
+        # The header's account of egress must match the harden-runner steps below it.
+        audit = ("egress-policy audit, which only logs outbound connections and does not "
+                 "block them")
+        if "egress-policy: audit" in self.text:
+            self.assertIn(audit, flat)
+        else:
+            self.assertNotIn("egress-policy audit", flat)
 
     def test_turn_job_checks_out_every_repository_the_policy_censuses(self):
         named = set(re.findall(r'--checkout "(szl-holdings/[A-Za-z0-9_.-]+)=', self.turn))

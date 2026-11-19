@@ -16,15 +16,17 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-from unittest import TestCase, main as unittest_main
+from unittest import TestCase, main as unittest_main, mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tools.database_catalog_admission import InputError  # noqa: E402
-from tools.database_braid_common import canonical, git_blob_sha1  # noqa: E402
+from tools.database_braid_common import canonical, digest, git_blob_sha1  # noqa: E402
+from tools import database_braid_source_census as census_tool  # noqa: E402
 from tools.database_braid_source_census import (  # noqa: E402
-    FAMILY_MAP_SCHEMA, LFS_MAGIC, SCHEMA, UNCLASSIFIED, _FALSE_FLAGS, cord_key, lean_text_sorry_tokens,
-    list_tree, main, observe, read_blobs, validate_census, validate_census_policy, validate_family_map,
+    FAMILY_MAP_SCHEMA, IDENTITIES, LFS_MAGIC, SCHEMA, UNCLASSIFIED, _FALSE_FLAGS, checkout_identity,
+    cord_key, export_tree, lean_text_sorry_tokens, list_tree, main, observe, read_blobs,
+    validate_census, validate_census_policy, validate_family_map, verify_census_checkouts,
 )
 
 NOW = datetime(2026, 11, 19, 6, 30, tzinfo=timezone.utc)
@@ -302,10 +304,11 @@ class ListTreeAndBlobTests(_Repos):
         self.assertEqual(by_path["src/a.lean"][:2], ("100644", "blob"))
         self.assertEqual(by_path["docs/link.md"][:2], ("120000", "blob"))
         self.assertEqual(by_path["vendor/sub"][:3], ("160000", "commit", SUBMODULE_SHA))
-        self.assertEqual(by_path["docs/empty.txt"][2:4], (EMPTY_BLOB, "0"))
+        self.assertEqual(by_path["docs/empty.txt"][2:4], (EMPTY_BLOB, 0))
+        self.assertIsNone(by_path["vendor/sub"][3])
         for path, raw in ALPHA_FILES.items():
             self.assertEqual(by_path[path][2], git_blob_sha1(raw), path)
-            self.assertEqual(by_path[path][3], str(len(raw)), path)
+            self.assertEqual(by_path[path][3], len(raw), path)
 
     def test_list_tree_refuses_unusable_checkouts(self):
         with self.assertRaisesRegex(InputError, "CENSUS_CHECKOUT_UNAVAILABLE"):
@@ -418,8 +421,10 @@ class ObserveTests(_Repos):
         self.assertEqual(cord_of(report, "src/a.lean")["lean_text_sorry_tokens"], 2)
         self.assertEqual(cord_of(report, "src/b.py")["lean_text_sorry_tokens"], 0)
         self.assertEqual(report["unavailable_cords"], [
-            {"key": "alpha:docs/big.bin", "reason": "BLOB_OVER_SIZE_CAP"},
-            {"key": "alpha:docs/lfs.bin", "reason": "LFS_POINTER_CONTENT_ABSENT"},
+            {"key": "alpha:docs/big.bin", "repository": ALPHA, "path": "docs/big.bin",
+             "reason": "BLOB_OVER_SIZE_CAP"},
+            {"key": "alpha:docs/lfs.bin", "repository": ALPHA, "path": "docs/lfs.bin",
+             "reason": "LFS_POINTER_CONTENT_ABSENT"},
         ])
         keys = [c["key"] for c in report["cords"]]
         self.assertEqual(keys, sorted(set(keys)))
@@ -620,18 +625,21 @@ class ValidateCensusTamperTests(_Repos):
 
     def test_unavailable_row_must_stay_unknown(self):
         gamma = lambda v: row_of(v, GAMMA)  # noqa: E731
-        for field in ("commit", "shallow", "tracked_files", "in_scope_files", "out_of_scope_files",
+        for field in ("commit", "tree_id", "listing_sha256", "checkout_identity", "shallow",
+                      "tracked_files", "in_scope_files", "out_of_scope_files",
                       "symlink_or_submodule_entries", "cords", "unavailable_cords"):
-            bad = {"commit": "c" * 40, "shallow": False}.get(field, 0)
+            bad = {"commit": "c" * 40, "tree_id": "d" * 40, "listing_sha256": "e" * 64,
+                   "checkout_identity": "NO_ORIGIN", "shallow": False}.get(field, 0)
             with self.subTest(field=field):
                 self.refuses(lambda v: gamma(v).update({field: bad}), "CENSUS_UNAVAILABLE_NOT_UNKNOWN")
         for state in ("EMPTY", "observed", None):
             self.refuses(lambda v: gamma(v).update(state=state), "CENSUS_UNAVAILABLE_NOT_UNKNOWN")
 
         def fake_observed_empty(value):
-            gamma(value).update(state="OBSERVED", commit="c" * 40, shallow=False, tracked_files=0,
-                                in_scope_files=0, out_of_scope_files=0, symlink_or_submodule_entries=0,
-                                cords=0, unavailable_cords=0)
+            gamma(value).update(state="OBSERVED", commit="c" * 40, tree_id="d" * 40,
+                                listing_sha256="e" * 64, checkout_identity="NO_ORIGIN", shallow=False,
+                                tracked_files=0, in_scope_files=0, out_of_scope_files=0,
+                                symlink_or_submodule_entries=0, cords=0, unavailable_cords=0)
         self.refuses(fake_observed_empty, "CENSUS_STATE_INVALID")
         self.refuses(lambda v: v["cords"].append(dict(v["cords"][-1], repository=GAMMA,
                                                       key=cord_key(GAMMA, v["cords"][-1]["path"]))),
@@ -639,7 +647,9 @@ class ValidateCensusTamperTests(_Repos):
 
     def test_observed_row_needs_commit_and_shallow(self):
         for field, bad in (("commit", None), ("commit", "C" * 40), ("commit", "c" * 39), ("shallow", None),
-                           ("shallow", 0)):
+                           ("shallow", 0), ("tree_id", None), ("tree_id", "D" * 40), ("tree_id", "d" * 64),
+                           ("listing_sha256", None), ("listing_sha256", "e" * 40),
+                           ("checkout_identity", "VERIFIED"), ("checkout_identity", None)):
             with self.subTest(field=field, bad=bad):
                 self.refuses(lambda v: self.alpha_row(v).update({field: bad}), "CENSUS_REPOSITORY_FIELDS_INVALID")
 
@@ -656,7 +666,9 @@ class ValidateCensusTamperTests(_Repos):
         self.refuses(lambda v: v["unavailable_cords"][0].update(key=None), "CENSUS_CORD_FIELDS_INVALID")
 
         def collide(value):
-            value["unavailable_cords"][0]["key"] = value["cords"][0]["key"]
+            first = value["cords"][0]
+            value["unavailable_cords"][0].update(key=first["key"], repository=first["repository"],
+                                                 path=first["path"])
             value["unavailable_cords"].sort(key=lambda c: c["key"])
         self.refuses(collide, "CENSUS_CORD_ORDER_OR_DUPLICATE")
 
@@ -776,6 +788,427 @@ class CliTests(_Repos):
         code, summary = self.run_main(["--policy", policy, "--checkout", ok,
                                        "--output", self.out / "missing-dir" / "x.json"])
         self.assertEqual((code, summary["code"]), (3, "OUTPUT_PATH_DENIED"))
+
+
+def batch_spy(seen):
+    """Wrap the census git runner and record every blob id handed to ``cat-file --batch``."""
+    real = census_tool._git
+
+    def spy(directory, *args, stdin=None, ok_codes=(0,)):
+        if args[:2] == ("cat-file", "--batch"):
+            seen.append(stdin.decode("ascii").split())
+        return real(directory, *args, stdin=stdin, ok_codes=ok_codes)
+    return spy
+
+
+class TreeIdentityTests(_Repos):
+    def test_rows_bind_the_root_tree_and_a_listing_digest_anyone_can_recompute(self):
+        report = observe(section(alpha_policy(), beta_policy()), {ALPHA: self.alpha, BETA: self.beta},
+                         at=NOW)
+        for name, repo in ((ALPHA, self.alpha), (BETA, self.beta)):
+            row = row_of(report, name)
+            with self.subTest(name):
+                tree = git(repo, "rev-parse", "HEAD^{tree}", home=self.base).decode().strip()
+                self.assertEqual(row["tree_id"], tree)
+                listing = []
+                for record in git(repo, "ls-tree", "-r", "-z", "--full-tree", "HEAD",
+                                  home=self.base).split(b"\0"):
+                    if record:
+                        meta, _, path = record.partition(b"\t")
+                        mode, _kind, sha = meta.decode("ascii").split()
+                        listing.append([path.decode("utf-8"), mode, sha])
+                self.assertEqual(row["listing_sha256"], digest(sorted(listing)))
+                self.assertEqual(row["tracked_files"], len(listing))
+                self.assertIn(row["checkout_identity"], IDENTITIES)
+
+
+class CheckoutIdentityTests(TestCase):
+    def test_origin_url_is_compared_with_the_policy_name_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = make_repo(temp, "alpha", {"x.txt": b"x\n"})
+            self.assertEqual(checkout_identity(repo, ALPHA), "NO_ORIGIN")
+            git(repo, "remote", "add", "origin", "https://github.com/szl-holdings/alpha.git", home=temp)
+            cases = (("https://github.com/szl-holdings/alpha.git", "ORIGIN_MATCHES"),
+                     ("git@github.com:szl-holdings/alpha.git", "ORIGIN_MATCHES"),
+                     ("https://github.com/szl-holdings/alpha/", "ORIGIN_MATCHES"),
+                     ("https://github.com/SZL-Holdings/Alpha", "ORIGIN_MATCHES"),
+                     ("http://proxy@127.0.0.1:9/git/szl-holdings/alpha", "ORIGIN_MATCHES"),
+                     ("https://github.com/szl-holdings/hatun-mcp.git", "ORIGIN_DIFFERS"),
+                     ("https://github.com/other-org/alpha.git", "ORIGIN_DIFFERS"),
+                     ("https://github.com/szl-holdings/alpha-fork.git", "ORIGIN_DIFFERS"))
+            for url, expected in cases:
+                git(repo, "remote", "set-url", "origin", url, home=temp)
+                with self.subTest(url=url):
+                    self.assertEqual(checkout_identity(repo, ALPHA), expected)
+            report = observe(section({"repository": ALPHA, "include": ["*"], "exclude": [],
+                                      "families": []}), {ALPHA: repo}, at=NOW)
+            self.assertEqual(row_of(report, ALPHA)["checkout_identity"], "ORIGIN_DIFFERS")
+
+
+class CheckoutBindingTests(_Repos):
+    def test_a_subdirectory_of_another_repository_is_refused(self):
+        for nested in (self.alpha / "src", self.alpha / "docs"):
+            with self.subTest(nested=nested.name):
+                with self.assertRaisesRegex(InputError, "CENSUS_CHECKOUT_NOT_TOP_LEVEL"):
+                    list_tree(nested)
+        with self.assertRaisesRegex(InputError, "CENSUS_CHECKOUT_NOT_TOP_LEVEL"):
+            observe(section(beta_policy()), {BETA: self.alpha / "src"}, at=NOW)
+        with tempfile.TemporaryDirectory(dir=self.alpha) as untracked:
+            with self.assertRaisesRegex(InputError, "CENSUS_CHECKOUT_NOT_TOP_LEVEL"):
+                list_tree(Path(untracked))
+
+
+class BlobReadingTests(_Repos):
+    def test_an_over_cap_blob_is_never_read(self):
+        seen = []
+        with mock.patch.object(census_tool, "_git", batch_spy(seen)):
+            report = observe(section(alpha_policy()), {ALPHA: self.alpha}, at=NOW)
+        read = {sha for batch in seen for sha in batch}
+        self.assertNotIn(git_blob_sha1(ALPHA_FILES["docs/big.bin"]), read)
+        self.assertIn(git_blob_sha1(ALPHA_FILES["docs/cap.bin"]), read)
+        self.assertIn({"key": "alpha:docs/big.bin", "repository": ALPHA, "path": "docs/big.bin",
+                       "reason": "BLOB_OVER_SIZE_CAP"}, report["unavailable_cords"])
+
+    def test_blobs_are_read_in_bounded_batches_with_identical_bytes(self):
+        shas = sorted({git_blob_sha1(raw) for raw in ALPHA_FILES.values()})
+        whole = read_blobs(self.alpha, shas, max_bytes=CAP)
+        seen = []
+        with mock.patch.object(census_tool, "MAX_BATCH_BYTES", 40), \
+                mock.patch.object(census_tool, "_git", batch_spy(seen)):
+            batched = read_blobs(self.alpha, shas, max_bytes=CAP)
+        self.assertEqual(batched, whole)
+        self.assertGreater(len(seen), 2)
+        sizes = {git_blob_sha1(raw): len(raw) for raw in ALPHA_FILES.values()}
+        for batch in seen:
+            self.assertTrue(len(batch) == 1 or sum(sizes[s] for s in batch) <= 40, batch)
+
+    def test_blob_ids_are_checked_before_git_sees_them(self):
+        for bad in ("HEAD:README.md", "2" * 39, "2" * 64, "Z" * 40, "2" * 40 + "\nHEAD", 7):
+            with self.subTest(bad=bad):
+                with self.assertRaisesRegex(InputError, "CENSUS_BLOB_ID_INVALID"):
+                    read_blobs(self.alpha, [bad], max_bytes=CAP)
+
+    def test_a_census_read_in_tiny_batches_is_identical(self):
+        policy = section(alpha_policy(), beta_policy())
+        whole = observe(policy, {ALPHA: self.alpha, BETA: self.beta}, at=NOW)
+        with mock.patch.object(census_tool, "MAX_BATCH_BYTES", 16):
+            batched = observe(policy, {ALPHA: self.alpha, BETA: self.beta}, at=NOW)
+        self.assertEqual(batched, whole)
+
+    def test_the_cord_budget_is_enforced_before_any_blob_is_read(self):
+        seen = []
+        with mock.patch.object(census_tool, "_git", batch_spy(seen)):
+            with self.assertRaisesRegex(InputError, "CENSUS_CORD_BUDGET_EXCEEDED"):
+                observe(section(alpha_policy(), max_cords=5), {ALPHA: self.alpha}, at=NOW)
+        self.assertEqual(seen, [])
+
+
+class CensusForgeryTests(_Repos):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.section = section(alpha_policy(), beta_policy(), gamma_policy())
+        cls.checkouts = {ALPHA: cls.alpha, BETA: cls.beta}
+        cls.report = observe(cls.section, cls.checkouts, at=NOW)
+
+    def forged(self, mutate):
+        value = deepcopy(self.report)
+        mutate(value)
+        return value
+
+    def refused_offline(self, value, code):
+        with self.assertRaisesRegex(InputError, code):
+            validate_census(value, self.section)
+
+    def refused_on_rederivation(self, value, code):
+        validate_census(deepcopy(value), self.section)
+        with self.assertRaisesRegex(InputError, code):
+            verify_census_checkouts(value, self.section, self.checkouts)
+
+    @staticmethod
+    def drop_file(value, path, *, as_out_of_scope=False):
+        index = next(i for i, c in enumerate(value["cords"]) if c["path"] == path)
+        cord = value["cords"].pop(index)
+        row = row_of(value, cord["repository"])
+        row["cords"] -= 1
+        row["in_scope_files"] -= 1
+        if as_out_of_scope:
+            row["out_of_scope_files"] += 1
+        else:
+            row["tracked_files"] -= 1
+
+    def test_the_untampered_census_rederives_equal(self):
+        self.assertEqual(verify_census_checkouts(deepcopy(self.report), self.section, self.checkouts),
+                         [ALPHA, BETA])
+        self.assertEqual(verify_census_checkouts(deepcopy(self.report), self.section, {BETA: self.beta}),
+                         [BETA])
+        with self.assertRaisesRegex(InputError, "CENSUS_CHECKOUT_NOT_IN_POLICY"):
+            verify_census_checkouts(deepcopy(self.report), self.section,
+                                    {"szl-holdings/delta": self.beta})
+
+    def test_a_dropped_file_with_adjusted_counts_is_refused(self):
+        # The report's own arithmetic still adds up, so only re-derivation can see the drop.
+        for out_of_scope in (False, True):
+            with self.subTest(out_of_scope=out_of_scope):
+                self.refused_on_rederivation(
+                    self.forged(lambda v: self.drop_file(v, "src/b.py", as_out_of_scope=out_of_scope)),
+                    "CENSUS_REDERIVED_COUNTS_MISMATCH")
+
+        def relisted(value):
+            self.drop_file(value, "src/b.py")
+            row_of(value, ALPHA)["listing_sha256"] = digest([["src/a.lean", "100644", "0" * 40]])
+        self.refused_on_rederivation(self.forged(relisted), "CENSUS_LISTING_MISMATCH")
+
+        def retreed(value):
+            self.drop_file(value, "src/b.py")
+            row_of(value, ALPHA)["tree_id"] = "0" * 40
+        self.refused_on_rederivation(self.forged(retreed), "CENSUS_LISTING_MISMATCH")
+        self.refused_offline(self.forged(lambda v: v["cords"].pop(0)), "CENSUS_CORD_COUNT_MISMATCH")
+
+    def test_edited_cord_contents_are_refused_on_rederivation(self):
+        def lean(value):
+            return next(c for c in value["cords"] if c["path"] == "src/a.lean")
+        self.refused_on_rederivation(self.forged(lambda v: lean(v).update(sha256="f" * 64)),
+                                     "CENSUS_REDERIVED_CORDS_MISMATCH")
+        self.refused_on_rederivation(self.forged(lambda v: lean(v).update(lean_text_sorry_tokens=0)),
+                                     "CENSUS_REDERIVED_CORDS_MISMATCH")
+        self.refused_on_rederivation(self.forged(lambda v: lean(v).update(blob_sha1="1" * 40)),
+                                     "CENSUS_REDERIVED_CORDS_MISMATCH")
+
+    def test_an_invented_unavailable_entry_is_refused(self):
+        def add(entry):
+            def mutate(value):
+                value["unavailable_cords"].append(entry)
+                value["unavailable_cords"].sort(key=lambda c: str(c["key"]))
+            return mutate
+        invented = (
+            {"key": "alpha:docs/invented.bin", "repository": ALPHA, "path": "docs/other.bin",
+             "reason": "BLOB_OVER_SIZE_CAP"},
+            {"key": "delta:x.txt", "repository": "szl-holdings/delta", "path": "x.txt",
+             "reason": "BLOB_OVER_SIZE_CAP"},
+            {"key": cord_key(GAMMA, "x.txt"), "repository": GAMMA, "path": "x.txt",
+             "reason": "BLOB_OVER_SIZE_CAP"},
+            {"key": "alpha:README.md", "repository": ALPHA, "path": "README.md",
+             "reason": "BLOB_OVER_SIZE_CAP"},
+            {"key": "alpha:build/out.lean", "repository": ALPHA, "path": "build/out.lean",
+             "reason": "LFS_POINTER_CONTENT_ABSENT"},
+            {"key": "alpha:docs/x.bin", "repository": ALPHA, "path": "docs/x.bin", "reason": "MISSING"},
+            {"key": "alpha:docs/x.bin", "repository": [ALPHA], "path": "docs/x.bin",
+             "reason": "BLOB_OVER_SIZE_CAP"},
+        )
+        for entry in invented:
+            with self.subTest(entry=entry["key"]):
+                self.refused_offline(self.forged(add(entry)), "CENSUS_CORD_FIELDS_INVALID")
+
+        def well_formed(value):
+            add({"key": "alpha:docs/x.bin", "repository": ALPHA, "path": "docs/x.bin",
+                 "reason": "BLOB_OVER_SIZE_CAP"})(value)
+            row = row_of(value, ALPHA)
+            row.update(unavailable_cords=row["unavailable_cords"] + 1,
+                       in_scope_files=row["in_scope_files"] + 1, tracked_files=row["tracked_files"] + 1)
+        self.refused_on_rederivation(self.forged(well_formed), "CENSUS_REDERIVED_COUNTS_MISMATCH")
+
+    def test_unavailable_counts_are_checked_per_repository(self):
+        def move_to_beta(value):
+            entry = next(u for u in value["unavailable_cords"] if u["path"] == "docs/big.bin")
+            entry.update(key=cord_key(BETA, "big.bin"), repository=BETA, path="big.bin")
+            value["unavailable_cords"].sort(key=lambda c: c["key"])
+        # The global total is unchanged; only the per-repository count can see the move.
+        self.refused_offline(self.forged(move_to_beta), "CENSUS_CORD_COUNT_MISMATCH")
+
+    def test_cords_outside_the_policy_globs_are_refused(self):
+        def relocate(path):
+            def mutate(value):
+                cord = next(c for c in value["cords"] if c["path"] == "src/b.py")
+                cord.update(path=path, key=cord_key(ALPHA, path))
+                value["cords"].sort(key=lambda c: c["key"])
+            return mutate
+        for path in ("build/out.lean", "README.md", "vendor/sub"):
+            with self.subTest(path=path):
+                self.refused_offline(self.forged(relocate(path)), "CENSUS_CORD_FIELDS_INVALID")
+        self.refused_offline(self.forged(lambda v: v["cords"][0].update(repository=[ALPHA])),
+                             "CENSUS_CORD_FIELDS_INVALID")
+
+    def test_families_are_re_derived_whenever_they_can_be(self):
+        relabel = self.forged(lambda v: cord_of(v, "src/a.lean").update(family="BETA_ALL"))
+        self.refused_offline(relabel, "CENSUS_CORD_FAMILY_NOT_DERIVED")
+        explicit = validate_family_map(family_map())
+        mapped = observe(self.section, self.checkouts, at=NOW, family_map=explicit,
+                         family_map_sha256="f" * 64)
+        validate_census(deepcopy(mapped), self.section)
+        validate_census(deepcopy(mapped), self.section, family_map=explicit)
+        self.assertEqual(verify_census_checkouts(deepcopy(mapped), self.section, self.checkouts,
+                                                 family_map=explicit), [ALPHA, BETA])
+        forged = deepcopy(mapped)
+        cord_of(forged, "src/a.lean")["family"] = "LEAN_CORE"
+        # Without the map the label cannot be re-derived, and is not claimed to be.
+        validate_census(deepcopy(forged), self.section)
+        with self.assertRaisesRegex(InputError, "CENSUS_CORD_FAMILY_NOT_DERIVED"):
+            validate_census(deepcopy(forged), self.section, family_map=explicit)
+
+    def test_a_row_hidden_as_unavailable_is_refused_when_its_checkout_is_supplied(self):
+        def hide_alpha(value):
+            row = row_of(value, ALPHA)
+            for field in list(row):
+                if field not in ("repository", "state"):
+                    row[field] = None
+            row["state"] = "UNAVAILABLE"
+            value["cords"] = [c for c in value["cords"] if c["repository"] != ALPHA]
+            value["unavailable_cords"] = []
+            value["repositories_observed"] -= 1
+        hidden = self.forged(hide_alpha)
+        validate_census(deepcopy(hidden), self.section)
+        self.assertEqual(verify_census_checkouts(deepcopy(hidden), self.section, {BETA: self.beta}),
+                         [BETA])
+        with self.assertRaisesRegex(InputError, "CENSUS_REDERIVATION_ROW_NOT_OBSERVED"):
+            verify_census_checkouts(hidden, self.section, self.checkouts)
+
+    def test_rederivation_reads_the_recorded_commit_not_head(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = make_repo(temp, "moving", {"one.txt": b"first\n", "two.txt": b"two\n"})
+            policy = section(beta_policy())
+            first = observe(policy, {BETA: repo}, at=NOW)
+            (repo / "one.txt").write_bytes(b"second\n")
+            git(repo, "commit", "-q", "-am", "move on", home=temp)
+            self.assertNotEqual(list_tree(repo)[0], row_of(first, BETA)["commit"])
+            self.assertEqual(verify_census_checkouts(deepcopy(first), policy, {BETA: repo}), [BETA])
+            unknown = deepcopy(first)
+            row_of(unknown, BETA)["commit"] = "3" * 40
+            with self.assertRaisesRegex(InputError, "CENSUS_GIT_REFUSED"):
+                verify_census_checkouts(unknown, policy, {BETA: repo})
+
+
+class ExportTreeTests(_Repos):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.dest = Path(temp.name) / "export"
+        self.dest.mkdir()
+
+    def exported(self):
+        return {p.relative_to(self.dest).as_posix(): p.read_bytes()
+                for p in self.dest.rglob("*") if p.is_file() and not p.is_symlink()}
+
+    def test_exports_committed_regular_files_only(self):
+        commit = list_tree(self.alpha)[0]
+        shape = export_tree(self.alpha, commit, self.dest, max_blob_bytes=1 << 20)
+        self.assertEqual(self.exported(), ALPHA_FILES)
+        self.assertEqual(shape, {"files": len(ALPHA_FILES), "bytes": sum(map(len, ALPHA_FILES.values())),
+                                 "skipped_entries": 2})
+        self.assertFalse(os.path.lexists(self.dest / "docs/link.md"))
+        self.assertFalse(os.path.lexists(self.dest / "vendor/sub"))
+        self.assertTrue(os.access(self.dest / "src/b.py", os.X_OK))
+        self.assertFalse(os.access(self.dest / "src/a.lean", os.X_OK))
+
+    def test_export_in_tiny_batches_writes_the_same_bytes(self):
+        commit = list_tree(self.alpha)[0]
+        with mock.patch.object(census_tool, "MAX_BATCH_BYTES", 16):
+            export_tree(self.alpha, commit, self.dest, max_blob_bytes=1 << 20)
+        self.assertEqual(self.exported(), ALPHA_FILES)
+
+    def test_export_paths_must_stay_inside_the_destination(self):
+        root = self.dest.resolve()
+        self.assertEqual(census_tool._export_path(root, "src/a.lean"), root / "src" / "a.lean")
+        for bad in ("../escape.txt", "/etc/passwd", ".git/config", "a/../../b", "a/./b", "a//b", ""):
+            with self.subTest(bad=bad):
+                with self.assertRaisesRegex(InputError, "EXPORT_PATH_INVALID"):
+                    census_tool._export_path(root, bad)
+
+    def test_export_takes_committed_bytes_not_the_working_tree(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = make_repo(temp, "wt", {"kept.txt": b"committed\n"})
+            (repo / "kept.txt").write_bytes(b"edited in the working tree\n")
+            (repo / "untracked.py").write_bytes(b"print('never exported')\n")
+            export_tree(repo, list_tree(repo)[0], self.dest)
+            self.assertEqual(self.exported(), {"kept.txt": b"committed\n"})
+
+    def test_export_refusals(self):
+        commit = list_tree(self.alpha)[0]
+        with self.assertRaisesRegex(InputError, "EXPORT_BLOB_UNAVAILABLE"):
+            export_tree(self.alpha, commit, self.dest, max_blob_bytes=CAP)
+        for child in sorted(self.dest.rglob("*"), reverse=True):
+            child.unlink() if child.is_file() else child.rmdir()
+        with self.assertRaisesRegex(InputError, "EXPORT_TOO_LARGE"):
+            export_tree(self.alpha, commit, self.dest, max_total_bytes=10)
+        (self.dest / "stale.txt").write_bytes(b"x")
+        with self.assertRaisesRegex(InputError, "EXPORT_DESTINATION_INVALID"):
+            export_tree(self.alpha, commit, self.dest)
+        link = self.dest.parent / "link"
+        os.symlink(self.dest, link)
+        for target in (link, self.dest.parent / "absent", "not-a-path"):
+            with self.subTest(target=str(target)):
+                with self.assertRaisesRegex(InputError, "EXPORT_DESTINATION_INVALID"):
+                    export_tree(self.alpha, commit, target)
+
+
+class CliVerifyTests(_Repos):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.out = Path(temp.name)
+        self.policy = self.out / "policy.json"
+        self.policy.write_text(json.dumps({"census": section(alpha_policy(), beta_policy())}))
+        self.checkouts = ["--checkout", f"{ALPHA}={self.alpha}", "--checkout", f"{BETA}={self.beta}"]
+
+    def run_main(self, argv):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            code = main([str(a) for a in argv])
+        lines = buffer.getvalue().strip().splitlines()
+        self.assertEqual(len(lines), 1)
+        return code, json.loads(lines[0])
+
+    def test_verify_rederives_an_honest_census_and_refuses_a_forged_one(self):
+        census = self.out / "census.json"
+        code, _ = self.run_main(["--policy", self.policy, *self.checkouts, "--output", census])
+        self.assertEqual(code, 2)
+        code, summary = self.run_main(["--policy", self.policy, *self.checkouts, "--verify", census])
+        self.assertEqual((code, summary["state"], summary["repositories_rederived"]),
+                         (0, "REDERIVED_EQUAL", 2))
+        # Re-derivation says the report is faithful; the census's own state stays what it was.
+        self.assertEqual(summary["census_state"], "PARTIAL")
+        self.assertEqual(summary["census_sha256"], hashlib.sha256(census.read_bytes()).hexdigest())
+        forged = json.loads(census.read_bytes())
+        CensusForgeryTests.drop_file(forged, "src/b.py")
+        forged_path = self.out / "forged.json"
+        forged_path.write_text(json.dumps(forged))
+        code, summary = self.run_main(["--policy", self.policy, *self.checkouts, "--verify", forged_path])
+        self.assertEqual((code, summary["state"], summary["code"]),
+                         (3, "UNAVAILABLE", "CENSUS_REDERIVED_COUNTS_MISMATCH"))
+        other = self.out / "other-policy.json"
+        other.write_text(json.dumps({"census": section(alpha_policy(), beta_policy())}, indent=1))
+        code, summary = self.run_main(["--policy", other, *self.checkouts, "--verify", census])
+        self.assertEqual((code, summary["code"]), (3, "CENSUS_INPUTS_DIFFER"))
+
+
+class ContractFormatTests(TestCase):
+    def test_family_map_is_serialised_like_every_contract_and_pinned_to_lf(self):
+        path = ROOT / "governance/database_contracts/braid_family_map_v1.json"
+        raw = path.read_bytes()
+        self.assertEqual(raw, (json.dumps(json.loads(raw), indent=2, ensure_ascii=True) + "\n").encode())
+        rules = (ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines()
+        self.assertIn("/governance/database_contracts/*.json text eol=lf", rules)
+
+
+class ReplaceRefTests(TestCase):
+    """A planted refs/replace entry must not change what a listing or an export contains."""
+
+    def test_listing_and_export_ignore_replace_refs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            repo = make_repo(base, "replaced", {"src/a.py": b"TRUE = 1\n"})
+            (base / "planted.py").write_bytes(b"TRUE = 0\n")
+            planted = git(repo, "hash-object", "-w", str(base / "planted.py"),
+                          home=base).strip().decode()
+            original = git(repo, "rev-parse", "HEAD:src/a.py", home=base).strip().decode()
+            git(repo, "replace", original, planted, home=base)
+            commit = git(repo, "rev-parse", "HEAD", home=base).strip().decode()
+            rows = census_tool._ls_tree(repo, commit)
+            self.assertEqual([r[2] for r in rows if r[4] == "src/a.py"], [original])
+            out = base / "export"
+            out.mkdir()
+            census_tool.export_tree(repo, commit, out, max_blob_bytes=CAP, max_total_bytes=1 << 20)
+            self.assertEqual((out / "src/a.py").read_bytes(), b"TRUE = 1\n")
 
 
 if __name__ == "__main__":
