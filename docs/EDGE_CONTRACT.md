@@ -100,6 +100,40 @@ Preserve the retired standalone Hatun HF publisher architecture documented
 in `hatun-mcp/docs/HATUN_SURFACE_CONTRACT.md`; do not recreate it to
 hide the edge failure.
 
+## Hatun MCP readiness is not liveness (2026-11-19)
+
+The Cloudflare 1033 tunnel error recovered at approximately 08:35 UTC,
+but independent read-only live checks at 08:37 UTC found
+`mcp.a-11-oy.com/healthz` **200** (`chain_verified=true`,
+`signer_mode=ECDSA-P256`) while `/readyz` remained **503**,
+`status=not_ready`, `ready=false`. Its reported checks were
+`receipt_chain=VERIFIED`, `signer=CONFIGURED`,
+**`authentication=UNAVAILABLE`**.
+
+`hatun-mcp/hatun_mcp/server_http.py` intentionally separates liveness
+from readiness. Accordingly, the unpaid edge contract adds the explicit
+`mcp-readyz` GET with `accept: [ok]` (2xx only). In addition to HTTP
+2xx, the checker requires a bounded JSON readiness declaration from the
+exact public Hatun route: `service=hatun-mcp`,
+`status=ready`, `ready=true`, `signer_mode=ECDSA-P256`, and
+`checks.receipt_chain=VERIFIED`, `checks.signer=CONFIGURED`,
+`checks.authentication=CONFIGURED`. An HTTP 200 carrying
+`ready=false` or unavailable auth is **FAIL**. A 401/403 is **FAIL**
+for this route despite being valid on some other free endpoints.
+No arbitrary untrusted JSON values are printed in failure messages.
+
+**Proof boundary:** This is only a self-reported runtime readiness
+declaration under a no-credential GET. It does not prove that an authorized
+operator can authenticate, that a governed MCP call succeeds, or that
+the deployed binary matches GitHub protected main. A live
+`/api/build-info` read on Nov 19 reported revision
+`97bcf6b49ab7dcd78aaeae79a4a690e631f54836`; protected
+`szl-holdings/hatun-mcp/main` was
+`1cec84742e07c151a34c329ae2fb50dd5f87c7ab` — **six commits ahead**.
+Deploying/updating the origin or injecting operator authentication requires
+the actual authorized source/deployment owner and independent signed evidence.
+No historical publisher may be revived to bypass this gate.
+
 ## Requests
 
 - One request per declared method. GET everywhere; POST as well on the paid

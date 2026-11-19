@@ -190,6 +190,14 @@ checks:
     methods: [GET]
     evidence: "hatun-mcp hatun_mcp/server_http.py route /healthz (outside the /mcp auth middleware); MONETIZATION_REPORT 4.5.1."
     note: "2026-11-14: 502 while the MCP cloudflared tunnel is offline; see the mcp-root note."
+  - id: mcp-readyz
+    class: free
+    host: mcp.a-11-oy.com
+    path: /readyz
+    methods: [GET]
+    accept: [ok]
+    evidence: "hatun-mcp/server_http.py /readyz checks chain, ECDSA-P256 signer and operator auth; observed 2026-11-19 08:37Z 503 not_ready, authentication UNAVAILABLE."
+    note: "This is an independent runtime-readiness gate, stricter than /healthz; never admit a 401/403 origin refusal or 2xx body with ready=false as healthy."
   - id: mcp-pubkey
     class: free
     host: mcp.a-11-oy.com
