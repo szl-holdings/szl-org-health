@@ -711,6 +711,9 @@ def _remove_work(work: Path) -> None:
         if link.is_symlink():
             link.unlink()
     except OSError:
+        # Deliberately not raised: the is_symlink() re-check below refuses to
+        # rmtree while the cache link still exists, so the shared dependency
+        # cache can never be deleted through it.
         pass
     if link.is_symlink():
         return
@@ -881,8 +884,8 @@ def _build(section, commit, at, *, work, checkout, packages, lean_files, shape, 
             judged[name] = (_olean_state(library, name, since), "ON_REQUEST_BUILD_FAILED")
     alone = {}
     for path in standalone:
-        alone[path], _text, _since = step("standalone_" + sha256_hex(path.encode())[:12],
-                                          ["lake", "env", "lean", "./" + path])
+        alone[path] = step("standalone_" + sha256_hex(path.encode())[:12],
+                           ["lake", "env", "lean", "./" + path])[0]
     errors, sorries = parse_logs(logs, _prefixes(export, checkout))
 
     files = []
