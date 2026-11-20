@@ -97,6 +97,12 @@ def evaluate(snapshot: dict[str, Any], *, scope: str, source_revision: str) -> d
     _require(isinstance(rows, list) and type(models.get("count")) is int
              and models["count"] == len(rows), "MODEL_DENOMINATOR_MISMATCH")
     _require(len(rows) <= 2000, "MODEL_ITEM_BUDGET")
+    # A public census must not silently count private or unverifiable model rows.
+    # Classification as UNKNOWN would still reveal their presence in aggregates.
+    if scope == "public" and any(
+        isinstance(item, dict) and item.get("private") is not False for item in rows
+    ):
+        raise ProofHold("PUBLIC_SCOPE_VISIBILITY_UNPROVEN")
     seen: set[str] = set()
     counts: Counter[str] = Counter()
     reasons: Counter[str] = Counter()

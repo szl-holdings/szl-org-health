@@ -102,11 +102,32 @@ class ModelProofAxesTests(unittest.TestCase):
         self.assertNotIn('NO_WEIGHT_FILE_OBSERVED', r['status_counts'])
 
     def test_public_private_visibility_is_not_proven(self):
-        r = self.evaluate(row(private=True))
-        self.assertEqual(r['status_counts'], {'UNKNOWN': 1})
+        for value in (True, None, 'unknown'):
+            with self.subTest(private=value), self.assertRaisesRegex(
+                ProofHold, 'PUBLIC_SCOPE_VISIBILITY_UNPROVEN'
+            ):
+                self.evaluate(row(private=value))
         r2 = self.evaluate(row(private=True), scope='authenticated')
         self.assertEqual(r2['status_counts'], {'NO_WEIGHT_FILE_OBSERVED': 1})
         self.assertEqual(r2['scope'], 'authenticated')
+
+    def test_private_row_never_leaks_via_public_cli_or_receipt(self):
+        import io
+        import json
+        from contextlib import redirect_stdout
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / 'census.json'
+            dst = Path(tmp) / 'receipt.json'
+            src.write_text(json.dumps(snap(row('PRIVATE_CANARY', private=True))), encoding='utf-8')
+            captured = io.StringIO()
+            with redirect_stdout(captured):
+                code = main(['--snapshot', str(src), '--source-revision', SHA,
+                             '--scope', 'public', '--private-receipt', str(dst)])
+            self.assertEqual(code, 78)
+            self.assertFalse(dst.exists())
+            self.assertEqual(json.loads(captured.getvalue())['reason'],
+                             'PUBLIC_SCOPE_VISIBILITY_UNPROVEN')
+            self.assertNotIn('PRIVATE_CANARY', captured.getvalue())
 
     def test_duplicate_ids_hold_without_a_success_report(self):
         with self.assertRaisesRegex(ProofHold, 'DUPLICATE_MODEL_ID'):
