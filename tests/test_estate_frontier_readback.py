@@ -111,6 +111,32 @@ class EstateReadbackTests(unittest.TestCase):
         self.assertEqual(edge["payment_settlement"], "UNVERIFIED")
         self.assertEqual([method for url, method in calls if url == mcp], ["HEAD"])
 
+    def test_mcp_health_200_readyz_503_is_not_release_or_payment(self):
+        """Tunnel reachability must not promote an authentication-unavailable origin."""
+        health = "https://mcp.a-11-oy.com/healthz"
+        ready = "https://mcp.a-11-oy.com/readyz"
+        calls = []
+
+        def fake(url, method):
+            calls.append((url, method))
+            if url == health:
+                return 200
+            if url == ready:
+                return 503
+            return 402 if url.startswith("https://inference.") else 200
+
+        links = module.probe_fixed_links(fake)
+        selected = {item["url"]: item for item in links if item["url"] in (health, ready)}
+        self.assertEqual(set(selected), {health, ready})
+        self.assertEqual(selected[health]["http_status"], 200)
+        self.assertEqual(selected[ready]["http_status"], 503)
+        for item in selected.values():
+            self.assertEqual(item["method"], "HEAD")
+            self.assertEqual(item["transport"], "OBSERVED")
+            self.assertEqual(item["release_readiness"], "UNVERIFIED")
+            self.assertEqual(item["payment_settlement"], "UNVERIFIED")
+        self.assertEqual([method for url, method in calls if url in selected], ["HEAD", "HEAD"])
+
     def test_head_405_source_identity_only_get_fallback(self):
         calls = []
         def probe(url, method):
