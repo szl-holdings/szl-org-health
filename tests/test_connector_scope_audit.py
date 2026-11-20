@@ -143,9 +143,9 @@ class CredentialScopeTests(unittest.TestCase):
             out = path / "receipt.json"
             original = b"prior-append-only-evidence\n"
             out.write_bytes(original)
-            self.assertEqual(main(["--cli", str(path / "cli.json"),
-                                   "--app", str(path / "app.json"),
-                                   "--output", str(out)]), 2)
+            self.assertEqual(
+                main(["--cli", str(path / "cli.json"), "--app", str(path / "app.json"), "--output", str(out)]), 2
+            )
             self.assertEqual(out.read_bytes(), original)
 
     def test_output_cannot_alias_private_input_or_symlink(self):
@@ -155,16 +155,14 @@ class CredentialScopeTests(unittest.TestCase):
             cli.write_text(json.dumps(manifest("github_cli", [repo("private", True)])))
             app.write_text(json.dumps(manifest("github_app", [repo("public")])))
             original = cli.read_bytes()
-            self.assertEqual(main(["--cli", str(cli), "--app", str(app),
-                                   "--output", str(cli)]), 2)
+            self.assertEqual(main(["--cli", str(cli), "--app", str(app), "--output", str(cli)]), 2)
             self.assertEqual(cli.read_bytes(), original)
             link = path / "link.json"
             try:
                 link.symlink_to(cli)
             except (OSError, NotImplementedError):
                 return  # Some Windows installations prohibit test symlinks
-            self.assertEqual(main(["--cli", str(cli), "--app", str(app),
-                                   "--output", str(link)]), 2)
+            self.assertEqual(main(["--cli", str(cli), "--app", str(app), "--output", str(link)]), 2)
             self.assertEqual(cli.read_bytes(), original)
 
     def test_cli_malformed_document_is_fail_closed(self):

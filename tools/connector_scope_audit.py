@@ -212,11 +212,18 @@ def main(argv=None):
         except OSError:
             write_error = "REPORT_WRITE_UNAVAILABLE"
     if write_error:
-        print(json.dumps({
-            "schema": SCHEMA, "state": "UNAVAILABLE",
-            "error_class": write_error, "enforcement_authorized": False,
-            "organization_complete": None,
-        }, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "schema": SCHEMA,
+                    "state": "UNAVAILABLE",
+                    "error_class": write_error,
+                    "enforcement_authorized": False,
+                    "organization_complete": None,
+                },
+                sort_keys=True,
+            )
+        )
         return 2
     print(json.dumps(report, sort_keys=True))
     return 0 if report["state"] == "CONSISTENT_VISIBLE_SETS_NOT_ORG_COMPLETENESS" else 1
