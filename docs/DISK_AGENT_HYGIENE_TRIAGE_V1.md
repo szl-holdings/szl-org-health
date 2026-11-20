@@ -28,3 +28,38 @@ The `approved-observations` path is an **example of a future authorized input**,
 ## Next safety decision
 
 Perform an owner-authorized **read-only evidence custody search** using exact historical receipt digests/sizes and existing approved roots, once those digests are independently sourced. Preserve the three unknown-owner scratch logs until their producer and purpose are verified. Do not alter services, restart agents, reclaim disk, or merge this tool without its normal CI and independent review. This module does not by itself resolve incident #387 or #382.
+
+## Proposed Windows stdin sensor (review required; not installed)
+
+`tools/windows_disk_agent_hygiene_observer.ps1` takes two read-only, time-spaced
+C: readings and collects only name/PID/working-set process metadata plus file
+size/existence of three specifically allowlisted scratch logs. It deliberately
+marks historical custody as `UNAVAILABLE`: finding a newer bridge preflight
+receipt is **not** authentication of the missing November 17 originals. Cache
+growth is `UNOBSERVED`, not a guessed zero. No process commands, dump bytes,
+profile cookies, private keys or model weights are accessed.
+
+After source review, on authorized BETTERWITHAGE with an approved, source-pinned
+checkout (none was verified at `C:\SZL\repos\szl-org-health` during the
+November 20 check), operators can test a one-shot in-memory pipeline:
+
+```powershell
+$payload = & powershell.exe -NoProfile -NonInteractive -File tools\windows_disk_agent_hygiene_observer.ps1
+if ($LASTEXITCODE -ne 0) { throw 'SENSOR_UNAVAILABLE' }
+$payload | python -B tools\disk_agent_hygiene_gate.py --stdin
+if ($LASTEXITCODE -ne 0) { throw 'TRIAGE_ALERT_OR_HOLD' }
+```
+
+`--stdin` is an additive bounded source to the existing strict classifier:
+64 KiB maximum, identical duplicate-key/schema/privacy rejection, no file
+creation, and exit 2 for a confirmed warning, 3 for malformed/unavailable
+input. PowerShell observes no private command-line or task arguments. A blank
+or failed sensor must never be interpreted as a healthy observation. When
+executing the pipeline in production, ensure the collector's exit code is
+checked separately (PowerShell pipelines can mask upstream failures).
+
+The pipeline is NOT a watchdog installation, receipt signature, independently
+verified trend or completed custody recovery. Source CI alone cannot prove the
+runtime is installed. Do not enable disabled historic Windows disk-steward or
+scratch-cleanup tasks: their safe execution has not been independently proven.
+No scheduling/installation changes are contained in this candidate PR.
