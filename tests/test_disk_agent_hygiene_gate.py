@@ -279,7 +279,7 @@ class TriageTests(unittest.TestCase):
                   'windows_disk_agent_hygiene_observer.ps1').read_text()
         for marker in ('Get-CimInstance Win32_LogicalDisk', 'Get-Process',
                        'ConvertTo-Json', 'owner_state', "'UNAVAILABLE'",
-                       'WriteLine($json)'):
+                       'Write-Output $json'):
             self.assertIn(marker, source)
         for forbidden in ('Get-WmiObject Win32_Process',
                           'Get-CimInstance Win32_Process', 'Stop-Process',

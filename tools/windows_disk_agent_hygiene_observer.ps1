@@ -35,8 +35,7 @@ try {
     }
 
     $all = @(Get-Process -ErrorAction Stop)
-    # Name, PID and working-set only; never read CommandLine, Path,
-    # Environment, owner identity, process modules, or arguments.
+    # Name, PID and working-set only; never inspect private arguments.
     $names = '^(?:python.*|node|claude.*|llama-server|ollama|git|msedge|Docker Desktop|cloudflared|powershell|pwsh|cargo|rustc|uv|pytest|kimi|mistral)$'
     $observed = @($all | Where-Object { $_.ProcessName -match $names })
     if ($observed.Count -gt 256) {
@@ -84,7 +83,7 @@ try {
         cache_growth = [ordered]@{ state = 'UNOBSERVED' }
     }
     $json = ConvertTo-Json -InputObject $payload -Depth 8 -Compress
-    [Console]::Out.WriteLine($json)
+    Write-Output $json
     exit 0
 } catch {
     # Suppress untrusted exception text: no paths or sensitive process data.
