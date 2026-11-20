@@ -46,7 +46,16 @@ def _reject_constant(_: str) -> object:
 def parse(raw: bytes) -> object:
     if not isinstance(raw, bytes) or not raw or len(raw) > MAX_BYTES:
         raise ValueError("empty, oversize, or non-byte input")
-    return json.loads(raw.decode("utf-8", "strict"), object_pairs_hook=_strict_object, parse_constant=_reject_constant)
+    try:
+        return json.loads(
+            raw.decode("utf-8", "strict"),
+            object_pairs_hook=_strict_object,
+            parse_constant=_reject_constant,
+            parse_float=_reject_constant,
+            parse_int=_reject_constant,
+        )
+    except RecursionError:
+        raise ValueError("nesting limit exceeded") from None
 
 
 def _exact_keys(obj: object, keys: set[str]) -> bool:
@@ -94,7 +103,8 @@ def _date(value: object) -> datetime | None:
 
 def evaluate(candidate: object, *, now: datetime | None = None) -> dict[str, object]:
     """Classify *declarations* only. No output of this function grants admission."""
-    now = now or datetime.now(UTC)
+    if now is None:
+        now = datetime.now(UTC)
     if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() != timedelta(0):
         raise ValueError("now must be timezone-aware UTC")
     problems: list[str] = []
