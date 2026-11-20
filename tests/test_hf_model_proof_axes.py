@@ -60,6 +60,34 @@ class ModelProofAxesTests(unittest.TestCase):
         self.assertEqual(r['status_counts'], {'NON_TRAINING_ARTIFACT': 1})
         self.assertEqual(r['training_verified_count'], 0)
 
+    def test_non_training_contract_cannot_hide_weight_evidence(self):
+        suspicious = row(contract='huggingface-kernel',
+                         weight_files_observed=['adapter_model.safetensors'],
+                         weight_state='weights-present',
+                         artifact_state='artifact-present')
+        result = self.evaluate(suspicious)
+        self.assertEqual(result['status_counts'], {'UNKNOWN': 1})
+        self.assertEqual(result['reason_counts'],
+                         {'NON_TRAINING_CONTRACT_WEIGHT_CONTRADICTION': 1})
+        self.assertEqual(result['training_verified_count'], 0)
+        self.assertFalse(result['training_and_release_authorized'])
+
+    def test_non_training_contract_requires_observed_empty_weights(self):
+        for changes, reason in (
+            ({'weight_files_observed': None, 'weight_state': 'unknown'},
+             'NON_TRAINING_CONTRACT_WEIGHT_UNOBSERVED'),
+            ({'weight_files_observed': ['model.safetensors']},
+             'NON_TRAINING_CONTRACT_WEIGHT_CONTRADICTION'),
+            ({'weight_state': 'unknown'},
+             'NON_TRAINING_CONTRACT_WEIGHT_CONTRADICTION'),
+        ):
+            with self.subTest(changes=changes):
+                result = self.evaluate(row(contract='huggingface-kernel',
+                                           artifact_state='not-required-by-contract',
+                                           **changes))
+                self.assertEqual(result['status_counts'], {'UNKNOWN': 1})
+                self.assertEqual(result['reason_counts'], {reason: 1})
+
     def test_missing_license_metadata_is_independent_gate(self):
         r = self.evaluate(row(weight_files_observed=['model.safetensors'],
                               weight_state='weights-present',
