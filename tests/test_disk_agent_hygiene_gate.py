@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 import io
+from unittest import mock
+from types import SimpleNamespace
 import json
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -225,6 +227,67 @@ class TriageTests(unittest.TestCase):
             r=json.loads(o.getvalue())
             self.assertFalse(r['cleanup_authorized'])
             self.assertFalse(r['command_lines_read'])
+
+
+    def test_stdin_json_alert_without_persistent_sensor_file(self):
+        example_data = example()
+        example_data['scratch'] = [{'id': 'scan_log', 'exists': True,
+                                   'size_bytes': 1, 'owner_state': 'UNVERIFIED'}]
+        raw = json.dumps(example_data).encode('utf-8')
+        out = io.StringIO()
+        with mock.patch.object(gate.sys, 'stdin', SimpleNamespace(buffer=io.BytesIO(raw))):
+            with redirect_stdout(out):
+                code = gate.main(['--stdin'])
+        self.assertEqual(code, 2)
+        report = json.loads(out.getvalue())
+        self.assertEqual(report['baseline_state'], 'UNAVAILABLE')
+        self.assertIsNone(report['historical_drop_bytes'])
+        self.assertIn('SCRATCH_OWNER_UNVERIFIED', report['reasons'])
+        self.assertFalse(report['cleanup_authorized'])
+
+    def test_stdin_empty_holds(self):
+        out = io.StringIO()
+        with mock.patch.object(gate.sys, 'stdin', SimpleNamespace(buffer=io.BytesIO(b''))):
+            with redirect_stdout(out):
+                code = gate.main(['--stdin'])
+        self.assertEqual(code, 3)
+        self.assertEqual(json.loads(out.getvalue())['status'],
+                         'HOLD_INVALID_OR_UNAVAILABLE')
+
+    def test_stdin_oversize_holds_without_echoing_content(self):
+        raw = b'X' * (gate.MAX_INPUT_BYTES + 1)
+        out = io.StringIO()
+        with mock.patch.object(gate.sys, 'stdin', SimpleNamespace(buffer=io.BytesIO(raw))):
+            with redirect_stdout(out):
+                code = gate.main(['--stdin'])
+        self.assertEqual(code, 3)
+        self.assertNotIn('X'*100, out.getvalue())
+
+    def test_stdin_process_command_line_payload_rejected(self):
+        data = example()
+        data['processes'][0]['command_line'] = 'token-or-private-command'
+        raw = json.dumps(data).encode('utf-8')
+        out = io.StringIO()
+        with mock.patch.object(gate.sys, 'stdin', SimpleNamespace(buffer=io.BytesIO(raw))):
+            with redirect_stdout(out):
+                code = gate.main(['--stdin'])
+        self.assertEqual(code, 3)
+        self.assertNotIn('token-or-private-command', out.getvalue())
+
+    def test_win_powershell_probe_is_read_only_metadata_only(self):
+        source = (Path(__file__).resolve().parents[1] / 'tools' /
+                  'windows_disk_agent_hygiene_observer.ps1').read_text()
+        for marker in ('Get-CimInstance Win32_LogicalDisk', 'Get-Process',
+                       'ConvertTo-Json', 'owner_state', "'UNAVAILABLE'",
+                       'WriteLine($json)'):
+            self.assertIn(marker, source)
+        for forbidden in ('Get-WmiObject Win32_Process',
+                          'Get-CimInstance Win32_Process', 'Stop-Process',
+                          'Remove-Item', 'Clear-RecycleBin', 'Unregister-ScheduledTask',
+                          'Invoke-WebRequest', 'Set-Content', 'Out-File',
+                          'Start-Process', 'Get-ChildItem -Recurse'):
+            self.assertNotIn(forbidden, source)
+        self.assertNotIn('Get-ScheduledTask', source)
 
 
 if __name__ == '__main__':
