@@ -113,6 +113,9 @@ def evaluate(snapshot: dict[str, Any], *, scope: str, source_revision: str) -> d
     _require(isinstance(rows, list) and type(models.get("count")) is int
              and models["count"] == len(rows), "MODEL_DENOMINATOR_MISMATCH")
     _require(len(rows) <= 2000, "MODEL_ITEM_BUDGET")
+    # A syntactically complete but empty census is not evidence that the
+    # model namespace was successfully enumerated.
+    _require(len(rows) > 0, "MODEL_CENSUS_EMPTY")
     # A public-scope report cannot aggregate private or unverified-visibility
     # model metadata; converting such a row to UNKNOWN still leaks counts.
     if scope == "public":
