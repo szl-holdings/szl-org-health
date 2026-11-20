@@ -3,11 +3,12 @@
 import json
 import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from tools.connector_scope_audit import InvalidManifest, compare, main
 
-TS = "2026-11-20T08:00:00+00:00"
+TS = datetime.now(UTC).isoformat()
 
 
 def manifest(source, repos, timestamp=TS):
@@ -50,10 +51,35 @@ class CredentialScopeTests(unittest.TestCase):
 
     def test_stale_comparison_is_unavailable_not_absence(self):
         left = manifest("github_cli", [repo("a")])
-        right = manifest("github_app", [repo("a")], "2026-11-20T07:00:00+00:00")
+        right = manifest("github_app", [repo("a")], (datetime.fromisoformat(TS) - timedelta(hours=1)).isoformat())
         r = compare(left, right)
         self.assertEqual(r["state"], "STALE_SNAPSHOT_UNAVAILABLE")
         self.assertEqual(r["snapshot_skew_seconds"], 3600)
+
+    def test_equally_old_snapshots_must_not_pass(self):
+        old = (datetime.fromisoformat(TS) - timedelta(days=2)).isoformat()
+        r = compare(
+            manifest("github_cli", [repo("same")], old),
+            manifest("github_app", [repo("same")], old),
+        )
+        self.assertEqual(r["snapshot_skew_seconds"], 0)
+        self.assertEqual(r["state"], "STALE_SNAPSHOT_UNAVAILABLE")
+
+    def test_future_timestamps_must_not_pass(self):
+        future = (datetime.fromisoformat(TS) + timedelta(hours=2)).isoformat()
+        r = compare(
+            manifest("github_cli", [repo("same")], future),
+            manifest("github_app", [repo("same")], future),
+        )
+        self.assertEqual(r["state"], "STALE_SNAPSHOT_UNAVAILABLE")
+
+    def test_bad_age_limits_fail_closed(self):
+        left = manifest("github_cli", [repo("same")])
+        right = manifest("github_app", [repo("same")])
+        with self.assertRaises(ValueError):
+            compare(left, right, max_age_seconds=-1)
+        with self.assertRaises(ValueError):
+            compare(left, right, max_age_seconds=True)
 
     def test_metadata_divergence_counts_without_names(self):
         left = manifest("github_cli", [repo("archived", archived=True)])

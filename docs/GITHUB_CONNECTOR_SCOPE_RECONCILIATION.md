@@ -19,15 +19,20 @@ a private (boolean) field. Do not commit private input manifests.
 
     python tools/connector_scope_audit.py --cli private_cli_manifest.json --app private_app_manifest.json --output redacted_report.json
 
-Default inter-snapshot skew is 300 seconds. Larger values are diagnostic only,
-not a proof of contemporaneous view or release authority.
+Default inter-snapshot skew is 300 seconds, **and each snapshot must be
+no older than 900 seconds at comparison time**. A timestamp more than 60
+seconds into the future is also rejected. Two equally ancient snapshots
+must never be labeled consistent merely because their timestamps match.
+The CLI uses the actual UTC clock; an offline widened skew or age threshold
+is diagnostic only, not a proof of contemporaneous view or release authority.
 
 Outcome states:
 - CONSISTENT_VISIBLE_SETS_NOT_ORG_COMPLETENESS: equal observed sets, which
   does not prove entire-org access.
 - SCOPE_OR_INVENTORY_DIVERGENCE: unequal names, visibility, or archive status
   at comparable times; cause unknown (permissions, churn, propagation).
-- STALE_SNAPSHOT_UNAVAILABLE: timestamp skew exceeds accepted window.
+- STALE_SNAPSHOT_UNAVAILABLE: inter-snapshot skew, absolute age, or future clock
+  drift exceeds its accepted window.
 - UNAVAILABLE: invalid/duplicate/malformed, unknown source or flags, or empty
   inventory.
 

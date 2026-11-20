@@ -18,11 +18,13 @@ import hashlib
 import json
 import re
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 SCHEMA = "szl.github-credential-scope-comparison/v0"
 MAX_SKEW_SECONDS = 300
+MAX_AGE_SECONDS = 900
+MAX_FUTURE_SECONDS = 60
 _NAME = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 
 
@@ -87,10 +89,20 @@ def _normalize(manifest):
     return source, observed_at, normalized
 
 
-def compare(left, right, max_skew_seconds=MAX_SKEW_SECONDS):
-    """Diagnostic report contains counts ONLY, never repository names."""
-    if not isinstance(max_skew_seconds, int) or max_skew_seconds < 0:
+def compare(left, right, max_skew_seconds=MAX_SKEW_SECONDS, max_age_seconds=MAX_AGE_SECONDS, as_of=None):
+    """Diagnostic report contains counts ONLY, never repository names.
+
+    Require both source observations to be recent, not merely close together.
+    An explicit as_of is for deterministic tests and offline forensic replay;
+    it cannot authorize production, and is never emitted as a readiness claim.
+    """
+    if not isinstance(max_skew_seconds, int) or isinstance(max_skew_seconds, bool) or max_skew_seconds < 0:
         raise ValueError("invalid skew threshold")
+    if not isinstance(max_age_seconds, int) or isinstance(max_age_seconds, bool) or max_age_seconds < 0:
+        raise ValueError("invalid snapshot age threshold")
+    now = as_of if as_of is not None else datetime.now(UTC)
+    if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() != timedelta(0):
+        raise ValueError("as_of must be UTC aware")
     source_l, time_l, repos_l = _normalize(left)
     source_r, time_r, repos_r = _normalize(right)
     if source_l == source_r:
@@ -103,6 +115,8 @@ def compare(left, right, max_skew_seconds=MAX_SKEW_SECONDS):
     intersection = names_l & names_r
     metadata_diff = {n for n in intersection if repos_l[n] != repos_r[n]}
     skew = abs(int((time_l - time_r).total_seconds()))
+    ages = {source_l: int((now - time_l).total_seconds()), source_r: int((now - time_r).total_seconds())}
+    freshness_invalid = any(age > max_age_seconds or age < -MAX_FUTURE_SECONDS for age in ages.values())
 
     def counts(mapping):
         return {
@@ -119,7 +133,7 @@ def compare(left, right, max_skew_seconds=MAX_SKEW_SECONDS):
             "private": sum(mapping[n][0] == "private" for n in diff),
         }
 
-    if skew > max_skew_seconds:
+    if skew > max_skew_seconds or freshness_invalid:
         state = "STALE_SNAPSHOT_UNAVAILABLE"
     elif only_l or only_r or metadata_diff:
         state = "SCOPE_OR_INVENTORY_DIVERGENCE"
@@ -137,6 +151,9 @@ def compare(left, right, max_skew_seconds=MAX_SKEW_SECONDS):
         ),
         "snapshot_skew_seconds": skew,
         "max_allowed_skew_seconds": max_skew_seconds,
+        "max_allowed_age_seconds": max_age_seconds,
+        "max_future_clock_skew_seconds": MAX_FUTURE_SECONDS,
+        "observation_age_seconds": ages,
         "sources": {source_l: counts(repos_l), source_r: counts(repos_r)},
         "left_only": diff_counts(only_l, repos_l),
         "right_only": diff_counts(only_r, repos_r),
@@ -165,11 +182,12 @@ def main(argv=None):
     parser.add_argument("--app", required=True, help="local private GitHub App manifest")
     parser.add_argument("--output", required=True, help="redacted diagnostic report")
     parser.add_argument("--max-skew-seconds", type=int, default=MAX_SKEW_SECONDS)
+    parser.add_argument("--max-age-seconds", type=int, default=MAX_AGE_SECONDS)
     args = parser.parse_args(argv)
     try:
         cli, cli_hash = read_manifest(args.cli)
         app, app_hash = read_manifest(args.app)
-        report = compare(cli, app, max_skew_seconds=args.max_skew_seconds)
+        report = compare(cli, app, max_skew_seconds=args.max_skew_seconds, max_age_seconds=args.max_age_seconds)
         report["input_digests_sha256"] = {"github_cli": cli_hash, "github_app": app_hash}
     except (InvalidManifest, ValueError, OSError) as exc:
         report = {
