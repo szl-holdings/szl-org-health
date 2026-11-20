@@ -114,6 +114,12 @@ class ModelProofAxesTests(unittest.TestCase):
         with self.assertRaisesRegex(ProofHold, 'DUPLICATE_MODEL_ID'):
             self.evaluate(row(), row())
 
+    def test_empty_successful_snapshot_is_not_an_estate_census(self):
+        # An empty 0/0 count can self-consistently claim ok=True,
+        # partial=False. That must not become a complete namespace receipt.
+        with self.assertRaisesRegex(ProofHold, 'MODEL_CENSUS_EMPTY'):
+            self.evaluate()
+
     def test_count_and_organization_mismatch_are_holds(self):
         data = snap(row())
         data['huggingface']['assets']['models']['count'] = 100
