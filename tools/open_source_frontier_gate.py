@@ -5,12 +5,13 @@ independent review, source authentication, deployment or training authorization.
 
 No network, subprocess, filesystem mutations, provider tokens or model calls.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import json
 import re
 import sys
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
 SCHEMA = "szl.open_source_frontier_candidate.v1"
@@ -21,7 +22,7 @@ MAX_FUTURE_SKEW = timedelta(minutes=5)
 _REPO_PATH = re.compile(r"^/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$")
 _FULL_SHA = re.compile(r"(?:[a-f0-9]{40}|[a-f0-9]{64})\Z")
 _DIGEST = re.compile(r"[a-f0-9]{64}\Z")
-_LICENSE_PATH = re.compile(r"(?:LICENSE|LICENSE\.(?:md|txt)|COPYING|COPYING\.(?:md|txt))\Z", re.I)
+_LICENSE_PATH = re.compile(r"(?:LICENSE|LICENSE\.(?:md|txt)|COPYING|COPYING\.(?:md|txt))\Z", re.IGNORECASE)
 _PROPOSAL_APPROACHES = frozenset({"study_only", "dependency_proposal", "fork_proposal", "clean_room_proposal"})
 
 
@@ -45,8 +46,7 @@ def _reject_constant(_: str) -> object:
 def parse(raw: bytes) -> object:
     if not isinstance(raw, bytes) or not raw or len(raw) > MAX_BYTES:
         raise ValueError("empty, oversize, or non-byte input")
-    return json.loads(raw.decode("utf-8", "strict"), object_pairs_hook=_strict_object,
-                      parse_constant=_reject_constant)
+    return json.loads(raw.decode("utf-8", "strict"), object_pairs_hook=_strict_object, parse_constant=_reject_constant)
 
 
 def _exact_keys(obj: object, keys: set[str]) -> bool:
@@ -86,7 +86,7 @@ def _date(value: object) -> datetime | None:
     if type(value) is not str or not value.endswith("Z"):
         return None
     try:
-        d = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        d = datetime.fromisoformat(value)
         return d if d.utcoffset() == timedelta(0) else None
     except ValueError:
         return None
@@ -94,7 +94,7 @@ def _date(value: object) -> datetime | None:
 
 def evaluate(candidate: object, *, now: datetime | None = None) -> dict[str, object]:
     """Classify *declarations* only. No output of this function grants admission."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() != timedelta(0):
         raise ValueError("now must be timezone-aware UTC")
     problems: list[str] = []
@@ -133,9 +133,8 @@ def evaluate(candidate: object, *, now: datetime | None = None) -> dict[str, obj
         problems.append("INVALID_OBSERVATION_TIME")
     elif observed - now > MAX_FUTURE_SKEW or now - observed > MAX_EVIDENCE_AGE:
         problems.append("STALE_OR_FUTURE_EVIDENCE")
-    if (
-        not _valid_str(proposal["szl_component"], 100)
-        or not re.fullmatch(r"[a-z][a-z0-9-]{1,63}", str(proposal["szl_component"]))
+    if not _valid_str(proposal["szl_component"], 100) or not re.fullmatch(
+        r"[a-z][a-z0-9-]{1,63}", str(proposal["szl_component"])
     ):
         problems.append("INVALID_COMPONENT")
     if type(proposal["approach"]) is not str or proposal["approach"] not in _PROPOSAL_APPROACHES:
