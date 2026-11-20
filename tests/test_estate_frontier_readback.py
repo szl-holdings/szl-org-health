@@ -88,6 +88,55 @@ class EstateReadbackTests(unittest.TestCase):
         self.assertTrue(all(r["payment_settlement"] == "UNVERIFIED" for r in links))
         self.assertTrue(all(r["release_readiness"] == "UNVERIFIED" for r in links))
 
+
+    def test_mcp_edge_530_is_retained_without_claiming_origin_or_payment(self):
+        """An anonymous edge 530 must be visible without a production-down inference."""
+        mcp = "https://mcp.a-11-oy.com/healthz"
+        self.assertIn(mcp, module.FIXED_URLS)
+        calls = []
+        def fake(url, method):
+            calls.append((url, method))
+            if url == mcp:
+                return 530
+            return 402 if url.startswith("https://inference.") else 200
+        links = module.probe_fixed_links(fake)
+        result = [x for x in links if x["url"] == mcp]
+        self.assertEqual(len(result), 1)
+        edge = result[0]
+        self.assertEqual(edge["method"], "HEAD")
+        self.assertEqual(edge["head_http_status"], 530)
+        self.assertEqual(edge["http_status"], 530)
+        self.assertEqual(edge["transport"], "OBSERVED")
+        self.assertEqual(edge["release_readiness"], "UNVERIFIED")
+        self.assertEqual(edge["payment_settlement"], "UNVERIFIED")
+        self.assertEqual([method for url, method in calls if url == mcp], ["HEAD"])
+
+    def test_mcp_health_200_readyz_503_is_not_release_or_payment(self):
+        """Tunnel reachability must not promote an authentication-unavailable origin."""
+        health = "https://mcp.a-11-oy.com/healthz"
+        ready = "https://mcp.a-11-oy.com/readyz"
+        calls = []
+
+        def fake(url, method):
+            calls.append((url, method))
+            if url == health:
+                return 200
+            if url == ready:
+                return 503
+            return 402 if url.startswith("https://inference.") else 200
+
+        links = module.probe_fixed_links(fake)
+        selected = {item["url"]: item for item in links if item["url"] in (health, ready)}
+        self.assertEqual(set(selected), {health, ready})
+        self.assertEqual(selected[health]["http_status"], 200)
+        self.assertEqual(selected[ready]["http_status"], 503)
+        for item in selected.values():
+            self.assertEqual(item["method"], "HEAD")
+            self.assertEqual(item["transport"], "OBSERVED")
+            self.assertEqual(item["release_readiness"], "UNVERIFIED")
+            self.assertEqual(item["payment_settlement"], "UNVERIFIED")
+        self.assertEqual([method for url, method in calls if url in selected], ["HEAD", "HEAD"])
+
     def test_head_405_source_identity_only_get_fallback(self):
         calls = []
         def probe(url, method):
