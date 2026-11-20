@@ -54,13 +54,13 @@ def blob(data: bytes = LICENSE_BYTES) -> dict:
 
 def fixtures(c: dict | None = None, *, obj: dict | None = None) -> tuple[dict, dict]:
     c = c or candidate()
-    return {"sha": c["upstream"]["commit_sha"]}, obj if obj is not None else blob()
+    return {"sha": c.get("upstream", {}).get("commit_sha", PIN)}, obj if obj is not None else blob()
 
 
 class WitnessTests(unittest.TestCase):
     def run_case(self, c=None, *, resolved=None, source=None, error=None):
         c = copy.deepcopy(c if c is not None else candidate())
-        resolved = resolved if resolved is not None else {"sha": c["upstream"]["commit_sha"]}
+        resolved = resolved if resolved is not None else {"sha": c.get("upstream", {}).get("commit_sha", PIN)}
         source = source if source is not None else blob()
         called = []
 
@@ -79,8 +79,15 @@ class WitnessTests(unittest.TestCase):
     def assert_hold(self, result, code):
         self.assertEqual(result["state"], "HOLD")
         self.assertEqual(result["reason"], code)
-        for field in ("rights_review_completed", "dependency_rights_verified", "signer_authenticated",
-                      "code_copy_authorized", "training_authorized", "merge_authorized", "deployment_authorized"):
+        for field in (
+            "rights_review_completed",
+            "dependency_rights_verified",
+            "signer_authenticated",
+            "code_copy_authorized",
+            "training_authorized",
+            "merge_authorized",
+            "deployment_authorized",
+        ):
             self.assertIs(result[field], False, field)
 
     def test_exact_commit_and_blob_matching_only_research(self):
@@ -241,9 +248,11 @@ class WitnessTests(unittest.TestCase):
             def open(self, *_args, **_kwargs):
                 return Response()
 
-        with patch.object(witness.urllib.request, "build_opener", return_value=Opener()):
-            with self.assertRaisesRegex(witness.WitnessError, "PROVIDER_RESPONSE_IDENTITY_INVALID"):
-                witness.fetch_public_json(COMMIT_URL)
+        with (
+            patch.object(witness.urllib.request, "build_opener", return_value=Opener()),
+            self.assertRaisesRegex(witness.WitnessError, "PROVIDER_RESPONSE_IDENTITY_INVALID"),
+        ):
+            witness.fetch_public_json(COMMIT_URL)
 
     def test_non200_response_rejected(self):
         class Response:
@@ -262,9 +271,11 @@ class WitnessTests(unittest.TestCase):
             def open(self, *_args, **_kwargs):
                 return Response()
 
-        with patch.object(witness.urllib.request, "build_opener", return_value=Opener()):
-            with self.assertRaisesRegex(witness.WitnessError, "PROVIDER_RESPONSE_IDENTITY_INVALID"):
-                witness.fetch_public_json(COMMIT_URL)
+        with (
+            patch.object(witness.urllib.request, "build_opener", return_value=Opener()),
+            self.assertRaisesRegex(witness.WitnessError, "PROVIDER_RESPONSE_IDENTITY_INVALID"),
+        ):
+            witness.fetch_public_json(COMMIT_URL)
 
     def test_null_candidate_never_fetches(self):
         result, called = self.run_case(c={})
