@@ -49,6 +49,13 @@ def _status(row: dict[str, Any], scope: str) -> tuple[str, str]:
     if not isinstance(contract, str) or not contract:
         return "UNKNOWN", "ARTIFACT_CONTRACT_UNAVAILABLE"
     if contract in NON_TRAINING_CONTRACTS or contract.startswith("kernel-"):
+        # A non-training label cannot bypass contradictory or unobserved
+        # model-weight evidence. This is classification, not model execution.
+        files = row.get("weight_files_observed")
+        if not isinstance(files, list) or any(not isinstance(x, str) for x in files):
+            return "UNKNOWN", "NON_TRAINING_CONTRACT_WEIGHT_UNOBSERVED"
+        if files or row.get("weight_state") != "no-weight-file-observed":
+            return "UNKNOWN", "NON_TRAINING_CONTRACT_WEIGHT_CONTRADICTION"
         return "NON_TRAINING_ARTIFACT", "MODEL_TRAINING_NOT_APPLICABLE"
     files = row.get("weight_files_observed")
     if not isinstance(files, list) or any(not isinstance(x, str) for x in files):
