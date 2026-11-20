@@ -102,8 +102,10 @@ class ModelProofAxesTests(unittest.TestCase):
         self.assertNotIn('NO_WEIGHT_FILE_OBSERVED', r['status_counts'])
 
     def test_public_private_visibility_is_not_proven(self):
-        r = self.evaluate(row(private=True))
-        self.assertEqual(r['status_counts'], {'UNKNOWN': 1})
+        for private in (True, None, "unknown"):
+            with self.subTest(private=private):
+                with self.assertRaisesRegex(ProofHold, 'PUBLIC_SCOPE_VISIBILITY_UNVERIFIED'):
+                    self.evaluate(row(private=private))
         r2 = self.evaluate(row(private=True), scope='authenticated')
         self.assertEqual(r2['status_counts'], {'NO_WEIGHT_FILE_OBSERVED': 1})
         self.assertEqual(r2['scope'], 'authenticated')
@@ -111,6 +113,12 @@ class ModelProofAxesTests(unittest.TestCase):
     def test_duplicate_ids_hold_without_a_success_report(self):
         with self.assertRaisesRegex(ProofHold, 'DUPLICATE_MODEL_ID'):
             self.evaluate(row(), row())
+
+    def test_empty_successful_snapshot_is_not_an_estate_census(self):
+        # An empty 0/0 count can self-consistently claim ok=True,
+        # partial=False. That must not become a complete namespace receipt.
+        with self.assertRaisesRegex(ProofHold, 'MODEL_CENSUS_EMPTY'):
+            self.evaluate()
 
     def test_count_and_organization_mismatch_are_holds(self):
         data = snap(row())
@@ -136,6 +144,55 @@ class ModelProofAxesTests(unittest.TestCase):
                               weight_state='weights-present', artifact_state='artifact-present'),
                           scope='authenticated')
         self.assertFalse(r['training_and_release_authorized'])
+
+    def test_zero_revisions_cannot_be_counted_as_model_artifact_proof(self):
+        suspicious = row(sha='0' * 40,
+                         weight_files_observed=['model.safetensors'],
+                         weight_state='weights-present',
+                         artifact_state='artifact-present')
+        report = self.evaluate(suspicious)
+        self.assertEqual(report['status_counts'], {'UNKNOWN': 1})
+        self.assertEqual(report['per_repository_private'][0]['model_revision'], None)
+        self.assertEqual(report['training_verified_count'], 0)
+        with self.assertRaisesRegex(ProofHold, 'SOURCE_REVISION_UNAVAILABLE'):
+            evaluate(snap(row()), scope='public', source_revision='0' * 40)
+
+    def test_duplicate_json_keys_fail_before_any_aggregate_stdout(self):
+        import io
+        from contextlib import redirect_stdout
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'duplicate.json'
+            source.write_text(
+                '{"huggingface":{"organization":"SZLHOLDINGS",'
+                '"assets":{"models":{"ok":false,"ok":true,'
+                '"partial":false,"count":0,"items":[]}}}}',
+                encoding='utf-8',
+            )
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                exit_code = main([
+                    '--snapshot', str(source), '--scope', 'public',
+                    '--source-revision', SHA,
+                ])
+            self.assertEqual(exit_code, 78)
+            self.assertIn('DUPLICATE_JSON_KEY', buffer.getvalue())
+            self.assertNotIn('"repository_count"', buffer.getvalue())
+
+    def test_actual_snapshot_read_rejects_oversized_input(self):
+        import io
+        from contextlib import redirect_stdout
+        from tools.hf_model_proof_axes import MAX_INPUT_BYTES
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'oversized.json'
+            # Does not require network or any real model content.
+            with source.open('wb') as out:
+                out.write(b'x' * (MAX_INPUT_BYTES + 2))
+            capture = io.StringIO()
+            with redirect_stdout(capture):
+                code = main(['--snapshot', str(source), '--scope', 'public',
+                             '--source-revision', SHA])
+            self.assertEqual(code, 78)
+            self.assertIn('SNAPSHOT_BYTE_BUDGET', capture.getvalue())
 
     def test_private_receipt_is_exclusive(self):
         import json
