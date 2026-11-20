@@ -36,6 +36,11 @@ Outcome states:
 - UNAVAILABLE: invalid/duplicate/malformed, unknown source or flags, or empty
   inventory.
 
+The output path must be a new file. The tool uses exclusive creation, refuses
+any path alias to either private input (including symlinks) and never overwrites
+an existing report/evidence file. A collision is `UNAVAILABLE` (exit 2) with
+no file mutation; choose a distinct private output path for each observation.
+
 The report contains **counts only**, with public/private and archive
 classifications, timestamp skew, metadata differences, input SHA-256 digests.
 No private repo names, credentials, owner secrets, or raw files are emitted.

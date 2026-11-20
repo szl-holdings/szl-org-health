@@ -135,6 +135,38 @@ class CredentialScopeTests(unittest.TestCase):
             self.assertNotIn(private_name, report)
             self.assertIn("SCOPE_OR_INVENTORY_DIVERGENCE", report)
 
+    def test_existing_report_is_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root)
+            (path / "cli.json").write_text(json.dumps(manifest("github_cli", [repo("a")])))
+            (path / "app.json").write_text(json.dumps(manifest("github_app", [repo("a")])))
+            out = path / "receipt.json"
+            original = b"prior-append-only-evidence\n"
+            out.write_bytes(original)
+            self.assertEqual(main(["--cli", str(path / "cli.json"),
+                                   "--app", str(path / "app.json"),
+                                   "--output", str(out)]), 2)
+            self.assertEqual(out.read_bytes(), original)
+
+    def test_output_cannot_alias_private_input_or_symlink(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root)
+            cli, app = path / "cli.json", path / "app.json"
+            cli.write_text(json.dumps(manifest("github_cli", [repo("private", True)])))
+            app.write_text(json.dumps(manifest("github_app", [repo("public")])))
+            original = cli.read_bytes()
+            self.assertEqual(main(["--cli", str(cli), "--app", str(app),
+                                   "--output", str(cli)]), 2)
+            self.assertEqual(cli.read_bytes(), original)
+            link = path / "link.json"
+            try:
+                link.symlink_to(cli)
+            except (OSError, NotImplementedError):
+                return  # Some Windows installations prohibit test symlinks
+            self.assertEqual(main(["--cli", str(cli), "--app", str(app),
+                                   "--output", str(link)]), 2)
+            self.assertEqual(cli.read_bytes(), original)
+
     def test_cli_malformed_document_is_fail_closed(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root)

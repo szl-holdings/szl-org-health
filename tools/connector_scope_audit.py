@@ -197,7 +197,27 @@ def main(argv=None):
             "enforcement_authorized": False,
             "organization_complete": None,
         }
-    Path(args.output).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    # Never overwrite private input evidence or an earlier receipt. Exclusive
+    # creation also rejects existing symlinks, including dangling symlinks.
+    output = Path(args.output)
+    if output.resolve() in (Path(args.cli).resolve(), Path(args.app).resolve()):
+        write_error = "REPORT_ALIASES_PRIVATE_INPUT"
+    else:
+        try:
+            with output.open("x", encoding="utf-8") as stream:
+                stream.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
+            write_error = None
+        except FileExistsError:
+            write_error = "REPORT_ALREADY_EXISTS"
+        except OSError:
+            write_error = "REPORT_WRITE_UNAVAILABLE"
+    if write_error:
+        print(json.dumps({
+            "schema": SCHEMA, "state": "UNAVAILABLE",
+            "error_class": write_error, "enforcement_authorized": False,
+            "organization_complete": None,
+        }, sort_keys=True))
+        return 2
     print(json.dumps(report, sort_keys=True))
     return 0 if report["state"] == "CONSISTENT_VISIBLE_SETS_NOT_ORG_COMPLETENESS" else 1
 
