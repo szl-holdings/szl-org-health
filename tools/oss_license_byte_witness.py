@@ -16,8 +16,8 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Callable
 
 from tools import open_source_frontier_gate as gate
 
@@ -78,9 +78,7 @@ def fetch_public_json(url: str) -> object:
         raise WitnessError("PROVIDER_JSON_INVALID") from None
 
 
-def observe(
-    candidate: object, *, get: _GET = fetch_public_json, now: datetime | None = None
-) -> dict[str, object]:
+def observe(candidate: object, *, get: _GET = fetch_public_json, now: datetime | None = None) -> dict[str, object]:
     """Observe exact GitHub commit and LICENSE bytes without upgrading rights."""
     stamp = (now or datetime.now(UTC)).isoformat().replace("+00:00", "Z")
     base = {
@@ -158,7 +156,7 @@ def observe(
         base["reason"] = "RIGHTS_REVIEW_AND_DEPENDENCY_SCAN_REQUIRED"
     except WitnessError as exc:
         base["reason"] = str(exc)
-    except Exception:
+    except Exception:  # noqa: BLE001 - fail closed for arbitrary injected transport failures
         # No exception message is emitted: it could embed provider/private details.
         base["reason"] = "PROVIDER_UNAVAILABLE"
     return base
