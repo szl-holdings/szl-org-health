@@ -37,7 +37,7 @@ From the repository root, with an authorized, non-secret JSON candidate supplied
 
 Exit 0 from the byte-observer CLI means byte matching for **research only**, never legal approval. Invalid or unavailable observation returns HOLD, exit 78. The network observer is not run in CI; its 25 source tests mock provider readback.
 
-**Executed on BETTERWITHAGE:** 58/58 dedicated offline unit tests passed (25 new witness + 33 intake tests); Ruff lint and formatting passed on four relevant files. A real public readback of langchain-ai/langgraph at pinned GitHub commit **58a6e1cc5b7dfc3619fc6e7e7573b040d554649b**, root LICENSE **1,072 bytes**, SHA-256 **d9bb52f2e3540d60ff50d8f0f5b6ba649b7fd346948c4c3d086c8afb120763c7**, returned **EXACT_COMMIT_LICENSE_BYTES_MATCH_REVIEW_ONLY** at **05:31:48 UTC**. All legal and merge authorization flags remained false. Both declared and observed license digests were fetched from GitHub; they do not independently certify SPDX obligations.
+**Executed on BETTERWITHAGE:** 87/87 targeted offline unit tests passed (25 new byte-witness, 29 offline candidate-gate, 33 pre-existing OSS leader-intake tests); Ruff lint and formatting passed on four relevant files. A real public readback of langchain-ai/langgraph at pinned GitHub commit **58a6e1cc5b7dfc3619fc6e7e7573b040d554649b**, root LICENSE **1,072 bytes**, SHA-256 **d9bb52f2e3540d60ff50d8f0f5b6ba649b7fd346948c4c3d086c8afb120763c7**, returned **EXACT_COMMIT_LICENSE_BYTES_MATCH_REVIEW_ONLY** at **05:31:48 UTC**. All legal and merge authorization flags remained false. Both declared and observed license digests were fetched from GitHub; they do not independently certify SPDX obligations.
 
 ## Competitive transfer and next admission
 
