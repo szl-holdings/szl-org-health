@@ -248,13 +248,22 @@ def check_input_path(path: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--input', required=True, type=Path,
-                   help='Explicit caller-sanitized small JSON metadata file')
+    source = p.add_mutually_exclusive_group(required=True)
+    source.add_argument('--input', type=Path,
+                        help='Explicit caller-sanitized small JSON metadata file')
+    source.add_argument('--stdin', action='store_true',
+                        help='Bounded sanitized JSON from a reviewed read-only collector')
     a = p.parse_args(argv)
     try:
-        check_input_path(a.input)
-        raw = a.input.read_bytes()
-        require(len(raw) <= MAX_INPUT_BYTES, 'INPUT_BYTES_EXCEEDED')
+        if a.stdin:
+            # The caller controls stdin; do not open a local path or trust it.
+            # One extra byte detects truncated/unbounded sensor output.
+            raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
+            require(0 < len(raw) <= MAX_INPUT_BYTES, 'INPUT_BYTES_EXCEEDED')
+        else:
+            check_input_path(a.input)
+            raw = a.input.read_bytes()
+            require(len(raw) <= MAX_INPUT_BYTES, 'INPUT_BYTES_EXCEEDED')
         obj = json.loads(raw.decode('utf-8'), object_pairs_hook=_distinct_pairs,
                          parse_constant=lambda _: (_ for _ in ()).throw(
                              InvalidInput('NONFINITE_NUMBER')))
