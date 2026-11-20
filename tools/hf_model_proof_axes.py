@@ -148,6 +148,16 @@ def evaluate(snapshot: dict[str, Any], *, scope: str, source_revision: str) -> d
     }
 
 
+def _strict_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject ambiguous JSON at any depth before evaluating proof axes."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ProofHold("DUPLICATE_JSON_KEY")
+        result[key] = value
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot", required=True, type=Path)
@@ -158,8 +168,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         _require(args.snapshot.stat().st_size <= MAX_INPUT_BYTES, "SNAPSHOT_BYTE_BUDGET")
         raw = args.snapshot.read_bytes()
-        data = json.loads(raw.decode("utf-8"), parse_constant=lambda _: (_ for _ in ()).throw(
-            ProofHold("NONFINITE_JSON")))
+        _require(len(raw) <= MAX_INPUT_BYTES, "SNAPSHOT_BYTE_BUDGET")
+        data = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_strict_object_pairs,
+            parse_constant=lambda _: (_ for _ in ()).throw(ProofHold("NONFINITE_JSON")),
+        )
         report = evaluate(data, scope=args.scope, source_revision=args.source_revision)
         report["snapshot_sha256"] = sha256(raw).hexdigest()
         report_bytes = (json.dumps(report, sort_keys=True, separators=(",", ":"),

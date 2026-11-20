@@ -137,6 +137,26 @@ class ModelProofAxesTests(unittest.TestCase):
                           scope='authenticated')
         self.assertFalse(r['training_and_release_authorized'])
 
+    def test_duplicate_census_properties_fail_closed(self):
+        import json
+        for original, altered in (
+            ('"organization": "SZLHOLDINGS"',
+             '"organization": "OTHER", "organization": "SZLHOLDINGS"'),
+            ('"count": 1', '"count": 999, "count": 1'),
+        ):
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as tmp:
+                raw = json.dumps(snap(row()))
+                self.assertIn(original, raw)
+                src = Path(tmp) / "census.json"
+                dst = Path(tmp) / "private-report.json"
+                src.write_text(raw.replace(original, altered, 1), encoding="utf-8")
+                self.assertEqual(
+                    main(["--snapshot", str(src), "--source-revision", SHA,
+                          "--scope", "public", "--private-receipt", str(dst)]),
+                    78,
+                )
+                self.assertFalse(dst.exists())
+
     def test_private_receipt_is_exclusive(self):
         import json
         with tempfile.TemporaryDirectory() as tmp:
