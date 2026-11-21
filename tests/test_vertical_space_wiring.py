@@ -63,6 +63,26 @@ class VerticalSpaceReadinessWiringTests(unittest.TestCase):
         request_json.assert_not_called()
 
     @patch("census.space_readiness.request_json")
+    def test_critical_gets_pin_redirect_origin_and_exact_path(self, request_json):
+        request_json.side_effect = [
+            (version_fixture(), {}, None), (evidence_fixture(), {}, None),
+        ]
+        collect_space_readiness(
+            space("anatomy"), "https://szlholdings-anatomy.hf.space/",
+            {"source_binding_state": "OBSERVED", "source_revision": GITHUB},
+        )
+        calls = request_json.call_args_list
+        self.assertEqual(len(calls), 2)
+        for call, path in zip(calls, ("/version", "/evidence")):
+            self.assertEqual(
+                call.kwargs["redirect_origin"],
+                ("https", "szlholdings-anatomy.hf.space", 443),
+            )
+            self.assertEqual(call.kwargs["redirect_path"], path)
+        self.assertEqual(calls[0].kwargs["max_bytes"], 8192)
+        self.assertEqual(calls[1].kwargs["max_bytes"], 32768)
+
+    @patch("census.space_readiness.request_json")
     def test_paused_and_private_never_probe(self, request_json):
         paused = collect_space_readiness(
             space("anatomy", stage="PAUSED"),
