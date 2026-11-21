@@ -147,7 +147,9 @@ class SpaceReadinessTests(unittest.TestCase):
 
     @patch("census.space_readiness.request_bytes")
     def test_brand_campaign_9747_byte_page_within_bounded_probe(self, request_bytes):
-        content = b"<html><title>SZL Campaign</title>" + b"x" * (9747 - 34)
+        prefix = b"<html><title>SZL Campaign</title>"
+        content = prefix + b"x" * (9747 - len(prefix))
+        self.assertEqual(len(content), 9747)
         request_bytes.return_value = (content, {}, None)
         result = collect_space_readiness(item("szl-brand-campaign", sdk="static"), ROOT, {})
         self.assertEqual(result["readiness_state"], "CONTENT_PRESENT_UNVERIFIED")
