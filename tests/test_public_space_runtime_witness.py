@@ -150,3 +150,48 @@ def test_index_unknown_keeps_a11oy_authority_unproven():
         report = w.census()
     assert report["space_count"] is None and report["a11oy"]["source_claim_state"] == "UNAVAILABLE"
     assert report["production_qualified"] is False
+
+
+@pytest.mark.parametrize("name", ["SZLHOLDINGS/Foo_Bar.v2", "SZLHOLDINGS/a.bad"])
+def test_non_dns_hf_id_requires_validated_hub_subdomain(name):
+    with pytest.raises(ValueError):
+        w.runtime_url(name, "static")
+    assert w.runtime_url(name, "static", "szlholdings-foo-bar-v2").endswith(
+        "szlholdings-foo-bar-v2.static.hf.space"
+    )
+
+
+def test_invalid_hub_subdomain_never_triggers_http_probe():
+    meta = {"sha": HASH_A, "sdk": "docker", "subdomain": "evil.example.com",
+            "runtime": {"sha": HASH_A, "stage": "RUNNING"}}
+    with mock.patch.object(w, "get_object", return_value=(meta, {"http": 200, "error": None})), mock.patch.object(w, "get") as req:
+        row = w.probe_space({"id": "SZLHOLDINGS/a11oy"})
+    assert row["metadata_error"] == "RUNTIME_URL_UNAVAILABLE"
+    assert row["root_http"] is None and row["release_qualified"] is False
+    req.assert_not_called()
+
+
+def test_running_stage_with_http_503_remains_unreachable():
+    meta = {"sha": HASH_A, "sdk": "docker", "runtime": {"sha": HASH_A, "stage": "RUNNING"}}
+    with mock.patch.object(w, "get_object", return_value=(meta, {"http": 200, "error": None})), mock.patch.object(w, "get", side_effect=[
+        {"http": 503, "error": "HTTP_ERROR", "body": None},
+        {"http": 503, "error": "HTTP_ERROR", "body": None},
+    ]):
+        row = w.probe_space({"id": "SZLHOLDINGS/a11oy"})
+    assert row["runtime_stage"] == "RUNNING"
+    assert row["root_http"] == 503
+    assert row["reachability"] == "NOT_HTTP_200_OR_UNKNOWN"
+    assert row["release_qualified"] is False
+
+
+def test_short_served_sha_does_not_match_main():
+    row = {"id": "SZLHOLDINGS/a11oy", "sdk": "docker",
+           "space_revision": HASH_B, "metadata_error": None}
+    def fake(url, **kwargs):
+        if url == w.GITHUB_MAIN:
+            return {"sha": HASH_A}, {"http": 200, "error": None}
+        return {"git_sha": HASH_A[:8]}, {"http": 200, "error": None}
+    with mock.patch.object(w, "get_object", side_effect=fake), mock.patch.object(w, "get", return_value={"http": 200, "error": None, "body": b""}):
+        res = w.a11oy_source_witness(row)
+    assert res["source_claim_state"] == "UNAVAILABLE"
+    assert res["release_authority"] == "NOT_PROVEN"

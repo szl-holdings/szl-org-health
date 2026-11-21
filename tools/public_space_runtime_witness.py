@@ -23,6 +23,7 @@ INDEX = "https://huggingface.co/api/spaces?author=SZLHOLDINGS&limit=100"
 GITHUB_MAIN = "https://api.github.com/repos/szl-holdings/a11oy/commits/main"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 SPACE = re.compile(r"SZLHOLDINGS/[A-Za-z0-9][A-Za-z0-9._-]{0,95}\Z")
+HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 SAMPLED_ROUTES = frozenset({
     "a11oy", "killinchu", "counsel", "terra", "sentra", "finance",
     "lyte", "vertical-services", "anatomy", "david-leads", "immune",
@@ -70,11 +71,16 @@ def revision(value: Any) -> str | None:
     return value if isinstance(value, str) and SHA.fullmatch(value) else None
 
 
-def runtime_url(space_id: str, sdk: str | None) -> str:
-    if not SPACE.fullmatch(space_id):
+def runtime_url(space_id: str, sdk: str | None, subdomain: str | None = None) -> str:
+    if not isinstance(space_id, str) or not SPACE.fullmatch(space_id):
         raise ValueError("untrusted Space ID")
+    derived = space_id.lower().replace("/", "-")
+    host = subdomain if subdomain is not None else derived
+    # Non-DNS Space names cannot be safely normalized by guessing hyphens.
+    if not isinstance(host, str) or not HOST_LABEL.fullmatch(host):
+        raise ValueError("Hub subdomain is missing or invalid")
     suffix = ".static.hf.space" if sdk == "static" else ".hf.space"
-    return f"https://{space_id.lower().replace('/', '-')}{suffix}"
+    return f"https://{host}{suffix}"
 
 
 def probe_space(index_item: dict[str, Any]) -> dict[str, Any]:
@@ -122,7 +128,11 @@ def probe_space(index_item: dict[str, Any]) -> dict[str, Any]:
         r"https://github[.]com/szl-holdings/[A-Za-z0-9_.-]+/?", source
     ):
         result["source_repo_declared"] = source
-    base = runtime_url(sid, sdk)
+    try:
+        base = runtime_url(sid, sdk, info.get("subdomain"))
+    except ValueError:
+        result["metadata_error"] = "RUNTIME_URL_UNAVAILABLE"
+        return result
     result["root_http"] = get(base + "/", max_bytes=128, timeout=7)["http"]
     result["reachability"] = "HTTP_200" if result["root_http"] == 200 else "NOT_HTTP_200_OR_UNKNOWN"
     if sid.split("/", 1)[1] in SAMPLED_ROUTES and sdk != "static":
