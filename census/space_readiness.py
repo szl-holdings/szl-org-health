@@ -12,7 +12,7 @@ import urllib.parse
 from typing import Any
 
 from .common import request_bytes, request_json
-from .vertical_contracts import classify_anatomy, classify_router
+from .vertical_contracts import classify_anatomy, classify_anatomy_version, classify_router
 
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
@@ -44,12 +44,24 @@ def _status(error: str | None, payload: Any) -> int | None:
 def _json(
     root_url: str, route: str, *, fixed_origin: bool = False, max_bytes: int = 8192,
 ) -> tuple[dict[str, Any] | None, int | None]:
+    # A hostile route must never override a previously checked Space root.
+    if fixed_origin and (not isinstance(route, str) or not route.startswith("/")
+                         or route.startswith("//") or "?" in route or "#" in route):
+        return None, None
     url = urllib.parse.urljoin(root_url, route.lstrip("/"))
     bounds: dict[str, object] = {}
     if fixed_origin:
-        parsed = urllib.parse.urlsplit(url)
+        try:
+            origin = urllib.parse.urlsplit(root_url)
+            parsed = urllib.parse.urlsplit(url)
+        except ValueError:
+            return None, None
+        if (origin.scheme != "https" or origin.netloc not in VERTICAL_ORIGINS.values()
+                or parsed.scheme != "https" or parsed.netloc != origin.netloc
+                or parsed.query or parsed.fragment):
+            return None, None
         bounds = {
-            "redirect_origin": ("https", str(parsed.hostname).casefold(), 443),
+            "redirect_origin": ("https", str(origin.hostname).casefold(), 443),
             "redirect_path": parsed.path,
         }
     payload, _, error = request_json(
@@ -202,6 +214,8 @@ def _critical_vertical(
     source_binding: dict[str, Any],
 ) -> dict[str, Any]:
     """Only fixed HTTPS Space origins; no credentials, POSTs or provider calls."""
+    if (repo_id not in VERTICAL_ORIGINS or CONTRACTS.get(repo_id) != (route, scope)):
+        return _result("UNKNOWN", route, scope, "VERTICAL_CONTRACT_MISMATCH")
     try:
         parsed = urllib.parse.urlsplit(root_url)
     except ValueError:
@@ -212,17 +226,16 @@ def _critical_vertical(
 
     if repo_id == "SZLHOLDINGS/anatomy":
         version, version_http = _json(root_url, "/version", fixed_origin=True)
-        evidence, evidence_http = (
-            _json(root_url, route, fixed_origin=True, max_bytes=32768)
-            if version_http == 200 else (None, None)
-        )
+        # Reject source conflicts before observing an unrelated evidence revision.
+        first = classify_anatomy_version(version, version_http, item.get("sha"), source_binding)
+        if first is not None:
+            state, reason = first
+            return _result(state, route, scope, reason, http=version_http)
+        evidence, evidence_http = _json(root_url, route, fixed_origin=True, max_bytes=32768)
         state, reason = classify_anatomy(
             version, version_http, evidence, evidence_http, item.get("sha"), source_binding,
         )
-        return _result(
-            state, route, scope, reason,
-            http=version_http if version_http != 200 else evidence_http,
-        )
+        return _result(state, route, scope, reason, http=evidence_http)
 
     observation, http = _json(root_url, route, fixed_origin=True)
     state, reason = classify_router(
