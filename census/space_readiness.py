@@ -280,7 +280,9 @@ def _frontier(root_url: str, route: str, scope: str) -> dict[str, Any]:
 
 
 def _brand_campaign(root_url: str, route: str, scope: str) -> dict[str, Any]:
-    raw, _, error = request_bytes(root_url, timeout=6, retries=0, max_bytes=8192)
+    # The live public campaign exceeds 8 KiB (9,747 bytes observed). Keep a
+    # finite 16 KiB ceiling rather than classifying a reachable page UNKNOWN.
+    raw, _, error = request_bytes(root_url, timeout=6, retries=0, max_bytes=16384)
     status = _status(error, raw)
     if status != 200 or raw is None:
         return _result("UNKNOWN", route, scope, "STATIC_CONTENT_UNAVAILABLE", http=status)
