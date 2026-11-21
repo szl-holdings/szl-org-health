@@ -28,6 +28,16 @@ Every displayed value is either a reading collected during the current request o
 
 The GitHub collector follows pagination instead of maintaining a hand-written repository subset. The Hugging Face collector uses bounded Hub APIs and isolates every asset class: for example, an unreadable direct bucket API remains `UNKNOWN` while independently verified Spaces and datasets remain available. Models, datasets, Spaces, and Kernels require an `id` plus an exact repository SHA. Collections use a slug and explicit detail-completeness evidence. Buckets require direct-listing identity and tree-read evidence; collection-visible bucket references remain separate partial evidence in the internal collector and never become successful direct bucket inventory.
 
+### Python-only recovery-plane observations (source-scoped)
+
+The Hugging Face census now includes three additional **read-only** public Space contracts:
+
+- `SZLHOLDINGS/szl-second-brain` checks `/readyz` solely for the public BM25 retrieval-and-review plane; it never asserts generation or an exact cloud Khipu tag.
+- `SZLHOLDINGS/anatomy` checks both `/api/anatomy/v1/frontier/status` and `/api/anatomy/v1/holographic-v7` and rejects mismatched source/candidate identities, unready envelopes and expanded execution/training authority. Matching handles-only source feeds **do not** prove WebGL, an authorized-browser view, signed deployment provenance or current protected-main parity.
+- `SZLHOLDINGS/szl-router-control` checks `/readyz/inference`; HTTP 503 is explicitly unconfigured/default-deny inference, while any HTTP 200 configuration claim is **not** a verified model completion or DSSE receipt.
+
+These contracts run only for public Spaces with a stable Hub/runtime revision. Their evidence is separate from the existing health, GitHub main, HF source-binding and production-authority axes. No new publisher, API credentials, arbitrary inference call, GPU work or external model controller is introduced. The A11oy Khipu-serving issue remains source-owned by `szl-holdings/a11oy#3776`.
+
 ## Honesty contract
 
 - Repository CI is calculated from the latest default-branch push run **for each workflow**. A newer unrelated green workflow cannot conceal a failing guard.

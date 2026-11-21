@@ -18,6 +18,9 @@ SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
 CONTRACTS = {
     "SZLHOLDINGS/a11oy": ("/readyz", "SERVING_PROCESS"),
+    "SZLHOLDINGS/szl-second-brain": ("/readyz", "PUBLIC_RETRIEVAL_REVIEW"),
+    "SZLHOLDINGS/anatomy": ("/api/anatomy/v1/frontier/status", "SOURCE_FEED"),
+    "SZLHOLDINGS/szl-router-control": ("/readyz/inference", "INFERENCE_CONFIGURATION"),
     "SZLHOLDINGS/immune-lattice": ("/readyz", "ACTION_AUTHORITY"),
     "SZLHOLDINGS/szl-frontier": ("/api/ready", "OPERATOR_PLANE"),
     "SZLHOLDINGS/szl-brand-campaign": ("/", "STATIC_CONTENT"),
@@ -125,6 +128,121 @@ def _a11oy(
     return _result(
         "SCOPED_READY_SOURCE_UNVERIFIED", route, scope,
         "SERVING_CONTRACT_OBSERVED_SOURCE_UNVERIFIED", http=status,
+    )
+
+
+def _second_brain(root_url: str, route: str, scope: str) -> dict[str, Any]:
+    """Check only public retrieval and review. This Space is not Khipu inference."""
+    payload, status = _json(root_url, route)
+    if status == 503:
+        return _result("NOT_READY", route, scope, "RETRIEVAL_HTTP_503", http=status)
+    if status != 200 or payload is None:
+        return _result("UNKNOWN", route, scope, "RETRIEVAL_UNAVAILABLE", http=status)
+    if payload.get("schema") != "szl.second-brain.readiness/v1":
+        return _result("UNKNOWN", route, scope, "RETRIEVAL_SCHEMA_UNKNOWN", http=status)
+    if payload.get("ready") is False:
+        return _result("NOT_READY", route, scope, "PUBLIC_RETRIEVAL_NOT_READY", http=status)
+    if payload.get("ready") is not True or payload.get("state") != "READY":
+        return _result("UNKNOWN", route, scope, "RETRIEVAL_READINESS_UNVERIFIED", http=status)
+    if (payload.get("scope") != "PUBLIC_RETRIEVAL_AND_REVIEW"
+            or payload.get("runtime_mode") != "BM25_ONLY"
+            or payload.get("model_generation") != "NOT_CONFIGURED"
+            or payload.get("execution_authority") != "NONE"):
+        return _result("UNKNOWN", route, scope, "RETRIEVAL_SCOPE_CHANGED", http=status)
+    return _result(
+        "SCOPED_READY_UNVERIFIED", route, scope,
+        "PUBLIC_RETRIEVAL_SELF_REPORTED_NO_MODEL_INFERENCE", http=status,
+    )
+
+
+def _anatomy(root_url: str, route: str, scope: str) -> dict[str, Any]:
+    """Two independent source feeds; never tests or certifies a WebGL renderer."""
+    status_doc, status = _json(root_url, route)
+    if status == 503:
+        return _result("NOT_READY", route, scope, "FRONTIER_STATUS_HTTP_503", http=status)
+    if status != 200 or status_doc is None:
+        return _result("UNKNOWN", route, scope, "FRONTIER_STATUS_UNAVAILABLE", http=status)
+    if status_doc.get("schema") != "szl.anatomy.frontier-status/v1":
+        return _result("UNKNOWN", route, scope, "FRONTIER_STATUS_SCHEMA_UNKNOWN", http=status)
+    if status_doc.get("ready") is False:
+        return _result("NOT_READY", route, scope, "FRONTIER_STATUS_NOT_READY", http=status)
+    if status_doc.get("ready") is not True or status_doc.get("state") != "SOURCE_BOUND_REVIEW_MEMORY":
+        return _result("UNKNOWN", route, scope, "FRONTIER_STATUS_UNVERIFIED", http=status)
+
+    holo, holo_http = _json(root_url, "/api/anatomy/v1/holographic-v7")
+    if holo_http == 503:
+        return _result("NOT_READY", route, scope, "HOLOGRAPHIC_SOURCE_HTTP_503", http=holo_http)
+    if holo_http != 200 or holo is None:
+        return _result("UNKNOWN", route, scope, "HOLOGRAPHIC_SOURCE_UNAVAILABLE", http=holo_http)
+    if holo.get("schema") != "szl.anatomy.holographic-v7/v1":
+        return _result("UNKNOWN", route, scope, "HOLOGRAPHIC_SCHEMA_UNKNOWN", http=holo_http)
+    if holo.get("ready") is False:
+        return _result("NOT_READY", route, scope, "HOLOGRAPHIC_SOURCE_NOT_READY", http=holo_http)
+    if holo.get("ready") is not True or holo.get("state") != "SOURCE_BOUND_READ_ONLY":
+        return _result("UNKNOWN", route, scope, "HOLOGRAPHIC_SOURCE_UNVERIFIED", http=holo_http)
+    frontier = holo.get("frontier")
+    if not isinstance(frontier, dict):
+        return _result("UNKNOWN", route, scope, "HOLOGRAPHIC_FRONTIER_MISSING", http=holo_http)
+
+    # Bind both source-read surfaces to the same source *claim*. Actual protected
+    # GitHub main, Hub commit, signing and renderer checks are separate authorities.
+    required = (
+        "schema", "ready", "state", "candidate_count", "candidate_set_sha256",
+        "second_brain_source_repository", "second_brain_source_revision",
+        "content_access", "execution_authority", "promotion_authority",
+        "training_authority", "raw_graph_nodes_admitted_to_gradients",
+        "private_graph_present",
+    )
+    if any(status_doc.get(key) != frontier.get(key) for key in required):
+        return _result("SOURCE_CONFLICT", route, scope, "HOLOGRAPHIC_FRONTIER_CONFLICT", http=holo_http)
+    if (status_doc.get("content_access") != "HANDLES_ONLY"
+            or status_doc.get("execution_authority") != "NONE"
+            or status_doc.get("promotion_authority") != "NONE"
+            or status_doc.get("training_authority") != "NONE"
+            or status_doc.get("private_graph_present") is not False
+            or type(status_doc.get("raw_graph_nodes_admitted_to_gradients")) is not int
+            or status_doc["raw_graph_nodes_admitted_to_gradients"] != 0):
+        return _result("NOT_READY", route, scope, "SOURCE_AUTHORITY_BOUNDARY_FAILED", http=holo_http)
+    if (status_doc.get("second_brain_source_repository") != "szl-holdings/szl-second-brain"
+            or type(status_doc.get("second_brain_source_revision")) is not str
+            or SHA40.fullmatch(status_doc["second_brain_source_revision"]) is None
+            or type(status_doc.get("candidate_count")) is not int
+            or not 0 <= status_doc["candidate_count"] <= 100000
+            or type(status_doc.get("candidate_set_sha256")) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", status_doc["candidate_set_sha256"]) is None):
+        return _result("UNKNOWN", route, scope, "SOURCE_IDENTITY_UNVERIFIED", http=holo_http)
+    return _result(
+        "SCOPED_READY_UNVERIFIED", route, scope,
+        "HANDLES_ONLY_FEEDS_SELF_REPORTED_WEBGL_AND_SIGNATURE_UNVERIFIED", http=holo_http,
+    )
+
+
+def _router_inference(root_url: str, route: str, scope: str) -> dict[str, Any]:
+    """503 is intentionally unconfigured; 200 can only be config self-report."""
+    payload, status = _json(root_url, route)
+    if status == 503:
+        return _result("NOT_READY", route, scope, "INFERENCE_HTTP_503_DEFAULT_DENY", http=status)
+    if status != 200 or payload is None:
+        return _result("UNKNOWN", route, scope, "INFERENCE_READINESS_UNAVAILABLE", http=status)
+    if payload.get("ready_for_requests") is False or payload.get("status") == "unavailable":
+        return _result("NOT_READY", route, scope, "INFERENCE_CONFIGURATION_NOT_READY", http=status)
+    checks = payload.get("checks")
+    if (payload.get("ready_for_requests") is not True
+            or not isinstance(checks, dict)
+            or any(checks.get(key) is not True for key in (
+                "registry_valid", "egress_enabled",
+                "caller_auth_configured", "provider_configured",
+            ))
+            or (
+                not isinstance(payload.get("model_identity"), str)
+                or not payload["model_identity"].strip()
+                or payload["model_identity"] in ("UNVERIFIED", "UNKNOWN")
+            )
+        ):
+        return _result("UNKNOWN", route, scope, "INFERENCE_CONFIG_EVIDENCE_INCOMPLETE", http=status)
+    return _result(
+        "SCOPED_READY_UNVERIFIED", route, scope,
+        "CONFIGURATION_ONLY_REAL_COMPLETION_AND_SIGNATURE_UNVERIFIED", http=status,
     )
 
 
@@ -275,7 +393,7 @@ def collect_space_readiness(
         and isinstance(runtime_sha, str)
         and SHA40.fullmatch(runtime_sha)
         and hub_sha != runtime_sha
-    ) or stage in {"RUNNING_APP_STARTING", "BUILDING", "RUNNING_BUILDING"}:
+    ) or stage in {"APP_STARTING", "RUNNING_APP_STARTING", "BUILDING", "RUNNING_BUILDING"}:
         return _result("TRANSITIONING", route, scope, "HUB_RUNTIME_REVISION_MISMATCH")
     if stage != "RUNNING":
         return _result("NOT_READY", route, scope, "PROVIDER_NOT_RUNNING")
@@ -290,6 +408,12 @@ def collect_space_readiness(
         return _critical_vertical(root_url, repo_id, route, scope, item, source_binding)
     if repo_id == "SZLHOLDINGS/a11oy":
         return _a11oy(root_url, route, scope, source_binding)
+    if repo_id == "SZLHOLDINGS/szl-second-brain":
+        return _second_brain(root_url, route, scope)
+    if repo_id == "SZLHOLDINGS/anatomy":
+        return _anatomy(root_url, route, scope)
+    if repo_id == "SZLHOLDINGS/szl-router-control":
+        return _router_inference(root_url, route, scope)
     if repo_id == "SZLHOLDINGS/immune-lattice":
         return _immune_lattice(root_url, route, scope)
     if repo_id == "SZLHOLDINGS/szl-frontier":
