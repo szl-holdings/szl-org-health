@@ -200,7 +200,7 @@ def _router_inference(root_url: str, route: str, scope: str) -> dict[str, Any]:
                 "registry_valid", "egress_enabled",
                 "caller_auth_configured", "provider_configured",
             ))
-            or (not isinstance(payload.get("model_identity"), str)\n                or not payload["model_identity"].strip()\n                or payload["model_identity"] in ("UNVERIFIED", "UNKNOWN"))):
+            or (\n                not isinstance(payload.get("model_identity"), str)\n                or not payload["model_identity"].strip()\n                or payload["model_identity"] in ("UNVERIFIED", "UNKNOWN")\n            ):
         return _result("UNKNOWN", route, scope, "INFERENCE_CONFIG_EVIDENCE_INCOMPLETE", http=status)
     return _result(
         "SCOPED_READY_UNVERIFIED", route, scope,
