@@ -144,6 +144,24 @@ class SpaceReadinessTests(unittest.TestCase):
         self.assertEqual(result["readiness_http"], 200)
         self.assertEqual(result["readiness_scope"], "STATIC_CONTENT")
 
+
+    @patch("census.space_readiness.request_bytes")
+    def test_brand_campaign_9747_byte_page_within_bounded_probe(self, request_bytes):
+        content = b"<html><title>SZL Campaign</title>" + b"x" * (9747 - 34)
+        request_bytes.return_value = (content, {}, None)
+        result = collect_space_readiness(item("szl-brand-campaign", sdk="static"), ROOT, {})
+        self.assertEqual(result["readiness_state"], "CONTENT_PRESENT_UNVERIFIED")
+        self.assertEqual(result["readiness_http"], 200)
+        self.assertEqual(request_bytes.call_args.kwargs["max_bytes"], 16384)
+
+    @patch("census.space_readiness.request_bytes")
+    def test_brand_campaign_oversize_remains_unknown(self, request_bytes):
+        request_bytes.return_value = (None, {}, "response-body-limit-exceeded")
+        result = collect_space_readiness(item("szl-brand-campaign", sdk="static"), ROOT, {})
+        self.assertEqual(result["readiness_state"], "UNKNOWN")
+        self.assertEqual(result["readiness_reason"], "STATIC_CONTENT_UNAVAILABLE")
+        self.assertEqual(request_bytes.call_args.kwargs["max_bytes"], 16384)
+
     @patch("census.space_readiness.request_json")
     @patch("census.space_readiness.request_bytes")
     def test_private_and_unlisted_spaces_are_not_probed(self, request_bytes, request_json):
