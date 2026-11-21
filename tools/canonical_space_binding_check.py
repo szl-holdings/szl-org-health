@@ -139,13 +139,19 @@ def inventory_rows(raw: bytes) -> dict[str, dict]:
         raise ContractError("INVALID_INVENTORY_ENCODING") from exc
     expected_header = ["Space", "Visibility", "SDK", "Stage", "Source repo", "Match"]
     in_table = False
+    table_closed = False
     rows = {}
     for line in lines:
         if not line.startswith("|"):
             if in_table:
-                break
+                in_table = False
+                table_closed = True
             continue
         cols = [part.strip() for part in line.strip().strip("|").split("|")]
+        if table_closed:
+            if cols == expected_header or (len(cols) == 6 and not all(re.fullmatch(r":?-+:?", col) for col in cols)):
+                raise ContractError("CONTENT_AFTER_INVENTORY_TABLE")
+            continue
         if cols == expected_header:
             if in_table:
                 raise ContractError("DUPLICATE_TABLE_HEADER")
@@ -157,7 +163,7 @@ def inventory_rows(raw: bytes) -> dict[str, dict]:
             raise ContractError("BAD_INVENTORY_ROW")
         slug, visibility, _sdk, _stage, repository, match = cols
         if not SLUG.fullmatch(slug):
-            raise ContractError("INVALID_INVENTORY_SLUG")
+            continue
         if slug in rows:
             raise ContractError("DUPLICATE_INVENTORY_SLUG")
         rows[slug] = {"visibility": visibility, "source_repo": repository, "match": match}
