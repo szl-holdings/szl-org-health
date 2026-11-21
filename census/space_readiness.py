@@ -32,6 +32,10 @@ VERTICAL_ORIGINS = {
     "SZLHOLDINGS/anatomy": "szlholdings-anatomy.hf.space",
 }
 
+VERTICAL_GET_PATHS = frozenset(
+    (host, CONTRACTS[repo_id][0]) for repo_id, host in VERTICAL_ORIGINS.items()
+) | {(VERTICAL_ORIGINS["SZLHOLDINGS/anatomy"], "/version")}
+
 
 def _status(error: str | None, payload: Any) -> int | None:
     if error is None and payload is not None:
@@ -56,7 +60,7 @@ def _json(
             parsed = urllib.parse.urlsplit(url)
         except ValueError:
             return None, None
-        if (origin.scheme != "https" or origin.netloc not in VERTICAL_ORIGINS.values()
+        if (origin.scheme != "https" or (origin.netloc, route) not in VERTICAL_GET_PATHS
                 or parsed.scheme != "https" or parsed.netloc != origin.netloc
                 or parsed.query or parsed.fragment):
             return None, None
