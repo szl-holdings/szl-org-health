@@ -44,12 +44,24 @@ def evidence_fixture():
 
 
 class RouterContractTests(unittest.TestCase):
-    def test_http_503_is_not_ready_even_if_space_running(self):
-        for public in (True, False):
-            self.assertEqual(
-                classify_router(None, 503, public_status=public),
-                ("NOT_READY", "INFERENCE_HTTP_503"),
-            )
+    def test_control_http_503_is_not_ready_even_if_space_running(self):
+        self.assertEqual(
+            classify_router(None, 503, public_status=False),
+            ("NOT_READY", "INFERENCE_HTTP_503"),
+        )
+
+    def test_public_status_http_503_is_not_an_inference_measurement(self):
+        for status in (200, 503, 404, None):
+            with self.subTest(status=status):
+                self.assertEqual(
+                    classify_router(router_fixture(), status, public_status=True),
+                    ("UNKNOWN", "PUBLIC_STATUS_NOT_AN_INFERENCE_GATEWAY"),
+                )
+
+    def test_untyped_public_role_is_never_promotable(self):
+        for role in (0, 1, "false", "true", None, [], {}):
+            with self.subTest(role=role):
+                self.assertEqual(classify_router(router_fixture(), 200, public_status=role)[0], "UNKNOWN")
 
     def test_public_status_space_cannot_claim_200_means_inference(self):
         self.assertEqual(classify_router(router_fixture(), 200, public_status=True)[0], "UNKNOWN")
@@ -133,6 +145,15 @@ class AnatomyContractTests(unittest.TestCase):
         evidence = evidence_fixture()
         evidence["runtime"]["ready"] = False
         self.assertEqual(self.classify(evidence=evidence)[0], "NOT_READY")
+
+    def test_malformed_runtime_is_unknown_not_a_decisive_app_failure(self):
+        for bad in (None, [], 1, "true", {}, {"ready": 1, "authorityState": "READ_ONLY"},
+                    {"ready": "true", "authorityState": "READ_ONLY"}):
+            with self.subTest(runtime=bad):
+                evidence = evidence_fixture()
+                evidence["runtime"] = bad
+                self.assertEqual(self.classify(evidence=evidence),
+                                 ("UNKNOWN", "EVIDENCE_RUNTIME_CONTRACT_INVALID"))
 
     def test_malformed_revision_or_schema_unknown(self):
         for bad in (None, 123, ["a"], "a" * 39, "A" * 40):
