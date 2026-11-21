@@ -6,7 +6,7 @@ Run from the repository root:
 
 ```bash
 python tools/public_space_runtime_witness.py --output space-runtime-witness.json
-python -m pytest -q tests/test_public_space_runtime_witness.py
+python -m unittest discover -s tests -p test_public_space_runtime_witness.py
 ```
 
 The script uses only the Python standard library at runtime and anonymous HTTP `GET` requests. It enumerates a bounded public Hub list and reads each Space's immutable repository revision, runtime stage and runtime-reported revision. It uses the SDK to select either `.hf.space` or `.static.hf.space`; this distinction prevents false HTTP 404 reports for static Spaces. Explicit Hub subdomains must be valid DNS host labels; an identifier with a dot/underscore and no trustworthy Hub subdomain is reported as unavailable rather than guessed. Root HTTP status is sampled for every discovered Space; `/readyz` is probed for a bounded set of product verticals as **HTTP status only** (404 can mean an unsupported route). No route is used to infer signing authority or production admission.
