@@ -41,12 +41,19 @@ def _status(error: str | None, payload: Any) -> int | None:
     return None
 
 
-def _json(root_url: str, route: str) -> tuple[dict[str, Any] | None, int | None]:
+def _json(
+    root_url: str, route: str, *, fixed_origin: bool = False, max_bytes: int = 8192,
+) -> tuple[dict[str, Any] | None, int | None]:
+    url = urllib.parse.urljoin(root_url, route.lstrip("/"))
+    bounds: dict[str, object] = {}
+    if fixed_origin:
+        parsed = urllib.parse.urlsplit(url)
+        bounds = {
+            "redirect_origin": ("https", str(parsed.hostname).casefold(), 443),
+            "redirect_path": parsed.path,
+        }
     payload, _, error = request_json(
-        urllib.parse.urljoin(root_url, route.lstrip("/")),
-        timeout=6,
-        retries=0,
-        max_bytes=8192,
+        url, timeout=6, retries=0, max_bytes=max_bytes, **bounds,
     )
     return (payload if isinstance(payload, dict) else None), _status(error, payload)
 
@@ -204,9 +211,10 @@ def _critical_vertical(
         return _result("UNKNOWN", route, scope, "RUNTIME_ORIGIN_MISMATCH")
 
     if repo_id == "SZLHOLDINGS/anatomy":
-        version, version_http = _json(root_url, "/version")
+        version, version_http = _json(root_url, "/version", fixed_origin=True)
         evidence, evidence_http = (
-            _json(root_url, route) if version_http == 200 else (None, None)
+            _json(root_url, route, fixed_origin=True, max_bytes=32768)
+            if version_http == 200 else (None, None)
         )
         state, reason = classify_anatomy(
             version, version_http, evidence, evidence_http, item.get("sha"), source_binding,
@@ -216,7 +224,7 @@ def _critical_vertical(
             http=version_http if version_http != 200 else evidence_http,
         )
 
-    observation, http = _json(root_url, route)
+    observation, http = _json(root_url, route, fixed_origin=True)
     state, reason = classify_router(
         observation, http, public_status=repo_id == "SZLHOLDINGS/llm-router-live",
     )
