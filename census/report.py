@@ -115,9 +115,13 @@ _SPACE_READINESS_ENUMS = {
     },
     "readiness_scope": {
         "NOT_EVALUATED", "SERVING_PROCESS", "ACTION_AUTHORITY",
-        "OPERATOR_PLANE", "STATIC_CONTENT",
+        "OPERATOR_PLANE", "STATIC_CONTENT", "PUBLIC_RETRIEVAL_REVIEW",
+        "SOURCE_FEED", "INFERENCE_CONFIGURATION",
     },
-    "readiness_route": {"/", "/readyz", "/api/ready"},
+    "readiness_route": {
+        "/", "/readyz", "/api/ready", "/api/anatomy/v1/frontier/status",
+        "/readyz/inference",
+    },
     "declared_head_match": {"MATCH", "DRIFT", "UNKNOWN", "UNAVAILABLE"},
 }
 
