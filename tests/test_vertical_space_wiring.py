@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import patch
 
-from census.space_readiness import collect_space_readiness
+from census.space_readiness import _critical_vertical, _json, collect_space_readiness
 from test_vertical_contracts import HUB, GITHUB, evidence_fixture, router_fixture, version_fixture
 
 
@@ -81,6 +81,58 @@ class VerticalSpaceReadinessWiringTests(unittest.TestCase):
             self.assertEqual(call.kwargs["redirect_path"], path)
         self.assertEqual(calls[0].kwargs["max_bytes"], 8192)
         self.assertEqual(calls[1].kwargs["max_bytes"], 32768)
+
+    @patch("census.space_readiness.request_json")
+    def test_public_status_503_is_not_mislabeled_as_gateway_inference(self, request_json):
+        request_json.return_value = (None, {}, "http503")
+        result = collect_space_readiness(
+            space("llm-router-live"), "https://szlholdings-llm-router-live.hf.space/", {},
+        )
+        self.assertEqual(result["readiness_http"], 503)
+        self.assertEqual(result["readiness_state"], "UNKNOWN")
+        self.assertEqual(result["readiness_reason"], "PUBLIC_STATUS_NOT_AN_INFERENCE_GATEWAY")
+        self.assertEqual(request_json.call_count, 1)
+
+    @patch("census.space_readiness.request_json")
+    def test_route_override_denied_without_network(self, request_json):
+        origin = "https://szlholdings-anatomy.hf.space/"
+        for route in ("https://unapproved.example/evidence", "http://unapproved.example/evidence",
+                      "//unapproved.example/evidence", "/wrong", "/evidence?redirect=1"):
+            with self.subTest(route=route):
+                result = _critical_vertical(
+                    origin, "SZLHOLDINGS/anatomy", route, "RELEASE_EVIDENCE",
+                    space("anatomy"), {},
+                )
+                self.assertEqual(result["readiness_state"], "UNKNOWN")
+                self.assertEqual(result["readiness_reason"], "VERTICAL_CONTRACT_MISMATCH")
+                body, status = _json(origin, route, fixed_origin=True)
+                self.assertIsNone(body)
+                self.assertIsNone(status)
+        request_json.assert_not_called()
+
+    @patch("census.space_readiness.request_json")
+    def test_invalid_version_skips_evidence_and_keeps_source_http(self, request_json):
+        broken = version_fixture()
+        broken["service"] = "wrong"
+        request_json.return_value = (broken, {}, None)
+        result = collect_space_readiness(
+            space("anatomy"), "https://szlholdings-anatomy.hf.space/", {},
+        )
+        self.assertEqual(result["readiness_state"], "UNKNOWN")
+        self.assertEqual(result["readiness_reason"], "VERSION_CONTRACT_INVALID")
+        self.assertEqual(result["readiness_http"], 200)
+        self.assertEqual(request_json.call_count, 1)
+
+    @patch("census.space_readiness.request_json")
+    def test_source_revision_conflict_skips_evidence(self, request_json):
+        request_json.return_value = (version_fixture(), {}, None)
+        result = collect_space_readiness(
+            space("anatomy"), "https://szlholdings-anatomy.hf.space/",
+            {"source_binding_state": "OBSERVED", "source_revision": "c" * 40},
+        )
+        self.assertEqual(result["readiness_state"], "SOURCE_CONFLICT")
+        self.assertEqual(result["readiness_http"], 200)
+        self.assertEqual(request_json.call_count, 1)
 
     @patch("census.space_readiness.request_json")
     def test_paused_and_private_never_probe(self, request_json):
