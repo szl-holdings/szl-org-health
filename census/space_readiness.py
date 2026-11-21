@@ -314,16 +314,21 @@ def collect_space_readiness(
     stage = runtime.get("stage")
     if not isinstance(stage, str):
         return _result("UNKNOWN", route, scope, "PROVIDER_STAGE_INVALID")
+    # Preserve explicit provider failures (including PAUSED/SLEEPING) even when
+    # a stale runtime revision is present. Only an actively RUNNING Space can
+    # have its serving readiness downgraded to TRANSITIONING by SHA drift.
+    if stage in {"APP_STARTING", "RUNNING_APP_STARTING", "BUILDING", "RUNNING_BUILDING"}:
+        return _result("TRANSITIONING", route, scope, "HUB_RUNTIME_REVISION_MISMATCH")
+    if stage != "RUNNING":
+        return _result("NOT_READY", route, scope, "PROVIDER_NOT_RUNNING")
     if (
         isinstance(hub_sha, str)
         and SHA40.fullmatch(hub_sha)
         and isinstance(runtime_sha, str)
         and SHA40.fullmatch(runtime_sha)
         and hub_sha != runtime_sha
-    ) or stage in {"APP_STARTING", "RUNNING_APP_STARTING", "BUILDING", "RUNNING_BUILDING"}:
+    ):
         return _result("TRANSITIONING", route, scope, "HUB_RUNTIME_REVISION_MISMATCH")
-    if stage != "RUNNING":
-        return _result("NOT_READY", route, scope, "PROVIDER_NOT_RUNNING")
     if repo_id != "SZLHOLDINGS/szl-brand-campaign" and (
         not isinstance(hub_sha, str)
         or not SHA40.fullmatch(hub_sha)
