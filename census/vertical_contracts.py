@@ -17,12 +17,16 @@ ROUTER_CHECKS = frozenset({
 
 def classify_router(payload: Any, http: int | None, *, public_status: bool) -> tuple[str, str]:
     """A status Space is not a gateway; configuration is not a signed turn."""
+    if type(public_status) is not bool:
+        return "UNKNOWN", "ROUTER_SURFACE_ROLE_INVALID"
+    if public_status:
+        # The public Space is a read-only status projection. Even a 503 here
+        # cannot be attributed to a qualified inference gateway.
+        return "UNKNOWN", "PUBLIC_STATUS_NOT_AN_INFERENCE_GATEWAY"
     if http == 503:
         return "NOT_READY", "INFERENCE_HTTP_503"
     if http != 200 or not isinstance(payload, dict):
         return "UNKNOWN", "INFERENCE_OBSERVATION_UNAVAILABLE"
-    if public_status:
-        return "UNKNOWN", "PUBLIC_STATUS_NOT_AN_INFERENCE_GATEWAY"
 
     checks = payload.get("checks")
     if (payload.get("basis") != "LOCAL_CONFIGURATION_ONLY"
@@ -40,15 +44,10 @@ def classify_router(payload: Any, http: int | None, *, public_status: bool) -> t
     return "SCOPED_READY_UNVERIFIED", "CONFIGURED_ONLY_NO_LIVE_INFERENCE_PROOF"
 
 
-def classify_anatomy(
-    version: Any,
-    version_http: int | None,
-    evidence: Any,
-    evidence_http: int | None,
-    hub_revision: Any,
-    source_binding: Any,
-) -> tuple[str, str]:
-    """Distinguish source identity and unsigned structural evidence from admission."""
+def classify_anatomy_version(
+    version: Any, version_http: int | None, hub_revision: Any, source_binding: Any,
+) -> tuple[str, str] | None:
+    """Validate the first GET before deciding whether an evidence GET is safe."""
     if version_http == 503:
         return "NOT_READY", "VERSION_HTTP_503"
     if version_http != 200 or not isinstance(version, dict):
@@ -73,6 +72,24 @@ def classify_anatomy(
     if isinstance(declared_sha, str) and SHA40.fullmatch(declared_sha) and declared_sha != source_sha:
         return "SOURCE_CONFLICT", "GITHUB_SOURCE_REVISION_MISMATCH"
 
+    return None
+
+
+def classify_anatomy(
+    version: Any,
+    version_http: int | None,
+    evidence: Any,
+    evidence_http: int | None,
+    hub_revision: Any,
+    source_binding: Any,
+) -> tuple[str, str]:
+    """Distinguish source identity, unsigned evidence, and signed admission."""
+    first = classify_anatomy_version(version, version_http, hub_revision, source_binding)
+    if first is not None:
+        return first
+    source_sha = version["gitSha"]
+    binding = source_binding if isinstance(source_binding, dict) else {}
+    declared_sha = binding.get("source_revision")
     if evidence_http == 503:
         return "NOT_READY", "EVIDENCE_HTTP_503"
     if evidence_http != 200 or not isinstance(evidence, dict):
@@ -86,8 +103,11 @@ def classify_anatomy(
     runtime = evidence.get("runtime")
     receipts = evidence.get("receipts")
     provenance = evidence.get("outputProvenance")
-    if (not isinstance(runtime, dict) or runtime.get("ready") is not True
+    if (not isinstance(runtime, dict)
+            or type(runtime.get("ready")) is not bool
             or runtime.get("authorityState") != "READ_ONLY"):
+        return "UNKNOWN", "EVIDENCE_RUNTIME_CONTRACT_INVALID"
+    if runtime["ready"] is False:
         return "NOT_READY", "ANATOMY_RUNTIME_NOT_READY"
     if (not isinstance(receipts, list) or len(receipts) != 1
             or not isinstance(receipts[0], dict)
