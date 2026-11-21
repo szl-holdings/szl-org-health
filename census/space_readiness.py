@@ -205,6 +205,7 @@ def _router_inference(root_url: str, route: str, scope: str) -> dict[str, Any]:
                 or not payload["model_identity"].strip()
                 or payload["model_identity"] in ("UNVERIFIED", "UNKNOWN")
             )
+        ):
         return _result("UNKNOWN", route, scope, "INFERENCE_CONFIG_EVIDENCE_INCOMPLETE", http=status)
     return _result(
         "SCOPED_READY_UNVERIFIED", route, scope,
