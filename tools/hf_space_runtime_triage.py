@@ -69,7 +69,7 @@ def fetch_json(url: str) -> Any:
         return json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_pairs)
     except CensusUnavailable:
         raise
-    except (OSError, ValueError, UnicodeError, TypeError):
+    except (OSError, ValueError, UnicodeError, TypeError, RecursionError):
         raise CensusUnavailable("PROVIDER_UNAVAILABLE") from None
 
 
@@ -145,7 +145,7 @@ def audit(fetch: Callable[[str], Any] = fetch_json) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="emit sanitized aggregate JSON")
-    args = parser.parse_args(argv)
+    parser.parse_args(argv)
     try:
         report = audit()
     except CensusUnavailable as error:
