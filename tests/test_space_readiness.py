@@ -306,7 +306,22 @@ class SpaceReadinessTests(unittest.TestCase):
         result = collect_space_readiness(item("szl-router-control"), ROOT, {})
         self.assertEqual(result["readiness_state"], "UNKNOWN")
 
-    @patch("census.space_readiness.request_json")\n    def test_router_control_rejects_malformed_model_identity(self, request_json):\n        payload = {\n            "status": "ready", "ready_for_requests": True,\n            "checks": {"registry_valid": True, "egress_enabled": True,\n                       "caller_auth_configured": True, "provider_configured": True},\n        }\n        for identity in ("", [], {}):\n            with self.subTest(identity=identity):\n                payload["model_identity"] = identity\n                request_json.return_value = (payload, {}, None)\n                result = collect_space_readiness(item("szl-router-control"), ROOT, {})\n                self.assertEqual(result["readiness_state"], "UNKNOWN")\n                self.assertIn("EVIDENCE_INCOMPLETE", result["readiness_reason"])\n\n    def test_extended_public_projection_preserves_scoped_routes_without_operational_claim(self):
+    @patch("census.space_readiness.request_json")
+    def test_router_control_rejects_malformed_model_identity(self, request_json):
+        payload = {
+            "status": "ready", "ready_for_requests": True,
+            "checks": {"registry_valid": True, "egress_enabled": True,
+                       "caller_auth_configured": True, "provider_configured": True},
+        }
+        for identity in ("", [], {}):
+            with self.subTest(identity=identity):
+                payload["model_identity"] = identity
+                request_json.return_value = (payload, {}, None)
+                result = collect_space_readiness(item("szl-router-control"), ROOT, {})
+                self.assertEqual(result["readiness_state"], "UNKNOWN")
+                self.assertIn("EVIDENCE_INCOMPLETE", result["readiness_reason"])
+
+    def test_extended_public_projection_preserves_scoped_routes_without_operational_claim(self):
         for name, scope, route in (
             ("anatomy", "SOURCE_FEED", "/api/anatomy/v1/frontier/status"),
             ("szl-router-control", "INFERENCE_CONFIGURATION", "/readyz/inference"),
