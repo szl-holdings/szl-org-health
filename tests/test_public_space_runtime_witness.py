@@ -1,9 +1,8 @@
 """Offline standard-library adversarial controls for public Space runtime witness."""
 import importlib.util
 import json
-import unittest
 from pathlib import Path
-import unittest.mock as mock
+from unittest import TestCase, mock
 
 MODULE = Path(__file__).resolve().parents[1] / "tools" / "public_space_runtime_witness.py"
 spec = importlib.util.spec_from_file_location("public_space_witness", MODULE)
@@ -18,7 +17,7 @@ def obj(data, http=200):
     return {"http": http, "error": None, "body": json.dumps(data).encode("utf-8")}
 
 
-class PublicSpaceWitnessTests(unittest.TestCase):
+class PublicSpaceWitnessTests(TestCase):
     def test_static_host_is_not_misclassified_as_dynamic(self):
         self.assertEqual(
             w.runtime_url("SZLHOLDINGS/szl-brand-campaign", "static"),

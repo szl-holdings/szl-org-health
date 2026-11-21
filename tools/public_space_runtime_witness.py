@@ -90,7 +90,7 @@ def probe_space(index_item: dict[str, Any]) -> dict[str, Any]:
         "metadata_http": None, "metadata_error": None,
         "runtime_stage": "UNKNOWN", "space_revision": None,
         "runtime_revision": None, "revision_match": "UNKNOWN",
-        "sdk": None, "source_repo_declared": None,
+        "sdk": None, "subdomain": None, "source_repo_declared": None,
         "root_http": None, "readyz_http": None,
         "reachability": "UNAVAILABLE", "release_qualified": False,
     }
@@ -114,6 +114,7 @@ def probe_space(index_item: dict[str, Any]) -> dict[str, Any]:
         result["metadata_error"] = "SDK_UNAVAILABLE"
         return result
     result["sdk"] = sdk
+    result["subdomain"] = info.get("subdomain") if isinstance(info.get("subdomain"), str) else None
     result["runtime_stage"] = runtime.get("stage") if isinstance(runtime.get("stage"), str) else "UNKNOWN"
     result["space_revision"] = revision(info.get("sha"))
     result["runtime_revision"] = revision(runtime.get("sha"))
@@ -159,7 +160,7 @@ def a11oy_source_witness(row: dict[str, Any] | None) -> dict[str, Any]:
         result["github_main_sha"] = revision(gh.get("sha"))
     if row is None or row.get("sdk") == "static" or row.get("metadata_error"):
         return result
-    base = runtime_url("SZLHOLDINGS/a11oy", row["sdk"])
+    base = runtime_url("SZLHOLDINGS/a11oy", row["sdk"], row.get("subdomain"))
     served, witness = get_object(base + "/api/a11oy/v1/honest", max_bytes=20_000)
     result["served_source_http"] = witness["http"]
     if served is not None:
