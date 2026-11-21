@@ -3,7 +3,7 @@ import importlib.util
 import json
 import unittest
 from pathlib import Path
-from unittest import mock
+import unittest.mock as mock
 
 MODULE = Path(__file__).resolve().parents[1] / "tools" / "public_space_runtime_witness.py"
 spec = importlib.util.spec_from_file_location("public_space_witness", MODULE)
