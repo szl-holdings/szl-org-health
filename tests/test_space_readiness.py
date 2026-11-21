@@ -177,6 +177,151 @@ class SpaceReadinessTests(unittest.TestCase):
         request_bytes.assert_not_called()
         request_json.assert_not_called()
 
+    @patch("census.space_readiness.request_json")
+    def test_second_brain_only_public_retrieval_not_inference(self, request_json):
+        request_json.return_value = ({
+            "schema": "szl.second-brain.readiness/v1",
+            "ready": True, "state": "READY",
+            "scope": "PUBLIC_RETRIEVAL_AND_REVIEW",
+            "runtime_mode": "BM25_ONLY",
+            "model_generation": "NOT_CONFIGURED",
+            "execution_authority": "NONE",
+        }, {}, None)
+        result = collect_space_readiness(item("szl-second-brain"), ROOT, {})
+        self.assertEqual(result["readiness_state"], "SCOPED_READY_UNVERIFIED")
+        self.assertEqual(result["readiness_scope"], "PUBLIC_RETRIEVAL_REVIEW")
+        self.assertEqual(result["readiness_http"], 200)
+        self.assertIn("NO_MODEL_INFERENCE", result["readiness_reason"])
+
+    @patch("census.space_readiness.request_json")
+    def test_second_brain_503_and_bogus_200_never_green(self, request_json):
+        request_json.return_value = (None, {}, "http503")
+        result = collect_space_readiness(item("szl-second-brain"), ROOT, {})
+        self.assertEqual((result["readiness_state"], result["readiness_http"]), ("NOT_READY", 503))
+        request_json.return_value = ({
+            "schema": "szl.second-brain.readiness/v1", "ready": True,
+            "state": "READY", "scope": "PUBLIC_RETRIEVAL_AND_REVIEW",
+            "runtime_mode": "BM25_ONLY", "execution_authority": "NONE",
+            "model_generation": "ENABLED",
+        }, {}, None)
+        result = collect_space_readiness(item("szl-second-brain"), ROOT, {})
+        self.assertEqual(result["readiness_state"], "UNKNOWN")
+        self.assertEqual(result["readiness_reason"], "RETRIEVAL_SCOPE_CHANGED")
+
+    @staticmethod
+    def _anatomy_fixtures():
+        status = {
+            "schema": "szl.anatomy.frontier-status/v1",
+            "ready": True, "state": "SOURCE_BOUND_REVIEW_MEMORY",
+            "candidate_count": 144, "candidate_set_sha256": "f" * 64,
+            "second_brain_source_repository": "szl-holdings/szl-second-brain",
+            "second_brain_source_revision": SOURCE_SHA, "content_access": "HANDLES_ONLY",
+            "execution_authority": "NONE", "promotion_authority": "NONE",
+            "training_authority": "NONE", "raw_graph_nodes_admitted_to_gradients": 0,
+            "private_graph_present": False,
+        }
+        return status, {
+            "schema": "szl.anatomy.holographic-v7/v1",
+            "ready": True, "state": "SOURCE_BOUND_READ_ONLY", "frontier": dict(status),
+        }
+
+    @patch("census.space_readiness.request_json")
+    def test_anatomy_feed_ready_is_renderer_and_signature_unverified(self, request_json):
+        status, holo = self._anatomy_fixtures()
+        request_json.side_effect = [(status, {}, None), (holo, {}, None)]
+        result = collect_space_readiness(item("anatomy"), ROOT, {})
+        self.assertEqual(result["readiness_state"], "SCOPED_READY_UNVERIFIED")
+        self.assertEqual(result["readiness_scope"], "SOURCE_FEED")
+        self.assertEqual(result["readiness_route"], "/api/anatomy/v1/frontier/status")
+        self.assertIn("WEBGL_AND_SIGNATURE_UNVERIFIED", result["readiness_reason"])
+        self.assertEqual(request_json.call_count, 2)
+
+    @patch("census.space_readiness.request_json")
+    def test_anatomy_conflicting_source_200_is_not_ready(self, request_json):
+        status, holo = self._anatomy_fixtures()
+        holo["frontier"]["second_brain_source_revision"] = "c" * 40
+        request_json.side_effect = [(status, {}, None), (holo, {}, None)]
+        result = collect_space_readiness(item("anatomy"), ROOT, {})
+        self.assertEqual(result["readiness_state"], "SOURCE_CONFLICT")
+
+    @patch("census.space_readiness.request_json")
+    def test_anatomy_one_optional_feed_down_not_3d_green(self, request_json):
+        status, _ = self._anatomy_fixtures()
+        request_json.side_effect = [(status, {}, None), (None, {}, "http503")]
+        result = collect_space_readiness(item("anatomy"), ROOT, {})
+        self.assertEqual(result["readiness_state"], "NOT_READY")
+        self.assertEqual(result["readiness_http"], 503)
+
+    @patch("census.space_readiness.request_json")
+    def test_anatomy_200_but_unready_status_is_not_green(self, request_json):
+        status, _ = self._anatomy_fixtures()
+        status["ready"] = False
+        request_json.return_value = (status, {}, None)
+        result = collect_space_readiness(item("anatomy"), ROOT, {})
+        self.assertEqual(result["readiness_state"], "NOT_READY")
+        request_json.assert_called_once()
+
+    @patch("census.space_readiness.request_json")
+    def test_anatomy_candidate_set_invalid_or_malformed_is_not_green(self, request_json):
+        for key, invalid in (("candidate_set_sha256", "bad"), ("candidate_count", True)):
+            with self.subTest(key=key):
+                status, holo = self._anatomy_fixtures()
+                status[key] = invalid
+                holo["frontier"][key] = invalid
+                request_json.side_effect = [(status, {}, None), (holo, {}, None)]
+                result = collect_space_readiness(item("anatomy"), ROOT, {})
+                self.assertEqual(result["readiness_state"], "UNKNOWN")
+                request_json.side_effect = None
+
+    @patch("census.space_readiness.request_json")
+    def test_anatomy_training_authority_drift_is_not_green(self, request_json):
+        status, holo = self._anatomy_fixtures()
+        status["training_authority"] = holo["frontier"]["training_authority"] = "ENABLED"
+        request_json.side_effect = [(status, {}, None), (holo, {}, None)]
+        result = collect_space_readiness(item("anatomy"), ROOT, {})
+        self.assertEqual(result["readiness_state"], "NOT_READY")
+
+    @patch("census.space_readiness.request_json")
+    def test_router_control_inference_503_is_explicitly_not_configured(self, request_json):
+        request_json.return_value = (None, {}, "http503")
+        result = collect_space_readiness(item("szl-router-control"), ROOT, {})
+        self.assertEqual(result["readiness_state"], "NOT_READY")
+        self.assertEqual(result["readiness_scope"], "INFERENCE_CONFIGURATION")
+        self.assertEqual(result["readiness_http"], 503)
+        self.assertIn("DEFAULT_DENY", result["readiness_reason"])
+
+    @patch("census.space_readiness.request_json")
+    def test_router_control_even_configured_200_is_not_signed_inference(self, request_json):
+        payload = {
+            "status": "ready", "ready_for_requests": True,
+            "checks": {"registry_valid": True, "egress_enabled": True,
+                       "caller_auth_configured": True, "provider_configured": True},
+            "model_identity": "CONFIGURED",
+        }
+        request_json.return_value = (payload, {}, None)
+        result = collect_space_readiness(item("szl-router-control"), ROOT, {})
+        self.assertEqual(result["readiness_state"], "SCOPED_READY_UNVERIFIED")
+        self.assertIn("SIGNATURE_UNVERIFIED", result["readiness_reason"])
+        payload["checks"]["provider_configured"] = False
+        result = collect_space_readiness(item("szl-router-control"), ROOT, {})
+        self.assertEqual(result["readiness_state"], "UNKNOWN")
+
+    def test_extended_public_projection_preserves_scoped_routes_without_operational_claim(self):
+        for name, scope, route in (
+            ("anatomy", "SOURCE_FEED", "/api/anatomy/v1/frontier/status"),
+            ("szl-router-control", "INFERENCE_CONFIGURATION", "/readyz/inference"),
+            ("szl-second-brain", "PUBLIC_RETRIEVAL_REVIEW", "/readyz"),
+        ):
+            with self.subTest(name=name):
+                row = item(name)
+                row.update({"readiness_scope": scope, "readiness_route": route,
+                            "readiness_state": "SCOPED_READY_UNVERIFIED",
+                            "readiness_http": 200})
+                projected = _public_hf_item(row, "spaces")
+                self.assertEqual(projected["readiness_scope"], scope)
+                self.assertEqual(projected["readiness_route"], route)
+                self.assertEqual(projected["readiness_state"], "SCOPED_READY_UNVERIFIED")
+
     @patch("census.huggingface.collect_space_readiness")
     @patch("census.huggingface._resolve_space_source_binding")
     @patch("census.huggingface.http_probe")
