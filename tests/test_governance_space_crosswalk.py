@@ -93,6 +93,36 @@ class VerticalBindingTests(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(BindingHold):
                 read_manifest(raw)
 
+    def test_manifest_object_cannot_impersonate_verified_blob(self):
+        source = fixture()
+        raw = json.dumps(source).encode()
+        blob = hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()
+        altered = fixture()
+        altered["public_bodies"][0]["backend_source"] = "szl-holdings/other-repository"
+        spaces = [{"id": "SZLHOLDINGS/terra", "private": False, "sha": HF_SHA}]
+        with self.assertRaisesRegex(BindingHold, "MANIFEST_OBJECT_MISMATCH"):
+            crosswalk(altered, spaces, manifest_commit=COMMIT,
+                      manifest_blob=blob, raw_manifest=raw)
+
+    def test_crosswalk_invalid_manifest_or_raw_bytes_fail_closed(self):
+        source = fixture()
+        raw = json.dumps(source).encode()
+        blob = hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()
+        cases = (
+            (None, raw, "INVALID_MANIFEST"),
+            ([], raw, "INVALID_MANIFEST"),
+            (source, None, "INPUT_BUDGET"),
+            (source, "non-bytes", "INPUT_BUDGET"),
+            (source, b"", "INPUT_BUDGET"),
+            (source, b"x" * 1_000_001, "INPUT_BUDGET"),
+        )
+        for doc, supplied_raw, reason in cases:
+            with self.subTest(reason=reason, doc_type=type(doc).__name__,
+                              raw_type=type(supplied_raw).__name__):
+                with self.assertRaisesRegex(BindingHold, reason):
+                    crosswalk(doc, [], manifest_commit=COMMIT,
+                              manifest_blob=blob, raw_manifest=supplied_raw)
+
     def test_source_blob_mismatch_rejected(self):
         doc = fixture()
         raw = json.dumps(doc).encode()

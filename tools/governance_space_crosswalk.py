@@ -52,6 +52,21 @@ def read_manifest(raw: bytes) -> dict:
 def crosswalk(manifest: dict, public_spaces: list[dict], *,
               manifest_commit: str, manifest_blob: str, raw_manifest: bytes) -> dict:
     """Return exact declarations and explicit unverified runtime state."""
+    # The object is advisory until its exact byte source has been verified.
+    _require(type(manifest) is dict, "INVALID_MANIFEST")
+    _require(type(raw_manifest) is bytes and 0 < len(raw_manifest) <= 1_000_000,
+             "INPUT_BUDGET")
+    authenticated_manifest = read_manifest(raw_manifest)
+    try:
+        supplied_json = json.dumps(manifest, sort_keys=True, separators=(",", ":"),
+                                   allow_nan=False)
+        authenticated_json = json.dumps(authenticated_manifest, sort_keys=True,
+                                        separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        raise BindingHold("INVALID_MANIFEST") from None
+    _require(supplied_json == authenticated_json, "MANIFEST_OBJECT_MISMATCH")
+    # Never emit fields from a caller-owned object that was not decoded from bytes.
+    manifest = authenticated_manifest
     _require(type(manifest_commit) is str and SHA.fullmatch(manifest_commit) is not None
              and manifest_commit != "0" * 40, "UNPINNED_GITHUB_COMMIT")
     _require(type(manifest_blob) is str and SHA.fullmatch(manifest_blob) is not None,
