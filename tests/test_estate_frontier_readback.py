@@ -111,31 +111,27 @@ class EstateReadbackTests(unittest.TestCase):
         self.assertEqual(edge["payment_settlement"], "UNVERIFIED")
         self.assertEqual([method for url, method in calls if url == mcp], ["HEAD"])
 
-    def test_mcp_health_200_readyz_503_is_not_release_or_payment(self):
-        """Tunnel reachability must not promote an authentication-unavailable origin."""
+    def test_get_only_mcp_readyz_is_never_sent_as_head(self):
+        """A GET-only readiness contract must not produce misleading HEAD evidence."""
         health = "https://mcp.a-11-oy.com/healthz"
         ready = "https://mcp.a-11-oy.com/readyz"
         calls = []
 
         def fake(url, method):
             calls.append((url, method))
-            if url == health:
-                return 200
             if url == ready:
-                return 503
-            return 402 if url.startswith("https://inference.") else 200
+                return 405  # Synthetic method mismatch: must remain unobserved.
+            return 530 if url == health else 200
 
         links = module.probe_fixed_links(fake)
-        selected = {item["url"]: item for item in links if item["url"] in (health, ready)}
-        self.assertEqual(set(selected), {health, ready})
-        self.assertEqual(selected[health]["http_status"], 200)
-        self.assertEqual(selected[ready]["http_status"], 503)
-        for item in selected.values():
-            self.assertEqual(item["method"], "HEAD")
-            self.assertEqual(item["transport"], "OBSERVED")
-            self.assertEqual(item["release_readiness"], "UNVERIFIED")
-            self.assertEqual(item["payment_settlement"], "UNVERIFIED")
-        self.assertEqual([method for url, method in calls if url in selected], ["HEAD", "HEAD"])
+        self.assertNotIn(ready, module.FIXED_URLS)
+        self.assertNotIn(ready, [item["url"] for item in links])
+        self.assertEqual([method for url, method in calls if url == health], ["HEAD"])
+        self.assertFalse(any(url == ready for url, _ in calls))
+        observed = next(row for row in links if row["url"] == health)
+        self.assertEqual(observed["http_status"], 530)
+        self.assertEqual(observed["release_readiness"], "UNVERIFIED")
+        self.assertEqual(observed["payment_settlement"], "UNVERIFIED")
 
     def test_head_405_source_identity_only_get_fallback(self):
         calls = []
