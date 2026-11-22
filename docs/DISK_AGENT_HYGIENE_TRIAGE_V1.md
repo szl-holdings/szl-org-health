@@ -14,7 +14,7 @@ At 2026-11-20 05:21:01.3176306Z and 05:21:08.3678508Z, a bounded, read-only Desk
 - `historical.state=UNAVAILABLE` means no historical delta is calculated; `historical_drop_bytes=null` is intentionally not zero. A supplied prior reading needs a reference and comparable UTC/capacity, but **the tool does not verify any upstream signature**. Its state is `UPSTREAM_ASSERTED_NOT_CRYPTOGRAPHICALLY_CHECKED`, never independently authenticated. It is an alert hint, not release evidence.
 - A sampled free space below **50 GiB**, a supplied historical drop of at least **5 GiB**, a free-space decline of **2 GiB** within **120 seconds**, an independently *supplied* same-cache growth of at least **2 GiB** within **600 seconds**, or any existent scratch/error item whose ownership remains unverified yields an alert. Short-term volume depletion is expressly **unattributed**, not automatically a cache fault. The growth flags are hints; the caller must prove collection and object identity separately.
 - No cache is classified disposable. `cleanup_authorized`, `training_or_release_authorized`, `cache_disposable_confirmed`, `baseline_signature_independently_verified`, and `cache_growth_claim_independently_verified` are always false. No private keys, Docker/WSL disks, pagefiles, OneDrive, signed receipts, model weights, Hugging Face cache, Git worktrees or user files may be altered by this tool.
-- CLI takes a single explicitly supplied JSON file, refuses symlinks/junctions, protected path components, duplicate JSON keys, NaN, oversized inputs and schema errors. It writes no output file, posts no notification and performs no network or provider call. Exit codes: **0** no trigger in supplied metadata (not a health certificate); **2** alert for human review; **3** malformed or unavailable input (HOLD).
+- CLI accepts either an explicitly supplied JSON file or bounded sanitized JSON on stdin; file mode refuses symlinks/junctions and protected path components, and both modes reject duplicate JSON keys, NaN, oversized inputs and schema errors. It writes no output file, posts no notification and performs no network or provider call. Exit codes: **0** no trigger in supplied metadata (not a health certificate); **2** alert for human review; **3** malformed or unavailable input (HOLD).
 
 ## Example invocation (only with a sanitized operator-generated JSON input)
 
@@ -28,3 +28,38 @@ The `approved-observations` path is an **example of a future authorized input**,
 ## Next safety decision
 
 Perform an owner-authorized **read-only evidence custody search** using exact historical receipt digests/sizes and existing approved roots, once those digests are independently sourced. Preserve the three unknown-owner scratch logs until their producer and purpose are verified. Do not alter services, restart agents, reclaim disk, or merge this tool without its normal CI and independent review. This module does not by itself resolve incident #387 or #382.
+
+## Proposed Windows in-memory sensor (review required; not installed)
+
+`tools/windows_disk_agent_hygiene_observer.ps1` takes two read-only, time-spaced
+C: readings and collects only process name/PID/working-set metadata plus
+existence and byte length of three allowlisted scratch error logs. The payload
+excludes process command lines, credentials, user content and private paths.
+Missing historical receipt custody remains `UNAVAILABLE`, **never zero or
+VERIFIED**, even if newer bridge preflight receipts are accessible. The collector
+does not measure cache growth (`UNOBSERVED`); no file becomes disposable.
+
+After review, from an owner-approved source-pinned checkout on **BETTERWITHAGE**
+(an installed checkout has not been verified), test one time without creating
+a disk snapshot file or installing a task:
+
+```powershell
+$payload = & powershell.exe -NoProfile -NonInteractive -File tools\windows_disk_agent_hygiene_observer.ps1
+if ($LASTEXITCODE -ne 0) { throw 'DISK_SENSOR_UNAVAILABLE' }
+$payload | python -B tools\disk_agent_hygiene_gate.py --stdin
+if ($LASTEXITCODE -notin @(0, 2)) { throw 'TRIAGE_UNAVAILABLE' }
+```
+
+A classifier exit of **2 means ALERT**, not success; return **0 only when no
+threshold is confirmed in the supplied observation**, which is still not a
+health, historical-custody, or production certificate. An empty/oversized or
+malformed stdin payload fails with exit 3. Check the collector's exit code
+**separately** to avoid accidentally interpreting an upstream PowerShell
+failure as a healthy downstream result.
+
+The collector is source-only: no installation, recurring scheduler,
+filesystem write, signature, durable archive, process termination, provider
+action or runtime admission is included. The disabled historical Windows
+disk-steward and scratch-cleanup tasks must remain disabled until
+independently audited. Treat all model reviews, including Mistral/Kimi,
+as advisory only; required CI and non-author code review remain binding.
