@@ -314,9 +314,7 @@ def collect_space_readiness(
     stage = runtime.get("stage")
     if not isinstance(stage, str):
         return _result("UNKNOWN", route, scope, "PROVIDER_STAGE_INVALID")
-    # Preserve explicit provider failures (including PAUSED/SLEEPING) even when
-    # a stale runtime revision is present. Only an actively RUNNING Space can
-    # have its serving readiness downgraded to TRANSITIONING by SHA drift.
+    # Preserve explicit provider failures while treating recognized rollout stages as transitional.
     if stage in {"APP_STARTING", "RUNNING_APP_STARTING", "BUILDING", "RUNNING_BUILDING", "STARTING", "STOPPING"}:
         return _result("TRANSITIONING", route, scope, "HUB_RUNTIME_REVISION_MISMATCH")
     if stage != "RUNNING":
