@@ -30,6 +30,7 @@ PRIORITY = ("a11oy", "szl-build-env", "szl-org-health", "szl-cram",
 FIXED_URLS = (
     "https://a-11-oy.com/",
     "https://a11oy.net/",
+    "https://mcp.a-11-oy.com/healthz",  # liveness transport only, not readiness
     "https://a-11-oy.com/healthz",
     "https://a-11-oy.com/.well-known/szl-source.json",
     "https://inference.a-11-oy.com/v1/chat/completions",
