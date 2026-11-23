@@ -126,7 +126,22 @@ class PyPIAuditTrustTests(TestCase):
         census_job = census_workflow.split("\n  census:\n", 1)[1].split("\n  file-audit:\n", 1)[0]
         existing_secrets = set(re.findall(r"\bsecrets\.([A-Z_0-9]+)", census_job))
         pypi_secrets = set(re.findall(r"\bsecrets\.([A-Z_0-9]+)", self.job))
-        self.assertLessEqual(pypi_secrets, existing_secrets)
+        # PyPI audit intentionally keeps its own explicit reader aliases.
+        # Census collection no longer carries these legacy aliases.
+        self.assertEqual(
+            pypi_secrets,
+            {
+                "DOCS_AUTOMATION_TEAM_READ_TOKEN",
+                "GH_PAT",
+                "GH_TOKEN",
+                "GITHUB_PAT",
+                "ORG_REPO_WORKFLOW_TOKEN",
+                "PAT_TOKEN",
+                "SZL_GITHUB_PAT",
+                "SZL_GITHUB_TOKEN",
+                "SZL_ORG_PAT",
+            },
+        )
         self.assertIn("python -B -m tools.run_with_validated_github_reader", self.job)
         self.assertIn("--minimum-repositories 123", self.job)
         self.assertIn("python -B tools/pypi_release_path_audit.py", self.job)
