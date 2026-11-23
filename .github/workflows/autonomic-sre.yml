@@ -4,9 +4,7 @@ on:
   schedule:
     - cron: "*/5 * * * *"
 
-permissions:
-  contents: read
-  issues: write
+permissions: {}
 
 concurrency:
   group: autonomic-public-estate-sre
@@ -17,6 +15,9 @@ jobs:
     name: Sense, decide, recover, verify, and receipt
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
@@ -73,10 +74,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           HF_ORG_TOKEN: ${{ secrets.HF_ORG_TOKEN }}
-          HF_WRITE_TOKEN: ${{ secrets.HF_WRITE_TOKEN }}
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
-          HUGGING_FACE_HUB_TOKEN: ${{ secrets.HUGGING_FACE_HUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
