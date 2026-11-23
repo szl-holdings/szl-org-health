@@ -60,7 +60,12 @@ def fetch_json(url: str) -> Any:
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=8) as response:
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                raise CensusUnavailable("REDIRECT_NOT_ALLOWED")
+
+        opener = urllib.request.build_opener(NoRedirect)
+        with opener.open(request, timeout=8) as response:
             if response.status != 200:
                 raise CensusUnavailable("HTTP_UNAVAILABLE")
             raw = response.read(MAX_BYTES + 1)
