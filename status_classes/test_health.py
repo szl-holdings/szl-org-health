@@ -1,7 +1,7 @@
 import unittest
 
 from status_classes.health import (EVIDENCE_INTEGRITY, FRESHNESS, Observation,
-                                   ObservationError, PROVIDER_FAILURE, StatusReport,
+                                   ObservationError, PROVIDER_FAILURE, 
                                    classify, ErrorBudget, UNKNOWN)
 
 NOW = 10_000.0
