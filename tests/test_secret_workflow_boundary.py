@@ -213,8 +213,7 @@ class SecretWorkflowBoundaryTests(unittest.TestCase):
             3,
         )
 
-        aliases = (
-            "SZL_GITHUB_TOKEN",
+        removed_aliases = (
             "DOCS_AUTOMATION_TEAM_READ_TOKEN",
             "ORG_REPO_WORKFLOW_TOKEN",
             "SZL_ORG_PAT",
@@ -224,8 +223,11 @@ class SecretWorkflowBoundaryTests(unittest.TestCase):
             "GITHUB_PAT",
             "GH_TOKEN",
         )
-        for alias in aliases:
-            self.assertIn(f"secrets.{alias}", workflow)
+        for alias in removed_aliases:
+            self.assertNotIn(f"secrets.{alias}", workflow)
+        self.assertIn("GITHUB_READER_APP_TOKEN: ${{ steps.org-reader.outputs.token }}", workflow)
+        self.assertIn("SZL_GITHUB_TOKEN: ${{ secrets.SZL_GITHUB_TOKEN }}", workflow)
+        self.assertIn("REPOSITORY_GITHUB_TOKEN: ${{ github.token }}", workflow)
 
         self.assertIn("REPOSITORY_GITHUB_TOKEN: ${{ github.token }}", workflow)
         self.assertIn(
@@ -241,6 +243,15 @@ class SecretWorkflowBoundaryTests(unittest.TestCase):
             workflow,
         )
 
+    def test_autonomic_controller_has_job_scoped_permissions_and_one_hf_binding(self) -> None:
+        workflow = (WORKFLOWS / "autonomic-sre.yml").read_text(encoding="utf-8")
+        self.assertIn("permissions: {}", workflow)
+        self.assertIn("    permissions:\n      contents: read\n      issues: write", workflow)
+        self.assertIn("GITHUB_TOKEN: ${{ github.token }}", workflow)
+        self.assertIn("HF_ORG_TOKEN: ${{ secrets.HF_ORG_TOKEN }}", workflow)
+        self.assertEqual(workflow.count("secrets."), 1)
+        for alias in ("HF_WRITE_TOKEN", "HF_TOKEN", "HUGGINGFACE_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+            self.assertNotIn(f"secrets.{alias}", workflow)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

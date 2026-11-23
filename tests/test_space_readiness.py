@@ -37,7 +37,31 @@ class SpaceReadinessTests(unittest.TestCase):
         request_json.assert_not_called()
 
     @patch("census.space_readiness.request_json")
-    def test_a11oy_aligned_head_preserves_source_verification_gap(self, request_json):
+    def test_failed_paused_sleeping_stages_outweigh_sha_drift(self, request_json):
+        for stage in ("RUNTIME_ERROR", "BUILD_ERROR", "CONFIG_ERROR", "PAUSED", "SLEEPING", "STOPPED"):
+            with self.subTest(stage=stage):
+                space = item("a11oy", stage=stage, hub_sha="c" * 40, runtime_sha=HUB_SHA)
+                result = collect_space_readiness(space, ROOT, {})
+                self.assertEqual(result["readiness_state"], "NOT_READY")
+                self.assertEqual(result["readiness_reason"], "PROVIDER_NOT_RUNNING")
+                self.assertIsNone(result["readiness_http"])
+        request_json.assert_not_called()
+
+
+    @patch("census.space_readiness.request_json")
+    def test_starting_and_stopping_sha_drift_stays_transitioning(self, request_json):
+        for stage in ("STARTING", "STOPPING"):
+            with self.subTest(stage=stage):
+                space = item("a11oy", stage=stage, hub_sha="c" * 40, runtime_sha=HUB_SHA)
+                result = collect_space_readiness(space, ROOT, {})
+                self.assertEqual(result["readiness_state"], "TRANSITIONING")
+                self.assertEqual(result["readiness_reason"], "HUB_RUNTIME_REVISION_MISMATCH")
+                self.assertIsNone(result["readiness_http"])
+        request_json.assert_not_called()
+
+
+    @patch("census.space_readiness.request_json")
+    def test_running_sha_drift_stays_transitioning(self, request_json):
         request_json.side_effect = [
             ({"status": "ready", "organ": "a11oy"}, {}, None),
             ({"git_sha": SOURCE_SHA}, {}, None),
@@ -143,6 +167,26 @@ class SpaceReadinessTests(unittest.TestCase):
         self.assertEqual(result["readiness_state"], "PLACEHOLDER")
         self.assertEqual(result["readiness_http"], 200)
         self.assertEqual(result["readiness_scope"], "STATIC_CONTENT")
+
+    @patch("census.space_readiness.request_bytes")
+    def test_brand_campaign_9747_byte_page_within_bounded_probe(self, request_bytes):
+        prefix = b"<html><title>SZL Campaign</title>"
+        content = prefix + b"x" * (9747 - len(prefix))
+        self.assertEqual(len(content), 9747)
+        request_bytes.return_value = (content, {}, None)
+        result = collect_space_readiness(item("szl-brand-campaign", sdk="static"), ROOT, {})
+        self.assertEqual(result["readiness_state"], "CONTENT_PRESENT_UNVERIFIED")
+        self.assertEqual(result["readiness_http"], 200)
+        self.assertEqual(request_bytes.call_args.kwargs["max_bytes"], 16384)
+
+
+    @patch("census.space_readiness.request_bytes")
+    def test_brand_campaign_oversize_remains_unknown(self, request_bytes):
+        request_bytes.return_value = (None, {}, "response-body-limit-exceeded")
+        result = collect_space_readiness(item("szl-brand-campaign", sdk="static"), ROOT, {})
+        self.assertEqual(result["readiness_state"], "UNKNOWN")
+        self.assertEqual(result["readiness_reason"], "STATIC_CONTENT_UNAVAILABLE")
+        self.assertEqual(request_bytes.call_args.kwargs["max_bytes"], 16384)
 
     @patch("census.space_readiness.request_json")
     @patch("census.space_readiness.request_bytes")
