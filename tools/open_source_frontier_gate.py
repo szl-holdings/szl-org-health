@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 SCHEMA = "szl.open_source_frontier_candidate.v1"
 MAX_BYTES = 16 * 1024
+MAX_JSON_DEPTH = 64
 ALLOWED_LICENSES = frozenset({"MIT", "Apache-2.0", "BSD-3-Clause"})
 MAX_EVIDENCE_AGE = timedelta(days=90)
 MAX_FUTURE_SKEW = timedelta(minutes=5)
@@ -43,10 +44,36 @@ def _reject_constant(_: str) -> object:
     raise ValueError("nonstandard JSON constant")
 
 
+def _bound_depth(parsed: object) -> None:
+    """Bound nesting independently of Python interpreter recursion limits."""
+    stack = [(parsed, 0)]
+    while stack:
+        value, depth = stack.pop()
+        if type(value) is dict:
+            if depth >= MAX_JSON_DEPTH:
+                raise ValueError("candidate JSON nesting exceeded")
+            stack.extend((item, depth + 1) for item in value.values())
+        elif type(value) is list:
+            if depth >= MAX_JSON_DEPTH:
+                raise ValueError("candidate JSON nesting exceeded")
+            stack.extend((item, depth + 1) for item in value)
+
+
 def parse(raw: bytes) -> object:
     if not isinstance(raw, bytes) or not raw or len(raw) > MAX_BYTES:
         raise ValueError("empty, oversize, or non-byte input")
-    return json.loads(raw.decode("utf-8", "strict"), object_pairs_hook=_strict_object, parse_constant=_reject_constant)
+    try:
+        parsed = json.loads(
+            raw.decode("utf-8", "strict"),
+            object_pairs_hook=_strict_object,
+            parse_constant=_reject_constant,
+            parse_float=_reject_constant,
+            parse_int=_reject_constant,
+        )
+        _bound_depth(parsed)
+        return parsed
+    except RecursionError:
+        raise ValueError("nesting limit exceeded") from None
 
 
 def _exact_keys(obj: object, keys: set[str]) -> bool:
@@ -94,7 +121,8 @@ def _date(value: object) -> datetime | None:
 
 def evaluate(candidate: object, *, now: datetime | None = None) -> dict[str, object]:
     """Classify *declarations* only. No output of this function grants admission."""
-    now = now or datetime.now(UTC)
+    if now is None:
+        now = datetime.now(UTC)
     if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() != timedelta(0):
         raise ValueError("now must be timezone-aware UTC")
     problems: list[str] = []

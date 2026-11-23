@@ -165,6 +165,19 @@ class GateTests(unittest.TestCase):
         d["upstream"]["declared_spdx"] = True
         self.assert_holds(d, "LICENSE_REVIEW_REQUIRED")
 
+    def test_numeric_payloads_fail_strict_json_parse(self):
+        for number in (b"1", b"3.14", b"1e999", b"-1e999"):
+            with self.subTest(number=number), self.assertRaises(ValueError):
+                parse(b'{"number":' + number + b"}")
+
+    def test_extreme_json_nesting_is_bounded_hold(self):
+        with self.assertRaises(ValueError):
+            parse(b"[" * 2000 + b"]" * 2000)
+
+    def test_explicit_invalid_clock_is_not_silently_replaced(self):
+        with self.assertRaises(ValueError):
+            evaluate(candidate(), now=False)
+
     def test_malformed_repository_name(self):
         d = candidate()
         d["upstream"]["repo_url"] = "https://github.com/../foo"
