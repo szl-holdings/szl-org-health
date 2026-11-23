@@ -12,9 +12,10 @@ No status claims are made about any other pull request.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 PROVIDER_FAILURE = "PROVIDER_FAILURE"
 EVIDENCE_INTEGRITY = "EVIDENCE_INTEGRITY"
@@ -41,6 +42,10 @@ class Observation:
             raise ObservationError("kind must be one of %r" % (CLASSES,))
         if not self.label or not isinstance(self.label, str):
             raise ObservationError("label must be a non-empty string")
+        if type(self.ok) is not bool:
+            raise ObservationError("ok must be a boolean")
+        if not (math.isfinite(self.observed_ts) and math.isfinite(self.window_s)):
+            raise ObservationError("observed_ts and window_s must be finite")
         if not self.window_s or self.window_s <= 0:
             raise ObservationError("window_s must be positive")
         if self.observed_ts < 0:
