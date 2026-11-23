@@ -49,6 +49,18 @@ class SpaceReadinessTests(unittest.TestCase):
         request_json.assert_not_called()
 
     @patch("census.space_readiness.request_json")
+    def test_starting_and_stopping_sha_drift_stays_transitioning(self, request_json):
+        for stage in ("STARTING", "STOPPING"):
+            with self.subTest(stage=stage):
+                space = item("a11oy", stage=stage, hub_sha="c" * 40, runtime_sha=HUB_SHA)
+                result = collect_space_readiness(space, ROOT, {})
+                self.assertEqual(result["readiness_state"], "TRANSITIONING")
+                self.assertEqual(result["readiness_reason"], "HUB_RUNTIME_REVISION_MISMATCH")
+                self.assertIsNone(result["readiness_http"])
+        request_json.assert_not_called()
+
+
+    @patch("census.space_readiness.request_json")
     def test_running_sha_drift_stays_transitioning(self, request_json):
         space = item("a11oy", stage="RUNNING", hub_sha="c" * 40, runtime_sha=HUB_SHA)
         result = collect_space_readiness(space, ROOT, {})

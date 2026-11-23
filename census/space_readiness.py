@@ -317,7 +317,7 @@ def collect_space_readiness(
     # Preserve explicit provider failures (including PAUSED/SLEEPING) even when
     # a stale runtime revision is present. Only an actively RUNNING Space can
     # have its serving readiness downgraded to TRANSITIONING by SHA drift.
-    if stage in {"APP_STARTING", "RUNNING_APP_STARTING", "BUILDING", "RUNNING_BUILDING"}:
+    if stage in {"APP_STARTING", "RUNNING_APP_STARTING", "BUILDING", "RUNNING_BUILDING", "STARTING", "STOPPING"}:
         return _result("TRANSITIONING", route, scope, "HUB_RUNTIME_REVISION_MISMATCH")
     if stage != "RUNNING":
         return _result("NOT_READY", route, scope, "PROVIDER_NOT_RUNNING")
