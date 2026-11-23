@@ -132,6 +132,7 @@ class PyPIAuditTrustTests(TestCase):
             pypi_secrets,
             {
                 "DOCS_AUTOMATION_TEAM_READ_TOKEN",
+                "QILLQAQ_PRIVATE_KEY",
                 "GH_PAT",
                 "GH_TOKEN",
                 "GITHUB_PAT",
