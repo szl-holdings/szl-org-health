@@ -280,7 +280,8 @@ def _frontier(root_url: str, route: str, scope: str) -> dict[str, Any]:
 
 
 def _brand_campaign(root_url: str, route: str, scope: str) -> dict[str, Any]:
-    raw, _, error = request_bytes(root_url, timeout=6, retries=0, max_bytes=8192)
+    # Keep a finite ceiling while allowing the current public campaign page.
+    raw, _, error = request_bytes(root_url, timeout=6, retries=0, max_bytes=16384)
     status = _status(error, raw)
     if status != 200 or raw is None:
         return _result("UNKNOWN", route, scope, "STATIC_CONTENT_UNAVAILABLE", http=status)
