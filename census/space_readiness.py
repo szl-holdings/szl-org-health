@@ -313,7 +313,8 @@ def _frontier(root_url: str, route: str, scope: str) -> dict[str, Any]:
 
 
 def _brand_campaign(root_url: str, route: str, scope: str) -> dict[str, Any]:
-    raw, _, error = request_bytes(root_url, timeout=6, retries=0, max_bytes=8192)
+    # Keep a finite ceiling while allowing the current public campaign page.
+    raw, _, error = request_bytes(root_url, timeout=6, retries=0, max_bytes=16384)
     status = _status(error, raw)
     if status != 200 or raw is None:
         return _result("UNKNOWN", route, scope, "STATIC_CONTENT_UNAVAILABLE", http=status)
@@ -387,16 +388,19 @@ def collect_space_readiness(
     stage = runtime.get("stage")
     if not isinstance(stage, str):
         return _result("UNKNOWN", route, scope, "PROVIDER_STAGE_INVALID")
+    # Preserve explicit provider failures while treating recognized rollout stages as transitional.
+    if stage in {"APP_STARTING", "RUNNING_APP_STARTING", "BUILDING", "RUNNING_BUILDING", "STARTING", "STOPPING"}:
+        return _result("TRANSITIONING", route, scope, "HUB_RUNTIME_REVISION_MISMATCH")
+    if stage != "RUNNING":
+        return _result("NOT_READY", route, scope, "PROVIDER_NOT_RUNNING")
     if (
         isinstance(hub_sha, str)
         and SHA40.fullmatch(hub_sha)
         and isinstance(runtime_sha, str)
         and SHA40.fullmatch(runtime_sha)
         and hub_sha != runtime_sha
-    ) or stage in {"APP_STARTING", "RUNNING_APP_STARTING", "BUILDING", "RUNNING_BUILDING"}:
+    ):
         return _result("TRANSITIONING", route, scope, "HUB_RUNTIME_REVISION_MISMATCH")
-    if stage != "RUNNING":
-        return _result("NOT_READY", route, scope, "PROVIDER_NOT_RUNNING")
     if repo_id != "SZLHOLDINGS/szl-brand-campaign" and (
         not isinstance(hub_sha, str)
         or not SHA40.fullmatch(hub_sha)
