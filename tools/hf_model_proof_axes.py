@@ -37,16 +37,6 @@ def _valid_sha40(value: Any) -> bool:
     )
 
 
-def _reject_duplicate_properties(pairs):
-    """Reject ambiguous object keys at *every* JSON nesting level."""
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ProofHold("DUPLICATE_JSON_KEY")
-        result[key] = value
-    return result
-
-
 def _require(condition: bool, reason: str) -> None:
     if not condition:
         raise ProofHold(reason)
@@ -116,13 +106,12 @@ def evaluate(snapshot: dict[str, Any], *, scope: str, source_revision: str) -> d
     # A syntactically complete but empty census is not evidence that the
     # model namespace was successfully enumerated.
     _require(len(rows) > 0, "MODEL_CENSUS_EMPTY")
-    # A public-scope report cannot aggregate private or unverified-visibility
-    # model metadata; converting such a row to UNKNOWN still leaks counts.
-    if scope == "public":
-        _require(
-            all(not isinstance(row, dict) or row.get("private") is False for row in rows),
-            "PUBLIC_SCOPE_VISIBILITY_UNVERIFIED",
-        )
+    # A public census must not silently count private or unverifiable model rows.
+    # Classification as UNKNOWN would still reveal their presence in aggregates.
+    if scope == "public" and any(
+        isinstance(item, dict) and item.get("private") is not False for item in rows
+    ):
+        raise ProofHold("PUBLIC_SCOPE_VISIBILITY_UNPROVEN")
     seen: set[str] = set()
     counts: Counter[str] = Counter()
     reasons: Counter[str] = Counter()
@@ -174,6 +163,16 @@ def evaluate(snapshot: dict[str, Any], *, scope: str, source_revision: str) -> d
     }
 
 
+def _strict_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject ambiguous JSON at any depth before evaluating proof axes."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ProofHold("DUPLICATE_JSON_KEY")
+        result[key] = value
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot", required=True, type=Path)
@@ -198,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         data = json.loads(
             raw.decode("utf-8"),
-            object_pairs_hook=_reject_duplicate_properties,
+            object_pairs_hook=_strict_object_pairs,
             parse_constant=lambda _: (_ for _ in ()).throw(ProofHold("NONFINITE_JSON")),
         )
         report = evaluate(data, scope=args.scope, source_revision=args.source_revision)

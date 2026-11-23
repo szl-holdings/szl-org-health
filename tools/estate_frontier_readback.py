@@ -30,6 +30,7 @@ PRIORITY = ("a11oy", "szl-build-env", "szl-org-health", "szl-cram",
 FIXED_URLS = (
     "https://a-11-oy.com/",
     "https://a11oy.net/",
+    "https://mcp.a-11-oy.com/healthz",  # liveness transport only, not readiness
     "https://a-11-oy.com/healthz",
     "https://a-11-oy.com/.well-known/szl-source.json",
     "https://inference.a-11-oy.com/v1/chat/completions",
@@ -129,6 +130,11 @@ def summarize_workflows(response: dict | None, error: str | None):
     total = response.get("total_count")
     if not isinstance(rows, list) or type(total) is not int or total < 0:
         return summarize_workflows(None, "INVALID_WORKFLOWS")
+    ids = [row.get("id") for row in rows if isinstance(row, dict)]
+    if (len(ids) != len(rows)
+            or any(type(identity) is not int or identity <= 0 for identity in ids)
+            or len(set(ids)) != len(ids)):
+        return summarize_workflows(None, "WORKFLOW_IDENTITY_INVALID")
     active = sum(row.get("state") in WORKFLOW_ACTIVE for row in rows if isinstance(row, dict))
     disabled = sum(row.get("state") in WORKFLOW_DISABLED for row in rows if isinstance(row, dict))
     unknown = len(rows) - active - disabled

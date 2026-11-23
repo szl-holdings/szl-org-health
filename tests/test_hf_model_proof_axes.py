@@ -102,13 +102,32 @@ class ModelProofAxesTests(unittest.TestCase):
         self.assertNotIn('NO_WEIGHT_FILE_OBSERVED', r['status_counts'])
 
     def test_public_private_visibility_is_not_proven(self):
-        for private in (True, None, "unknown"):
-            with self.subTest(private=private):
-                with self.assertRaisesRegex(ProofHold, 'PUBLIC_SCOPE_VISIBILITY_UNVERIFIED'):
-                    self.evaluate(row(private=private))
+        for value in (True, None, 'unknown'):
+            with self.subTest(private=value), self.assertRaisesRegex(
+                ProofHold, 'PUBLIC_SCOPE_VISIBILITY_UNPROVEN'
+            ):
+                self.evaluate(row(private=value))
         r2 = self.evaluate(row(private=True), scope='authenticated')
         self.assertEqual(r2['status_counts'], {'NO_WEIGHT_FILE_OBSERVED': 1})
         self.assertEqual(r2['scope'], 'authenticated')
+
+    def test_private_row_never_leaks_via_public_cli_or_receipt(self):
+        import io
+        import json
+        from contextlib import redirect_stdout
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / 'census.json'
+            dst = Path(tmp) / 'receipt.json'
+            src.write_text(json.dumps(snap(row('PRIVATE_CANARY', private=True))), encoding='utf-8')
+            captured = io.StringIO()
+            with redirect_stdout(captured):
+                code = main(['--snapshot', str(src), '--source-revision', SHA,
+                             '--scope', 'public', '--private-receipt', str(dst)])
+            self.assertEqual(code, 78)
+            self.assertFalse(dst.exists())
+            self.assertEqual(json.loads(captured.getvalue())['reason'],
+                             'PUBLIC_SCOPE_VISIBILITY_UNPROVEN')
+            self.assertNotIn('PRIVATE_CANARY', captured.getvalue())
 
     def test_duplicate_ids_hold_without_a_success_report(self):
         with self.assertRaisesRegex(ProofHold, 'DUPLICATE_MODEL_ID'):
@@ -119,6 +138,58 @@ class ModelProofAxesTests(unittest.TestCase):
         # partial=False. That must not become a complete namespace receipt.
         with self.assertRaisesRegex(ProofHold, 'MODEL_CENSUS_EMPTY'):
             self.evaluate()
+
+
+    def test_zero_revisions_cannot_be_counted_as_model_artifact_proof(self):
+        suspicious = row(sha='0' * 40,
+                         weight_files_observed=['model.safetensors'],
+                         weight_state='weights-present',
+                         artifact_state='artifact-present')
+        report = self.evaluate(suspicious)
+        self.assertEqual(report['status_counts'], {'UNKNOWN': 1})
+        self.assertEqual(report['per_repository_private'][0]['model_revision'], None)
+        self.assertEqual(report['training_verified_count'], 0)
+        with self.assertRaisesRegex(ProofHold, 'SOURCE_REVISION_UNAVAILABLE'):
+            evaluate(snap(row()), scope='public', source_revision='0' * 40)
+
+
+    def test_duplicate_json_keys_fail_before_any_aggregate_stdout(self):
+        import io
+        from contextlib import redirect_stdout
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'duplicate.json'
+            source.write_text(
+                '{"huggingface":{"organization":"SZLHOLDINGS",'
+                '"assets":{"models":{"ok":false,"ok":true,'
+                '"partial":false,"count":0,"items":[]}}}}',
+                encoding='utf-8',
+            )
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                exit_code = main([
+                    '--snapshot', str(source), '--scope', 'public',
+                    '--source-revision', SHA,
+                ])
+            self.assertEqual(exit_code, 78)
+            self.assertIn('DUPLICATE_JSON_KEY', buffer.getvalue())
+            self.assertNotIn('"repository_count"', buffer.getvalue())
+
+
+    def test_actual_snapshot_read_rejects_oversized_input(self):
+        import io
+        from contextlib import redirect_stdout
+        from tools.hf_model_proof_axes import MAX_INPUT_BYTES
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'oversized.json'
+            # Does not require network or any real model content.
+            with source.open('wb') as out:
+                out.write(b'x' * (MAX_INPUT_BYTES + 2))
+            capture = io.StringIO()
+            with redirect_stdout(capture):
+                code = main(['--snapshot', str(source), '--scope', 'public',
+                             '--source-revision', SHA])
+            self.assertEqual(code, 78)
+            self.assertIn('SNAPSHOT_BYTE_BUDGET', capture.getvalue())
 
     def test_count_and_organization_mismatch_are_holds(self):
         data = snap(row())
@@ -145,54 +216,25 @@ class ModelProofAxesTests(unittest.TestCase):
                           scope='authenticated')
         self.assertFalse(r['training_and_release_authorized'])
 
-    def test_zero_revisions_cannot_be_counted_as_model_artifact_proof(self):
-        suspicious = row(sha='0' * 40,
-                         weight_files_observed=['model.safetensors'],
-                         weight_state='weights-present',
-                         artifact_state='artifact-present')
-        report = self.evaluate(suspicious)
-        self.assertEqual(report['status_counts'], {'UNKNOWN': 1})
-        self.assertEqual(report['per_repository_private'][0]['model_revision'], None)
-        self.assertEqual(report['training_verified_count'], 0)
-        with self.assertRaisesRegex(ProofHold, 'SOURCE_REVISION_UNAVAILABLE'):
-            evaluate(snap(row()), scope='public', source_revision='0' * 40)
-
-    def test_duplicate_json_keys_fail_before_any_aggregate_stdout(self):
-        import io
-        from contextlib import redirect_stdout
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / 'duplicate.json'
-            source.write_text(
-                '{"huggingface":{"organization":"SZLHOLDINGS",'
-                '"assets":{"models":{"ok":false,"ok":true,'
-                '"partial":false,"count":0,"items":[]}}}}',
-                encoding='utf-8',
-            )
-            buffer = io.StringIO()
-            with redirect_stdout(buffer):
-                exit_code = main([
-                    '--snapshot', str(source), '--scope', 'public',
-                    '--source-revision', SHA,
-                ])
-            self.assertEqual(exit_code, 78)
-            self.assertIn('DUPLICATE_JSON_KEY', buffer.getvalue())
-            self.assertNotIn('"repository_count"', buffer.getvalue())
-
-    def test_actual_snapshot_read_rejects_oversized_input(self):
-        import io
-        from contextlib import redirect_stdout
-        from tools.hf_model_proof_axes import MAX_INPUT_BYTES
-        with tempfile.TemporaryDirectory() as tmp:
-            source = Path(tmp) / 'oversized.json'
-            # Does not require network or any real model content.
-            with source.open('wb') as out:
-                out.write(b'x' * (MAX_INPUT_BYTES + 2))
-            capture = io.StringIO()
-            with redirect_stdout(capture):
-                code = main(['--snapshot', str(source), '--scope', 'public',
-                             '--source-revision', SHA])
-            self.assertEqual(code, 78)
-            self.assertIn('SNAPSHOT_BYTE_BUDGET', capture.getvalue())
+    def test_duplicate_census_properties_fail_closed(self):
+        import json
+        for original, altered in (
+            ('"organization": "SZLHOLDINGS"',
+             '"organization": "OTHER", "organization": "SZLHOLDINGS"'),
+            ('"count": 1', '"count": 999, "count": 1'),
+        ):
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as tmp:
+                raw = json.dumps(snap(row()))
+                self.assertIn(original, raw)
+                src = Path(tmp) / "census.json"
+                dst = Path(tmp) / "private-report.json"
+                src.write_text(raw.replace(original, altered, 1), encoding="utf-8")
+                self.assertEqual(
+                    main(["--snapshot", str(src), "--source-revision", SHA,
+                          "--scope", "public", "--private-receipt", str(dst)]),
+                    78,
+                )
+                self.assertFalse(dst.exists())
 
     def test_private_receipt_is_exclusive(self):
         import json
