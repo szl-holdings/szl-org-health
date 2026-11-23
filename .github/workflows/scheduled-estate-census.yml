@@ -43,7 +43,6 @@ jobs:
       - name: Mint short-lived organization reader
         id: org-reader
         if: vars.QILLQAQ_CLIENT_ID != ''
-        continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ vars.QILLQAQ_CLIENT_ID }}
@@ -67,18 +66,9 @@ jobs:
 
       - name: Collect live estate census with a validated organization reader
         id: collect
-        continue-on-error: true
         env:
           GITHUB_READER_APP_TOKEN: ${{ steps.org-reader.outputs.token }}
           SZL_GITHUB_TOKEN: ${{ secrets.SZL_GITHUB_TOKEN }}
-          DOCS_AUTOMATION_TEAM_READ_TOKEN: ${{ secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN }}
-          ORG_REPO_WORKFLOW_TOKEN: ${{ secrets.ORG_REPO_WORKFLOW_TOKEN }}
-          SZL_ORG_PAT: ${{ secrets.SZL_ORG_PAT }}
-          SZL_GITHUB_PAT: ${{ secrets.SZL_GITHUB_PAT }}
-          GH_PAT: ${{ secrets.GH_PAT }}
-          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
-          GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
           REPOSITORY_GITHUB_TOKEN: ${{ github.token }}
           HF_TOKEN: ${{ secrets.HF_CENSUS_READ_TOKEN }}
           REFRESH_DEADLINE_S: "600"
@@ -95,7 +85,7 @@ jobs:
         env:
           COLLECT_OUTCOME: ${{ steps.collect.outcome }}
           EXPECTED_GITHUB_REPOSITORIES_MINIMUM: "63"
-          HAS_CROSS_REPO_GITHUB_TOKEN: ${{ steps.org-reader.outputs.token != '' || secrets.SZL_GITHUB_TOKEN != '' || secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN != '' || secrets.ORG_REPO_WORKFLOW_TOKEN != '' || secrets.SZL_ORG_PAT != '' || secrets.SZL_GITHUB_PAT != '' || secrets.GH_PAT != '' || secrets.PAT_TOKEN != '' || secrets.GITHUB_PAT != '' || secrets.GH_TOKEN != '' }}
+          HAS_CROSS_REPO_GITHUB_TOKEN: ${{ steps.org-reader.outputs.token != '' || secrets.SZL_GITHUB_TOKEN != '' }}
           HAS_HF_TOKEN: ${{ secrets.HF_CENSUS_READ_TOKEN != '' }}
           RECEIPT_REPOSITORY: ${{ github.repository }}
           RECEIPT_RUN_ATTEMPT: ${{ github.run_attempt }}
@@ -152,7 +142,6 @@ jobs:
       - name: Mint short-lived organization reader
         id: org-reader
         if: vars.QILLQAQ_CLIENT_ID != ''
-        continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ vars.QILLQAQ_CLIENT_ID }}
@@ -181,18 +170,9 @@ jobs:
 
       - name: Verify authoritative estate and every tracked default-branch blob
         id: collect
-        continue-on-error: true
         env:
           GITHUB_READER_APP_TOKEN: ${{ steps.org-reader.outputs.token }}
           SZL_GITHUB_TOKEN: ${{ secrets.SZL_GITHUB_TOKEN }}
-          DOCS_AUTOMATION_TEAM_READ_TOKEN: ${{ secrets.DOCS_AUTOMATION_TEAM_READ_TOKEN }}
-          ORG_REPO_WORKFLOW_TOKEN: ${{ secrets.ORG_REPO_WORKFLOW_TOKEN }}
-          SZL_ORG_PAT: ${{ secrets.SZL_ORG_PAT }}
-          SZL_GITHUB_PAT: ${{ secrets.SZL_GITHUB_PAT }}
-          GH_PAT: ${{ secrets.GH_PAT }}
-          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
-          GITHUB_PAT: ${{ secrets.GITHUB_PAT }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
           REPOSITORY_GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
