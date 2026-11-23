@@ -6,20 +6,21 @@ Date: 2026-11-22. Method: web-verified 2026 leaders. Documentation only: no code
 
 ## Leaders studied (web-verified 2026-11-22)
 
-1. **SRE error budgets** (burn-rate based status distinguishing degraded from down). [SRE Workbook](https://sre.google/workbook/implementing-slos/).
-2. **Freshness-as-first-class-signal** monitoring practice (missing data more dangerous than bad data).
+1. **SRE error budgets** (burn-rate based status distinguishing degraded from down). [SRE Workbook, implementing SLOs](https://sre.google/workbook/implementing-slos/); burn-rate alerting per [SRE Workbook, Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/).
+2. **Freshness-as-first-class-signal** monitoring practice (missing data more dangerous than bad data) - SYNTHESIZED from general SRE observability practice, not independently web-verified for this card; no single canonical external source claimed.
 
 ## Absorb actions (FUTURE PROPOSALS, non-authorizing)
 
 1. (error budgets) Status classes are separate: provider-failure class (e.g., Router 503), evidence-integrity class (e.g., unsigned digest), and freshness class, never merged into one red/green.
 2. (freshness) Every status cell carries window + sample size + last-seen; no cell renders green from stale data.
 3. (honesty) The surface reports UNKNOWN first-class and never infers health from reachability.
-Read-only alignment: open PRs #413 (separate Router 503 and Anatomy unsigned evidence) and #419 (provider failure precedence over SHA drift); no status claim.
+Read-only alignment: open PRs [szl-holdings/szl-org-health#413](https://github.com/szl-holdings/szl-org-health/pull/413) (separate Router 503 and Anatomy unsigned evidence) and [szl-holdings/szl-org-health#419](https://github.com/szl-holdings/szl-org-health/pull/419) (provider failure precedence over SHA drift); no status claim.
 
-## Sources (accessed 2026-11-22)
+## Sources (accessed 2026-11-22; links re-verified live 2026-11-23)
 
 - Google SRE Workbook, implementing SLOs: https://sre.google/workbook/implementing-slos/ (book doctrine, non-normative)
-- Freshness doctrine synthesized from SRE practice; no single canonical URL claimed.
+- Google SRE Workbook, Alerting on SLOs (multiwindow multi-burn-rate alerts): https://sre.google/workbook/alerting-on-slos/ (book doctrine, non-normative)
+- Freshness doctrine synthesized from SRE practice; recorded as SYNTHESIZED, not web-verified; no single canonical URL claimed.
 
 ## Do not do
 
