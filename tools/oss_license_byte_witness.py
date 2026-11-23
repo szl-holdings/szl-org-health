@@ -78,10 +78,9 @@ def fetch_public_json(url: str) -> object:
         raise WitnessError("PROVIDER_JSON_INVALID") from None
 
 
-def observe(candidate: object, *, get: _GET = fetch_public_json, now: datetime | None = None) -> dict[str, object]:
-    """Observe exact GitHub commit and LICENSE bytes without upgrading rights."""
-    stamp = (now or datetime.now(UTC)).isoformat().replace("+00:00", "Z")
-    base = {
+def _base_result(stamp: str) -> dict[str, object]:
+    """Complete result schema with all fail-closed defaults; every path returns this shape."""
+    return {
         "schema": SCHEMA,
         "state": "HOLD",
         "reason": "UNOBSERVED",
@@ -100,6 +99,12 @@ def observe(candidate: object, *, get: _GET = fetch_public_json, now: datetime |
         "deployment_authorized": False,
         "source_url": None,
     }
+
+
+def observe(candidate: object, *, get: _GET = fetch_public_json, now: datetime | None = None) -> dict[str, object]:
+    """Observe exact GitHub commit and LICENSE bytes without upgrading rights."""
+    stamp = (now or datetime.now(UTC)).isoformat().replace("+00:00", "Z")
+    base = _base_result(stamp)
     try:
         verdict = gate.evaluate(candidate, now=now)
     except (ValueError, TypeError):
@@ -168,15 +173,8 @@ def main() -> int:
         candidate = gate.parse(raw)
         result = observe(candidate)
     except (ValueError, TypeError, UnicodeError, RecursionError):
-        result = {
-            "schema": SCHEMA,
-            "state": "HOLD",
-            "reason": "INVALID_INPUT",
-            "code_copy_authorized": False,
-            "merge_authorized": False,
-            "deployment_authorized": False,
-            "training_authorized": False,
-        }
+        result = _base_result(datetime.now(UTC).isoformat().replace("+00:00", "Z"))
+        result["reason"] = "INVALID_INPUT"
     sys.stdout.write(json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n")
     return 0 if result["state"] == "EXACT_COMMIT_LICENSE_BYTES_MATCH_REVIEW_ONLY" else 78
 
