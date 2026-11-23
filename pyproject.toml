@@ -17,7 +17,7 @@ Homepage = "https://a-11-oy.com"
 Repository = "https://github.com/szl-holdings/szl-org-health"
 
 [tool.setuptools]
-packages = ["autonomic", "census"]
+packages = ["autonomic", "census", "status_classes"]
 
 [tool.ruff]
 line-length = 120
