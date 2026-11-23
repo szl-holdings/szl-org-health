@@ -37,7 +37,31 @@ class SpaceReadinessTests(unittest.TestCase):
         request_json.assert_not_called()
 
     @patch("census.space_readiness.request_json")
-    def test_a11oy_aligned_head_preserves_source_verification_gap(self, request_json):
+    def test_failed_paused_sleeping_stages_outweigh_sha_drift(self, request_json):
+        for stage in ("RUNTIME_ERROR", "BUILD_ERROR", "CONFIG_ERROR", "PAUSED", "SLEEPING", "STOPPED"):
+            with self.subTest(stage=stage):
+                space = item("a11oy", stage=stage, hub_sha="c" * 40, runtime_sha=HUB_SHA)
+                result = collect_space_readiness(space, ROOT, {})
+                self.assertEqual(result["readiness_state"], "NOT_READY")
+                self.assertEqual(result["readiness_reason"], "PROVIDER_NOT_RUNNING")
+                self.assertIsNone(result["readiness_http"])
+        request_json.assert_not_called()
+
+
+    @patch("census.space_readiness.request_json")
+    def test_starting_and_stopping_sha_drift_stays_transitioning(self, request_json):
+        for stage in ("STARTING", "STOPPING"):
+            with self.subTest(stage=stage):
+                space = item("a11oy", stage=stage, hub_sha="c" * 40, runtime_sha=HUB_SHA)
+                result = collect_space_readiness(space, ROOT, {})
+                self.assertEqual(result["readiness_state"], "TRANSITIONING")
+                self.assertEqual(result["readiness_reason"], "HUB_RUNTIME_REVISION_MISMATCH")
+                self.assertIsNone(result["readiness_http"])
+        request_json.assert_not_called()
+
+
+    @patch("census.space_readiness.request_json")
+    def test_running_sha_drift_stays_transitioning(self, request_json):
         request_json.side_effect = [
             ({"status": "ready", "organ": "a11oy"}, {}, None),
             ({"git_sha": SOURCE_SHA}, {}, None),
