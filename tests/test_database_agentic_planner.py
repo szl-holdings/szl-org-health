@@ -94,7 +94,7 @@ class AgenticDatabaseTests(TestCase):
         validate_policy(deepcopy(POLICY), SOURCE_POLICY)
         self.assertEqual(POLICY["schema"], POLICY_SCHEMA)
         self.assertEqual(POLICY["source_binding"]["git_blob_sha1"],
-                         "162cd077150c58f008b568bb530628ec799ecdff")
+                         "18050de00db455da9b6db67244bd5d2f6fb8ee56")
 
     def test_actual_known_drift_produces_inert_prioritized_plan(self):
         p = plan()
