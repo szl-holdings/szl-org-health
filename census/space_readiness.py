@@ -353,7 +353,7 @@ def _critical_vertical(
         first = classify_anatomy_version(version, version_http, item.get("sha"), source_binding)
         if first is not None:
             state, reason = first
-            return _result(state, route, scope, reason, http=version_http)
+            return _result(state, "/version", scope, reason, http=version_http)
         evidence, evidence_http = _json(root_url, route, fixed_origin=True, max_bytes=32768)
         state, reason = classify_anatomy(
             version, version_http, evidence, evidence_http, item.get("sha"), source_binding,
