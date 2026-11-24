@@ -12,6 +12,7 @@ import urllib.parse
 from typing import Any
 
 from .common import request_bytes, request_json
+from .vertical_contracts import classify_anatomy, classify_anatomy_version, classify_router
 
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
@@ -23,7 +24,20 @@ CONTRACTS = {
     "SZLHOLDINGS/immune-lattice": ("/readyz", "ACTION_AUTHORITY"),
     "SZLHOLDINGS/szl-frontier": ("/api/ready", "OPERATOR_PLANE"),
     "SZLHOLDINGS/szl-brand-campaign": ("/", "STATIC_CONTENT"),
+    "SZLHOLDINGS/szl-router-control": ("/readyz/inference", "INFERENCE_CONFIGURATION"),
+    "SZLHOLDINGS/llm-router-live": ("/readyz/inference", "PUBLIC_ROUTER_STATUS"),
+    "SZLHOLDINGS/anatomy": ("/evidence", "RELEASE_EVIDENCE"),
 }
+
+VERTICAL_ORIGINS = {
+    "SZLHOLDINGS/szl-router-control": "szlholdings-szl-router-control.hf.space",
+    "SZLHOLDINGS/llm-router-live": "szlholdings-llm-router-live.hf.space",
+    "SZLHOLDINGS/anatomy": "szlholdings-anatomy.hf.space",
+}
+
+VERTICAL_GET_PATHS = frozenset(
+    (host, CONTRACTS[repo_id][0]) for repo_id, host in VERTICAL_ORIGINS.items()
+) | {(VERTICAL_ORIGINS["SZLHOLDINGS/anatomy"], "/version")}
 
 
 def _status(error: str | None, payload: Any) -> int | None:
@@ -34,12 +48,31 @@ def _status(error: str | None, payload: Any) -> int | None:
     return None
 
 
-def _json(root_url: str, route: str) -> tuple[dict[str, Any] | None, int | None]:
+def _json(
+    root_url: str, route: str, *, fixed_origin: bool = False, max_bytes: int = 8192,
+) -> tuple[dict[str, Any] | None, int | None]:
+    # A hostile route must never override a previously checked Space root.
+    if fixed_origin and (not isinstance(route, str) or not route.startswith("/")
+                         or route.startswith("//") or "?" in route or "#" in route):
+        return None, None
+    url = urllib.parse.urljoin(root_url, route.lstrip("/"))
+    bounds: dict[str, object] = {}
+    if fixed_origin:
+        try:
+            origin = urllib.parse.urlsplit(root_url)
+            parsed = urllib.parse.urlsplit(url)
+        except ValueError:
+            return None, None
+        if (origin.scheme != "https" or (origin.netloc, route) not in VERTICAL_GET_PATHS
+                or parsed.scheme != "https" or parsed.netloc != origin.netloc
+                or parsed.query or parsed.fragment):
+            return None, None
+        bounds = {
+            "redirect_origin": ("https", str(origin.hostname).casefold(), 443),
+            "redirect_path": parsed.path,
+        }
     payload, _, error = request_json(
-        urllib.parse.urljoin(root_url, route.lstrip("/")),
-        timeout=6,
-        retries=0,
-        max_bytes=8192,
+        url, timeout=6, retries=0, max_bytes=max_bytes, **bounds,
     )
     return (payload if isinstance(payload, dict) else None), _status(error, payload)
 
@@ -294,6 +327,46 @@ def _brand_campaign(root_url: str, route: str, scope: str) -> dict[str, Any]:
     return _result("CONTENT_PRESENT_UNVERIFIED", route, scope, "CONTENT_NOT_QUALIFIED", http=status)
 
 
+
+def _critical_vertical(
+    root_url: str,
+    repo_id: str,
+    route: str,
+    scope: str,
+    item: dict[str, Any],
+    source_binding: dict[str, Any],
+) -> dict[str, Any]:
+    """Only fixed HTTPS Space origins; no credentials, POSTs or provider calls."""
+    if (repo_id not in VERTICAL_ORIGINS or CONTRACTS.get(repo_id) != (route, scope)):
+        return _result("UNKNOWN", route, scope, "VERTICAL_CONTRACT_MISMATCH")
+    try:
+        parsed = urllib.parse.urlsplit(root_url)
+    except ValueError:
+        return _result("UNKNOWN", route, scope, "RUNTIME_ORIGIN_MISMATCH")
+    if (parsed.scheme != "https" or parsed.netloc != VERTICAL_ORIGINS[repo_id]
+            or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
+        return _result("UNKNOWN", route, scope, "RUNTIME_ORIGIN_MISMATCH")
+
+    if repo_id == "SZLHOLDINGS/anatomy":
+        version, version_http = _json(root_url, "/version", fixed_origin=True)
+        # Reject source conflicts before observing an unrelated evidence revision.
+        first = classify_anatomy_version(version, version_http, item.get("sha"), source_binding)
+        if first is not None:
+            state, reason = first
+            return _result(state, "/version", scope, reason, http=version_http)
+        evidence, evidence_http = _json(root_url, route, fixed_origin=True, max_bytes=32768)
+        state, reason = classify_anatomy(
+            version, version_http, evidence, evidence_http, item.get("sha"), source_binding,
+        )
+        return _result(state, route, scope, reason, http=evidence_http)
+
+    observation, http = _json(root_url, route, fixed_origin=True)
+    state, reason = classify_router(
+        observation, http, public_status=repo_id == "SZLHOLDINGS/llm-router-live",
+    )
+    return _result(state, route, scope, reason, http=http)
+
+
 def collect_space_readiness(
     item: dict[str, Any], root_url: str | None, source_binding: dict[str, Any]
 ) -> dict[str, Any]:
@@ -335,6 +408,8 @@ def collect_space_readiness(
         or not SHA40.fullmatch(runtime_sha)
     ):
         return _result("UNKNOWN", route, scope, "RUNTIME_REVISION_UNAVAILABLE")
+    if repo_id in VERTICAL_ORIGINS:
+        return _critical_vertical(root_url, repo_id, route, scope, item, source_binding)
     if repo_id == "SZLHOLDINGS/a11oy":
         return _a11oy(root_url, route, scope, source_binding)
     if repo_id == "SZLHOLDINGS/szl-second-brain":
