@@ -372,8 +372,12 @@ def _database(plan, action_policy, source_policy, verify_plan, validate_plan_pol
 
 
 def _debt(lean, primary_sum):
-    """Proof debt and kernel credit of a bound turn; None when no kernel witness binds."""
-    if lean["binding"] != BOUND:
+    """Proof debt and kernel credit of a turn whose kernel witness is bound and executed.
+
+    None otherwise: a witness in HOLD (for example a failed axiom census) leaves theorem
+    counts unknown, and unknown counts are never compared as zeros.
+    """
+    if lean["binding"] != BOUND or lean["witness_state"] != "KERNEL_EXECUTED":
         return None
     vector = {name: primary_sum[name] for name in DEBT}
     vector["lean_files_kernel_accepted"] = lean["files_kernel_accepted"]
@@ -384,7 +388,7 @@ def _debt(lean, primary_sum):
 
 def _floor(floor, lean, debt):
     if debt is None:
-        return "NOT_COMPARABLE_NO_BOUND_KERNEL_WITNESS", [], [], []
+        return "NOT_COMPARABLE_NO_EXECUTED_KERNEL_WITNESS", [], [], []
     violations, tighten = [], []
     for field, name, bound, bad in FLOOR_RULES:
         measured = debt[name]
@@ -773,8 +777,10 @@ def turn(policy, census, *, lean_witness=None, hatun_witness=None, kat_report=No
     bound = binding == BOUND
     carrier = None
     if bound:
-        carrier = next(c for c in lean_witness["carrier_theorems"]
-                       if c["decl"] == policy["khipu"]["lean_carrier"])
+        # A witness whose axiom census failed lists no carrier: the carrier is then unknown,
+        # which the guards refuse, never an exception.
+        carrier = next((c for c in lean_witness["carrier_theorems"]
+                        if c["decl"] == policy["khipu"]["lean_carrier"]), None)
 
     def lean_field(name):
         return lean_witness.get(name) if lean_witness is not None else None

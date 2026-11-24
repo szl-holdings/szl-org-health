@@ -707,7 +707,8 @@ class FullStackTests(TestCase):
         cls.witness = {
             name: lean.observe(policy["lean"], cls.lean_repo, toolchain_bin=base / "bin",
                                run=lean_tests.FakeLake(**fake), at=AT)
-            for name, fake in (("good", {"fail_request": ()}), ("hold", {"allowed": 2}))}
+            for name, fake in (("good", {"fail_request": ()}), ("hold", {"allowed": 2}),
+                               ("no_census", {"fail_request": (), "census_exit": 1}))}
         rows = {r["repository"]: r for r in cls.census["repositories"]}
         section = policy["hatun"]
         cls.hatun = hatun.assemble(section, rows[HATUN_REPO]["commit"], "d" * 64,
@@ -808,6 +809,21 @@ class FullStackTests(TestCase):
         for name in ("lean_files_kernel_accepted", "theorems_trust_base_only",
                      "locked_set_guard"):
             self.assertNotIn(name, report["decision"]["axes_computed"])
+
+    def test_a_witness_whose_census_failed_holds_with_reasons_not_a_crash(self):
+        witness = self.witness["no_census"]
+        self.assertEqual(witness["state"], "HOLD")
+        self.assertIn("AXIOM_CENSUS_UNAVAILABLE", witness["hold_reasons"])
+        report, tree = self.turn(self.floored(), witness="no_census")
+        reasons = report["decision"]["sub_reasons"]
+        self.assertIn("LEAN_WITNESS_NOT_KERNEL_EXECUTED", reasons)
+        self.assertIn("KHIPU_LEAN_CARRIER_NOT_KERNEL_CLEAN", reasons)
+        self.assertIsNone(report["lean"]["khipu_carrier"]["found"])
+        # Theorem counts are unknown, so nothing is compared with the floor as a zero.
+        self.assertIsNone(report["ratchet"]["debt"])
+        self.assertEqual(report["ratchet"]["floor_state"], "NOT_COMPARABLE_NO_EXECUTED_KERNEL_WITNESS")
+        self.assertEqual(report["ratchet"]["violations"], [])
+        self.assertTrue(braid.verify_turn(report, tree=tree))
 
     def test_floor_breach_refuses_the_aggregate(self):
         policy = self.floored()
