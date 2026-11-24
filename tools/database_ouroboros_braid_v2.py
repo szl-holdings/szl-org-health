@@ -70,7 +70,8 @@ try:
         validate_policy as validate_lean_policy, validate_witness as validate_lean_witness,
     )
     from tools.database_braid_source_census import (
-        MAX_CENSUS_BYTES, validate_census, validate_census_policy,
+        MAX_CENSUS_BYTES, MAX_MAP_BYTES, validate_census, validate_census_policy,
+        validate_family_map,
     )
     from tools.database_catalog_admission import InputError
 except ModuleNotFoundError:
@@ -96,7 +97,8 @@ except ModuleNotFoundError:
         validate_policy as validate_lean_policy, validate_witness as validate_lean_witness,
     )
     from tools.database_braid_source_census import (
-        MAX_CENSUS_BYTES, validate_census, validate_census_policy,
+        MAX_CENSUS_BYTES, MAX_MAP_BYTES, validate_census, validate_census_policy,
+        validate_family_map,
     )
     from tools.database_catalog_admission import InputError
 
@@ -184,6 +186,7 @@ VIOLATIONS = frozenset({rule[3] for rule in FLOOR_RULES} | {
 _BETWEEN = ("CORD_VANISHED_WITHOUT_RETIREMENT", "PROOF_DEBT_INCREASED_SINCE_LAST_BOUND_TURN",
             "KERNEL_CREDIT_DECREASED_SINCE_LAST_BOUND_TURN")
 BOUND = "BOUND_TO_CENSUS_COMMIT"
+CHECKOUT_MATCHES = "ORIGIN_MATCHES"
 KAT_BOUND = "BOUND_TO_CENSUS_DIGEST"
 NOT_SUPPLIED = "NOT_SUPPLIED"
 DATABASE_PASS = "STRUCTURAL_ONLY"
@@ -207,6 +210,7 @@ _DERIVED = ("decision", "state", "termination", "state_digest", "turn_id", "loop
 _FIELDS = (
     "schema", "state", "termination", "doctrine", "max_steps", "executed_steps", "ordinal",
     "turn_id", "previous_turn_id", "previous_turn_sha256", "previous_turn_lake_receipt",
+    "previous_turn_rejected",
     "ouroboros_fixed_point", "inputs", "inputs_digest", "state_digest", "census", "khipu",
     "lean", "hatun", "known_answers", "database", "v_one_braid", "ratchet", "decision",
     "evidence_times", "evidence_produced_in_invocation", "evidence_labels", "fixed_claims",
@@ -476,6 +480,10 @@ def _guards(report, window) -> list:
     times = report["evidence_times"]
     if report["census"]["state"] != "COMPLETE":
         guards.append("CENSUS_PARTIAL")
+    if any(row["state"] == "OBSERVED" and row["checkout_identity"] != CHECKOUT_MATCHES
+           for row in report["census"]["repositories"]):
+        # A checkout whose origin is not the named repository proves nothing about it.
+        guards.append("CENSUS_CHECKOUT_IDENTITY_UNVERIFIED")
     lean = report["lean"]
     if lean["binding"] == NOT_SUPPLIED:
         guards.append("LEAN_WITNESS_NOT_SUPPLIED")
@@ -520,6 +528,8 @@ def _guards(report, window) -> list:
         guards.append("DATABASE_LANE_HOLD")
     if report["ratchet"]["violations"]:
         guards.append("RATCHET_VIOLATION")
+    if report["previous_turn_rejected"] is not None:
+        guards.append("PREVIOUS_TURN_REJECTED")
     if report["previous_turn_lake_receipt"] == "MISMATCH":
         guards.append("PREVIOUS_LAKE_RECEIPT_DOES_NOT_BIND_PREVIOUS_TURN")
     elif report["previous_turn_lake_receipt"] == "RECEIPT_INVALID":
@@ -535,7 +545,8 @@ def _axes(report) -> dict:
     computed["source_cords_present"] = ratio(present,
                                              present + report["khipu"]["unavailable_cords"])
     lean = report["lean"]
-    if lean["binding"] == BOUND:
+    # Numbers from a witness in HOLD (a failed gate, a shadowed search path) are not scored.
+    if lean["binding"] == BOUND and lean["witness_state"] == "KERNEL_EXECUTED":
         judged = lean["files_kernel_accepted"] + lean["files_rejected"]
         if judged:
             computed["lean_files_kernel_accepted"] = ratio(lean["files_kernel_accepted"], judged)
@@ -583,8 +594,8 @@ def _decision(report, *, tau, weights, window) -> dict:
 def _state_digest(report) -> str:
     return digest({
         "policy": report["inputs"]["policy"],
-        "census": [[r["repository"], r["state"], r["commit"], r["tree_id"]]
-                   for r in report["census"]["repositories"]],
+        "census": [[r["repository"], r["state"], r["commit"], r["tree_id"],
+                    r["checkout_identity"]] for r in report["census"]["repositories"]],
         "khipu": report["khipu"]["primary_hash"], "lean": report["lean"],
         "hatun": report["hatun"], "known_answers": report["known_answers"],
         "database": report["database"], "v_one": report["v_one_braid"],
@@ -607,11 +618,15 @@ def _append_step(steps, phase, state, detail, evidence):
 def _trace(report) -> list:
     steps, inputs = [], report["inputs"]
     lake, previous = report["previous_turn_lake_receipt"], report["previous_turn_id"]
-    _append_step(steps, PHASES[0], "HOLD" if lake in ("MISMATCH", "RECEIPT_INVALID") else
+    rejected = report["previous_turn_rejected"]
+    tail = ("REJECTED_NEW_CHAIN" if rejected is not None else
+            "GENESIS" if previous is None else "CONSUMED")
+    _append_step(steps, PHASES[0],
+                 "HOLD" if rejected is not None or lake in ("MISMATCH", "RECEIPT_INVALID") else
                  "OBSERVED",
-                 ["POLICY_VALIDATED", "TAIL_" + ("GENESIS" if previous is None else "CONSUMED")],
+                 ["POLICY_VALIDATED", "TAIL_" + tail],
                  {"policy_sha256": inputs["policy"], "previous_turn_id": previous,
-                  "previous_turn_lake_receipt": lake})
+                  "previous_turn_lake_receipt": lake, "previous_turn_rejected": rejected})
     census = report["census"]
     _append_step(steps, PHASES[1], "OBSERVED" if census["state"] == "COMPLETE" else "HOLD",
                  ["GIT_OBJECT_BYTES_CHECKED", "MISSING_IS_UNAVAILABLE_NOT_ZERO"],
@@ -693,14 +708,19 @@ def _label(present, produced_name, produced) -> str:
 def turn(policy, census, *, lean_witness=None, hatun_witness=None, kat_report=None,
          db_plan=None, action_policy=None, source_policy=None, v_one_report=None,
          v_one_policy=None, previous_turn=None, previous_tree=None, previous_lake_wrap=None,
-         previous_turn_sha256=None, input_digests=None, produced=()) -> tuple:
+         previous_turn_sha256=None, input_digests=None, produced=(), family_map=None,
+         family_map_sha256=None) -> tuple:
     """Braid one turn. Returns ``(report, khipu_tree)``. Pure: executes nothing.
 
     ``produced`` names the evidence the caller itself produced in this same
-    invocation (labelled MEASURED); everything else supplied is REPORTED.
+    invocation (labelled MEASURED); everything else supplied is REPORTED. When the
+    census was taken with a family map, that map (its validated ``families`` and the
+    digest of its file) must be supplied, so every cord's family is re-derived.
     """
     validate_policy(policy)
-    cords = validate_census(census, policy["census"])
+    require(type(census) is dict and census.get("family_map_sha256") == family_map_sha256 and
+            (family_map is None) == (family_map_sha256 is None), "BRAID_FAMILY_MAP_REQUIRED")
+    cords = validate_census(census, policy["census"], family_map=family_map)
     digests = dict(input_digests or {})
     require(all(v is None or (type(v) is str and SHA64.fullmatch(v)) for v in digests.values())
             and set(digests) <= {"policy", "census", "lean_witness", "hatun_witness",
@@ -724,17 +744,28 @@ def turn(policy, census, *, lean_witness=None, hatun_witness=None, kat_report=No
 
     # ---- the tail: the previous turn must itself verify before it is consumed
     require((previous_turn is None) == (previous_tree is None), "BRAID_PREVIOUS_PAIR_INCOMPLETE")
-    ordinal, previous_id, lake_state = 1, None, "NOT_SUPPLIED"
+    ordinal, previous_id, lake_state, rejected = 1, None, "NOT_SUPPLIED", None
     if previous_turn is not None:
-        verify_turn(previous_turn, policy_for_shape=None, tree=previous_tree)
         require(type(previous_turn_sha256) is str and SHA64.fullmatch(previous_turn_sha256),
                 "BRAID_PREVIOUS_DIGEST_REQUIRED")
-        ordinal, previous_id = previous_turn["ordinal"] + 1, previous_turn["turn_id"]
-        lake_state = _previous_lake_state(policy, previous_turn, previous_lake_wrap,
-                                          previous_turn_sha256)
+        try:
+            verify_turn(previous_turn, policy_for_shape=None, tree=previous_tree)
+        except InputError as exc:
+            # A previous turn that does not verify (edited, or written by an older shape of
+            # this tool) is never consumed. The rejection is recorded, the aggregate is
+            # refused, and a new chain starts here instead of the loop failing every run.
+            rejected = {"sha256": previous_turn_sha256, "code": exc.code}
+        except (KeyError, TypeError, ValueError, AttributeError, IndexError):
+            rejected = {"sha256": previous_turn_sha256, "code": "BRAID_PREVIOUS_TURN_MALFORMED"}
+        if rejected is None:
+            ordinal, previous_id = previous_turn["ordinal"] + 1, previous_turn["turn_id"]
+            lake_state = _previous_lake_state(policy, previous_turn, previous_lake_wrap,
+                                              previous_turn_sha256)
     else:
         require(previous_lake_wrap is None and previous_turn_sha256 is None,
                 "BRAID_PREVIOUS_PAIR_INCOMPLETE")
+    consumed = previous_turn if rejected is None else None
+    consumed_tree = previous_tree if rejected is None else None
 
     binding, files = _lean_binding(policy, census, lean_witness)
     tree = braid_tree(policy, census, lean_witness, files)
@@ -847,7 +878,8 @@ def turn(policy, census, *, lean_witness=None, hatun_witness=None, kat_report=No
     census_summary = {
         "label": _label(True, "census", produced), "state": census["state"],
         "repositories": [{"repository": r["repository"], "state": r["state"],
-                          "commit": r["commit"], "tree_id": r["tree_id"], "cords": r["cords"],
+                          "commit": r["commit"], "tree_id": r["tree_id"],
+                          "checkout_identity": r["checkout_identity"], "cords": r["cords"],
                           "tracked_files": r["tracked_files"],
                           "out_of_scope_files": r["out_of_scope_files"]}
                          for r in census["repositories"]],
@@ -868,7 +900,8 @@ def turn(policy, census, *, lean_witness=None, hatun_witness=None, kat_report=No
     report = {
         "schema": SCHEMA, "doctrine": policy["doctrine"], "max_steps": policy["max_steps"],
         "executed_steps": len(PHASES), "ordinal": ordinal, "previous_turn_id": previous_id,
-        "previous_turn_sha256": previous_turn_sha256, "previous_turn_lake_receipt": lake_state,
+        "previous_turn_sha256": previous_turn_sha256 if consumed is not None else None,
+        "previous_turn_lake_receipt": lake_state, "previous_turn_rejected": rejected,
         "inputs": inputs, "inputs_digest": digest(inputs), "census": census_summary,
         "khipu": khipu_summary, "lean": lean_summary, "hatun": hatun_summary,
         "known_answers": kat_summary, "database": database, "v_one_braid": v_one,
@@ -882,19 +915,19 @@ def turn(policy, census, *, lean_witness=None, hatun_witness=None, kat_report=No
         "fixed_claims": dict(policy["fixed_claims"]),
         "integrity_kind": "UNSIGNED_STRUCTURAL_SHA256_CHAIN", "signed": False,
     }
-    report["ratchet"] = _ratchet(policy, tree, lean_summary, previous_turn, previous_tree)
+    report["ratchet"] = _ratchet(policy, tree, lean_summary, consumed, consumed_tree)
     report.update(_derive(report, tau=policy["decision"]["tau"],
                           weights={a["id"]: a["weight"] for a in policy["decision"]["axes"]},
                           window=policy["decision"]["evidence_window_seconds"]))
     require(len(report["loop_trace"]) == policy["max_steps"] and
             tuple(s["phase"] for s in report["loop_trace"]) == PHASES,
             "BRAID_TERMINATION_BUDGET")
-    report["ouroboros_fixed_point"] = (previous_turn is not None and
-                                       previous_turn["state_digest"] == report["state_digest"])
+    report["ouroboros_fixed_point"] = (consumed is not None and
+                                       consumed["state_digest"] == report["state_digest"])
     report.update({flag: False for flag in _FALSE_FLAGS})
     report.update({name: None for name in _NULL_FIELDS})
     report = {name: report[name] for name in _FIELDS}
-    verify_turn(report, policy_for_shape=policy, tree=tree, previous=previous_turn)
+    verify_turn(report, policy_for_shape=policy, tree=tree, previous=consumed)
     return report, tree
 
 
@@ -1011,6 +1044,13 @@ def verify_turn(value, *, policy_for_shape=None, tree=None, previous=None) -> bo
             "BRAID_TURN_INPUTS_DIGEST_MISMATCH")
     require(value["previous_turn_lake_receipt"] in LAKE_STATES and
             type(value["ouroboros_fixed_point"]) is bool, "BRAID_TURN_FIELDS_INVALID")
+    rejected = value["previous_turn_rejected"]
+    require(rejected is None or (
+        type(rejected) is dict and set(rejected) == {"sha256", "code"} and
+        type(rejected["sha256"]) is str and SHA64.fullmatch(rejected["sha256"]) is not None and
+        type(rejected["code"]) is str and REASON.fullmatch(rejected["code"]) is not None and
+        value["ordinal"] == 1 and value["previous_turn_lake_receipt"] == "NOT_SUPPLIED"),
+        "BRAID_TURN_CHAIN_INVALID")
     require(type(value["hatun"]) is dict and
             value["hatun"].get("effect_authority") == "NOT_ATTACHED" and
             type(value["lean"]) is dict and
@@ -1101,6 +1141,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="One bounded, no-effect Ouroboros braid v2 turn")
     ap.add_argument("--policy", type=Path, required=True)
     ap.add_argument("--census", type=Path, required=True)
+    ap.add_argument("--family-map", type=Path,
+                    help="the family map the census was taken with, if any")
     ap.add_argument("--lean-witness", type=Path)
     ap.add_argument("--hatun-witness", type=Path)
     ap.add_argument("--known-answers-report", type=Path)
@@ -1122,6 +1164,10 @@ def main(argv=None):
         validate_policy(policy)
         census, census_sha = read_json(args.census, max_bytes=MAX_CENSUS_BYTES)
         digests = {"policy": policy_sha, "census": census_sha}
+        families = family_sha = None
+        if args.family_map is not None:
+            raw_map, family_sha = read_json(args.family_map, max_bytes=MAX_MAP_BYTES)
+            families = validate_family_map(raw_map)
 
         def optional(path, name, limit):
             if path is None:
@@ -1154,7 +1200,7 @@ def main(argv=None):
             action_policy=action_policy, source_policy=source_policy, v_one_report=v_one,
             v_one_policy=v_one_policy, previous_turn=previous, previous_tree=previous_tree,
             previous_lake_wrap=previous_wrap, previous_turn_sha256=digests.get("previous_turn"),
-            input_digests=digests)
+            input_digests=digests, family_map=families, family_map_sha256=family_sha)
         if args.replay is not None:
             recorded, _ = read_json(args.replay, max_bytes=MAX_TURN_BYTES)
             replay_turn(recorded, policy, census, **evidence)

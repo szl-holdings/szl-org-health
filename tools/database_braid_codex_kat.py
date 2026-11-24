@@ -13,8 +13,9 @@ transcribed from with its anchor text at the stated line: when the file
 changes the answer is re-anchored by its exact source line or reported STALE,
 an anchor found elsewhere is ANCHOR_NOT_AT_STATED_LINE, and bytes that could
 not be read are SOURCE_BYTES_NOT_READ. None of these is ever silently kept or
-dropped: every answer stays in the report's ``answers`` total, so a caller can
-divide by answers rather than by the evaluated ones.
+dropped: every answer stays in the report's ``answers`` total, and in its
+family's ``answers`` total, so a caller can divide by answers rather than by
+the evaluated ones, overall and per family.
 
 What this is: an arithmetic cross-check of numbers written in modern source
 files that cite historical mathematics. What it is not: a reading of any
@@ -216,6 +217,15 @@ def evaluate(node, budget=None, depth=0):
     return out
 
 
+def _utf8(text: str) -> bool:
+    # A lone surrogate, which only a JSON escape can produce, has no UTF-8 form.
+    try:
+        text.encode("utf-8")
+    except UnicodeError:
+        return False
+    return True
+
+
 def validate_set(value) -> list:
     """Closed-schema check of a known-answer set. Returns its answers."""
     closed(value, ("schema", "review_status", "answers"), "KAT_SET_FIELDS_INVALID")
@@ -233,6 +243,7 @@ def validate_set(value) -> list:
                 type(item["family"]) is str and FAMILY.fullmatch(item["family"]) and
                 type(source["repository"]) is str and REPOSITORY.fullmatch(source["repository"])
                 and type(source["path"]) is str and 0 < len(source["path"]) <= 400 and
+                _utf8(source["path"]) and
                 type(source["line"]) is int and 1 <= source["line"] <= 10 ** 6 and
                 type(source["blob_sha1"]) is str and SHA40.fullmatch(source["blob_sha1"]) and
                 type(item["anchor"]) is str and 0 < len(item["anchor"].strip()) and
@@ -307,31 +318,36 @@ def check(answer_set, census, *, read_current=None, set_sha256=None,
                         "repository": answer["source"]["repository"],
                         "path": answer["source"]["path"], "line": answer["source"]["line"],
                         "binding": state, "verdict": verdict, "detail": detail})
-    counted = [r for r in results if r["binding"] in (BOUND, REBOUND)]
-    families = {}
-    for row in counted:
-        entry = families.setdefault(row["family"], {"evaluated": 0, "passed": 0})
-        entry["evaluated"] += 1
-        entry["passed"] += row["verdict"] == "PASS"
     report = {
         "schema": SCHEMA, "answer_set_sha256": set_sha256, "census_sha256": census_sha256,
-        "review_status": answer_set["review_status"], "answers": len(results),
-        "evaluated": len(counted),
-        "passed": sum(r["verdict"] == "PASS" for r in counted),
-        "failed": sum(r["verdict"] == "FAIL" for r in counted),
-        "invalid_claims": sum(r["verdict"] == "INVALID_CLAIM" for r in counted),
-        "stale": sum(r["binding"] == STALE for r in results),
-        "source_not_in_census": sum(r["binding"] == ABSENT for r in results),
-        "anchor_not_at_line": sum(r["binding"] == MISPLACED for r in results),
-        "source_bytes_not_read": sum(r["binding"] == UNREAD for r in results),
-        "rebound_by_line": sum(r["binding"] == REBOUND for r in results),
-        "families": {name: families[name] for name in sorted(families)},
+        "review_status": answer_set["review_status"], **_tally(results),
+        "families": _families(results),
         "results": results,
         "arithmetic": "EXACT_INTEGER_AND_RATIONAL_NO_FLOATS",
     }
     report.update({flag: False for flag in _FALSE_FLAGS})
     validate_report(report)
     return report
+
+
+def _tally(rows) -> dict:
+    """Every ``SUMMARY_COUNTS`` total of ``rows``; only bound or rebound rows are scored."""
+    scored = [r for r in rows if r["binding"] in (BOUND, REBOUND)]
+    return {"answers": len(rows), "evaluated": len(scored),
+            "passed": sum(r["verdict"] == "PASS" for r in scored),
+            "failed": sum(r["verdict"] == "FAIL" for r in scored),
+            "invalid_claims": sum(r["verdict"] == "INVALID_CLAIM" for r in scored),
+            "stale": sum(r["binding"] == STALE for r in rows),
+            "source_not_in_census": sum(r["binding"] == ABSENT for r in rows),
+            "anchor_not_at_line": sum(r["binding"] == MISPLACED for r in rows),
+            "source_bytes_not_read": sum(r["binding"] == UNREAD for r in rows),
+            "rebound_by_line": sum(r["binding"] == REBOUND for r in rows)}
+
+
+def _families(rows) -> dict:
+    """The same totals per family, for every family that has an answer, scored or not."""
+    return {name: _tally([r for r in rows if r["family"] == name])
+            for name in sorted({r["family"] for r in rows})}
 
 
 def validate_report(value) -> bool:
@@ -349,8 +365,12 @@ def validate_report(value) -> bool:
         require(value[field] is None or (type(value[field]) is str and
                                          SHA64.fullmatch(value[field])),
                 "KAT_REPORT_FIELDS_INVALID")
+    for field in SUMMARY_COUNTS:
+        # natural() first: Python's == would let True stand for 1 and False for 0.
+        natural(value[field], "KAT_REPORT_FIELDS_INVALID")
     rows = value["results"]
-    require(type(rows) is list and len(rows) == value["answers"] <= MAX_ANSWERS,
+    # check() never reports an empty set, so neither may a report.
+    require(type(rows) is list and 0 < len(rows) == value["answers"] <= MAX_ANSWERS,
             "KAT_REPORT_FIELDS_INVALID")
     ids = []
     for row in rows:
@@ -363,8 +383,8 @@ def validate_report(value) -> bool:
                 and type(row["family"]) is str and FAMILY.fullmatch(row["family"]) and
                 type(row["id"]) is str and ANSWER_ID.fullmatch(row["id"]) and
                 type(row["repository"]) is str and REPOSITORY.fullmatch(row["repository"]) and
-                type(row["path"]) is str and 0 < len(row["path"]) <= 400 and
-                type(row["line"]) is int and 1 <= row["line"] <= 10 ** 6 and
+                type(row["path"]) is str and 0 < len(row["path"]) <= 400 and _utf8(row["path"])
+                and type(row["line"]) is int and 1 <= row["line"] <= 10 ** 6 and
                 # Only a refused claim carries a reason, and it is a refusal code.
                 ((row["detail"] is None) == (row["verdict"] != "INVALID_CLAIM")) and
                 (row["detail"] is None or (type(row["detail"]) is str and
@@ -372,30 +392,19 @@ def validate_report(value) -> bool:
                 "KAT_REPORT_ROW_INVALID")
         ids.append(row["id"])
     require(ids == sorted(set(ids)), "KAT_REPORT_ROW_INVALID")
-    counted = [r for r in rows if r["binding"] in (BOUND, REBOUND)]
-    for field, expected in (
-            ("evaluated", len(counted)),
-            ("passed", sum(r["verdict"] == "PASS" for r in counted)),
-            ("failed", sum(r["verdict"] == "FAIL" for r in counted)),
-            ("invalid_claims", sum(r["verdict"] == "INVALID_CLAIM" for r in counted)),
-            ("stale", sum(r["binding"] == STALE for r in rows)),
-            ("source_not_in_census", sum(r["binding"] == ABSENT for r in rows)),
-            ("anchor_not_at_line", sum(r["binding"] == MISPLACED for r in rows)),
-            ("source_bytes_not_read", sum(r["binding"] == UNREAD for r in rows)),
-            ("rebound_by_line", sum(r["binding"] == REBOUND for r in rows))):
-        natural(value[field], "KAT_REPORT_FIELDS_INVALID")
-        require(value[field] == expected, "KAT_REPORT_TOTALS_DRIFT")
-    require(value["evaluated"] == value["passed"] + value["failed"] + value["invalid_claims"] and
+    totals = _tally(rows)
+    require(all(value[field] == totals[field] for field in SUMMARY_COUNTS) and
+            value["evaluated"] == value["passed"] + value["failed"] + value["invalid_claims"] and
             value["answers"] == value["evaluated"] + value["stale"] +
             value["source_not_in_census"] + value["anchor_not_at_line"] +
             value["source_bytes_not_read"], "KAT_REPORT_TOTALS_DRIFT")
-    families = {}
-    for row in counted:
-        entry = families.setdefault(row["family"], {"evaluated": 0, "passed": 0})
-        entry["evaluated"] += 1
-        entry["passed"] += row["verdict"] == "PASS"
-    require(value["families"] == {name: families[name] for name in sorted(families)},
-            "KAT_REPORT_TOTALS_DRIFT")
+    families = value["families"]
+    require(type(families) is dict, "KAT_REPORT_FIELDS_INVALID")
+    for entry in families.values():
+        closed(entry, SUMMARY_COUNTS, "KAT_REPORT_FIELDS_INVALID")
+        for field in SUMMARY_COUNTS:
+            natural(entry[field], "KAT_REPORT_FIELDS_INVALID")
+    require(families == _families(rows), "KAT_REPORT_TOTALS_DRIFT")
     return True
 
 

@@ -15,15 +15,21 @@ the same commit can re-derive every count.
 keys, include and exclude globs, and per-repository cord and unavailable
 counts. A file dropped with every count adjusted to match cannot be seen from
 the report alone; ``verify_census_checkouts`` (CLI ``--verify``) re-derives
-each row from a checkout of the recorded commit and refuses any difference.
+each row it has a checkout for, at the recorded commit, and refuses any
+difference. The CLI says REDERIVED_EQUAL (exit 0) only when every observed
+row was re-derived, and REDERIVATION_INCOMPLETE (exit 2) otherwise.
 
 No network, no repository code is imported or executed, nothing is written
 inside a checkout. A match proves that these bytes are the content of that
 commit in that local object store. It does NOT prove the commit is on the
 protected remote branch, who authored it, or that any proof in a file was
-checked. ``checkout_identity`` only compares the checkout's configured
-``origin`` URL with the policy name. Family labels come from the reviewed
-policy and map; a file no rule names is UNCLASSIFIED, never guessed.
+checked. ``checkout_identity`` only compares the last two path parts of the
+checkout's configured ``origin`` URL with the policy name; the host is not
+checked, so a mirror of that name anywhere matches. It is recorded, not
+enforced, in the census state: the CLI exits 2 when any observed row is not
+ORIGIN_MATCHES, and a consumer must refuse or flag such a row. Family labels
+come from the reviewed policy and map; a file no rule names is UNCLASSIFIED,
+never guessed.
 
 ``export_tree`` writes the committed bytes of one commit into a new directory
 so other tools can run committed code without any untracked or ignored file of
@@ -33,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 from fnmatch import fnmatchcase
 import json
 import os
@@ -73,6 +80,9 @@ MAX_MAP_BYTES = 1048576
 MAX_BATCH_BYTES = 67108864
 MAX_EXPORT_BYTES = 536870912
 GIT_TIMEOUT_SECONDS = 120
+MAX_COMMIT_OBJECT_BYTES = 1048576
+MAX_TREE_DEPTH = 200
+_LEAF_MODES = ("100644", "100755", "120000", "160000")
 LFS_MAGIC = b"version https://git-lfs.github.com/spec/v1"
 _FALSE_FLAGS = ("network_used", "source_code_executed", "provider_writes", "secrets_recorded",
                 "remote_head_independently_verified", "proofs_checked_by_this_collector")
@@ -137,7 +147,12 @@ def validate_family_map(value) -> dict:
 
 def cord_key(repository: str, path: str) -> str:
     """Stable cord key; unusual path characters are percent-encoded."""
-    return repository.split("/", 1)[1] + ":" + quote(path, safe="/._+@-")
+    try:
+        encoded = quote(path, safe="/._+@-")
+    except UnicodeError:
+        # A lone surrogate, which only a JSON escape can produce, has no UTF-8 form.
+        raise InputError("CENSUS_PATH_NOT_UTF") from None
+    return repository.split("/", 1)[1] + ":" + encoded
 
 
 def lean_text_sorry_tokens(raw: bytes) -> int:
@@ -186,7 +201,58 @@ def _ls_tree(directory: Path, commit: str) -> list:
         except UnicodeError:
             raise InputError("CENSUS_PATH_NOT_UTF") from None
         rows.append((mode, kind, sha, None if size == "-" else int(size), path))
+    # Git does not re-hash the trees it walks for ls-tree, so a planted pack or object could
+    # list another subtree under a real id. Rebuild the trees and check them against the
+    # commit object, itself re-hashed to its id.
+    require(tree_object_id(rows) == commit_tree_id(directory, commit),
+            "CENSUS_LISTING_NOT_COMMIT_TREE")
     return rows
+
+
+def commit_tree_id(directory: Path, commit: str) -> str:
+    """The root tree id named in the commit object, once that object re-hashes to ``commit``."""
+    require(type(commit) is str and SHA40.fullmatch(commit) is not None,
+            "CENSUS_COMMIT_OBJECT_INVALID")
+    raw = _git(directory, "cat-file", "commit", commit)
+    header = b"commit " + str(len(raw)).encode("ascii") + b"\0"
+    named = raw[5:45].decode("ascii", "replace")
+    require(len(raw) <= MAX_COMMIT_OBJECT_BYTES and raw[:5] == b"tree " and
+            raw[45:46] == b"\n" and SHA40.fullmatch(named) is not None and
+            hashlib.sha1(header + raw, usedforsecurity=False).hexdigest() == commit,
+            "CENSUS_COMMIT_OBJECT_INVALID")
+    return named
+
+
+def _tree_hash(node: dict) -> str:
+    entries = []
+    for name, item in node.items():
+        raw = name.encode("utf-8")
+        if type(item) is dict:
+            # Git orders a subtree as if its name ended in "/".
+            entries.append((raw + b"/", b"40000 " + raw + b"\0" + bytes.fromhex(_tree_hash(item))))
+        else:
+            entries.append((raw, item[0].encode("ascii") + b" " + raw + b"\0" +
+                            bytes.fromhex(item[1])))
+    body = b"".join(entry for _key, entry in sorted(entries))
+    return hashlib.sha1(b"tree " + str(len(body)).encode("ascii") + b"\0" + body,
+                        usedforsecurity=False).hexdigest()
+
+
+def tree_object_id(rows) -> str:
+    """Git's object id for the tree whose leaves are ``rows`` (mode, kind, sha, size, path)."""
+    root = {}
+    for mode, _kind, sha, _size, path in rows:
+        parts = path.split("/") if type(path) is str else []
+        require(0 < len(parts) <= MAX_TREE_DEPTH and all(parts) and mode in _LEAF_MODES and
+                type(sha) is str and SHA40.fullmatch(sha) is not None,
+                "CENSUS_LISTING_INVALID")
+        node = root
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+            require(type(node) is dict, "CENSUS_LISTING_INVALID")
+        require(parts[-1] not in node, "CENSUS_LISTING_INVALID")
+        node[parts[-1]] = (mode, sha)
+    return _tree_hash(root)
 
 
 def list_tree(directory: Path) -> tuple:
@@ -205,8 +271,8 @@ def list_tree(directory: Path) -> tuple:
 
 def tree_identity(directory: Path, commit: str, rows: list) -> tuple:
     """``(root_tree_id, listing_sha256)``: what a verifier with the commit can recompute."""
-    tree = _git(directory, "rev-parse", "--verify", commit + "^{tree}").decode("ascii").strip()
-    require(SHA40.fullmatch(tree) is not None, "CENSUS_TREE_PARSE_FAILED")
+    tree = commit_tree_id(directory, commit)
+    require(tree_object_id(rows) == tree, "CENSUS_LISTING_NOT_COMMIT_TREE")
     listing = digest(sorted([path, mode, sha] for mode, _kind, sha, _size, path in rows))
     return tree, listing
 
@@ -225,12 +291,31 @@ def checkout_identity(directory: Path, repository: str) -> str:
     return IDENTITY_MATCHES if name.lower() == repository.lower() else IDENTITY_DIFFERS
 
 
+def _read_batch(directory: Path, batch: list, sizes: dict):
+    raw = _git(directory, "cat-file", "--batch", stdin=("\n".join(batch) + "\n").encode("ascii"))
+    offset = 0
+    for item in batch:
+        end = raw.find(b"\n", offset)
+        require(end >= 0, "CENSUS_BLOB_PARSE_FAILED")
+        header = raw[offset:end].decode("ascii", "replace").split()
+        require(len(header) == 3 and header[0] == item and header[1] == "blob" and
+                header[2] == str(sizes[item]), "CENSUS_BLOB_PARSE_FAILED")
+        start, stop = end + 1, end + 1 + sizes[item]
+        require(raw[stop:stop + 1] == b"\n", "CENSUS_BLOB_PARSE_FAILED")
+        offset = stop + 1
+        yield item, raw[start:stop]
+
+
 def iter_blobs(directory: Path, shas, *, max_bytes: int):
     """Yield ``(blob_id, committed bytes)``, or ``(blob_id, None)`` when over ``max_bytes``.
 
-    Sizes are read first, so an over-cap blob is never loaded into memory, and
-    the rest are read in batches of at most ``MAX_BATCH_BYTES``, one batch held
-    at a time, so the total read never has to fit in memory at once.
+    Sizes are read first, so an over-cap blob is never loaded into memory. The
+    rest are read in batches of at most ``MAX_BATCH_BYTES`` of content (one blob
+    larger than that is a batch of its own), and a batch is released before the
+    next is read. Peak memory is about two batches, not the total read: git's
+    output while it is joined into one buffer, or one buffer and the body being
+    used, plus any body the caller keeps. It does not grow with the number of
+    blobs.
     """
     wanted = sorted(set(shas))
     require(all(type(s) is str and SHA40.fullmatch(s) for s in wanted), "CENSUS_BLOB_ID_INVALID")
@@ -247,28 +332,16 @@ def iter_blobs(directory: Path, shas, *, max_bytes: int):
     for sha in wanted:
         if sizes[sha] > max_bytes:
             yield sha, None
-    batch, batch_bytes = [], 0
-    for sha in [s for s in wanted if sizes[s] <= max_bytes] + [None]:
-        if sha is not None and (not batch or batch_bytes + sizes[sha] <= MAX_BATCH_BYTES):
-            batch.append(sha)
-            batch_bytes += sizes[sha]
-            continue
-        if batch:
-            raw = _git(directory, "cat-file", "--batch",
-                       stdin=("\n".join(batch) + "\n").encode("ascii"))
-            offset = 0
-            for item in batch:
-                end = raw.find(b"\n", offset)
-                require(end >= 0, "CENSUS_BLOB_PARSE_FAILED")
-                header = raw[offset:end].decode("ascii", "replace").split()
-                require(len(header) == 3 and header[0] == item and header[1] == "blob" and
-                        header[2] == str(sizes[item]), "CENSUS_BLOB_PARSE_FAILED")
-                body = raw[end + 1:end + 1 + sizes[item]]
-                require(len(body) == sizes[item], "CENSUS_BLOB_PARSE_FAILED")
-                yield item, body
-                offset = end + 1 + sizes[item] + 1
-        if sha is not None:
-            batch, batch_bytes = [sha], sizes[sha]
+    pending = [s for s in wanted if sizes[s] <= max_bytes]
+    first = 0
+    while first < len(pending):
+        last, total = first + 1, sizes[pending[first]]
+        while last < len(pending) and total + sizes[pending[last]] <= MAX_BATCH_BYTES:
+            total += sizes[pending[last]]
+            last += 1
+        # Each batch is its own generator, so its output is freed before the next is read.
+        yield from _read_batch(directory, pending[first:last], sizes)
+        first = last
 
 
 def read_blobs(directory: Path, shas: list, *, max_bytes: int) -> dict:
@@ -280,11 +353,15 @@ def read_blobs(directory: Path, shas: list, *, max_bytes: int) -> dict:
     return dict(iter_blobs(directory, shas, max_bytes=max_bytes))
 
 
-def _export_path(root: Path, path: str) -> Path:
+def _git_path(path: str) -> bool:
+    """A path git can list: relative, with no empty, ``.``, ``..`` or ``.git`` part."""
     # Split the raw text: PurePosixPath would quietly collapse "a/./b" and "a//b".
-    parts = path.split("/")
-    require(all(p not in ("", ".", "..", ".git") for p in parts), "EXPORT_PATH_INVALID")
-    target = root.joinpath(*parts)
+    return all(part not in ("", ".", "..", ".git") for part in path.split("/"))
+
+
+def _export_path(root: Path, path: str) -> Path:
+    require(_git_path(path), "EXPORT_PATH_INVALID")
+    target = root.joinpath(*path.split("/"))
     require(target.resolve().is_relative_to(root), "EXPORT_PATH_INVALID")
     return target
 
@@ -319,6 +396,8 @@ def export_tree(directory: Path, commit: str, dest: Path, *, max_blob_bytes: int
             with os.fdopen(fd, "wb") as stream:
                 stream.write(body)
             written += len(body)
+        # Dropped before the next batch is read, so it never sits beside git's next output.
+        body = None
     return {"files": len(files), "bytes": written, "skipped_entries": len(rows) - len(files)}
 
 
@@ -378,6 +457,8 @@ def census_repository(repo_policy, directory: Path, explicit: dict, *, max_blob_
         facts[sha] = {"sha256": sha256_hex(body), "bytes": len(body),
                       "lfs": body.startswith(LFS_MAGIC),
                       "sorry": lean_text_sorry_tokens(body) if sha in lean_blobs else 0}
+        # Dropped before the next batch is read, so it never sits beside git's next output.
+        body = None
     cords, unavailable = [], []
     for path, sha, _size in sorted(chosen):
         fact = facts[sha]
@@ -505,9 +586,10 @@ def validate_census(value, section, *, family_map: dict | None = None) -> list:
         closed(cord, ("key", "repository", "path", "blob_sha1", "sha256", "bytes", "family",
                       "is_lean", "lean_text_sorry_tokens"), "CENSUS_CORD_FIELDS_INVALID")
         repository, path = cord["repository"], cord["path"]
+        # A path git could never list (absolute, ".", "..") is refused even where "*" matches it.
         require(type(repository) is str and repository in counted and type(path) is str and
-                _in_scope(by_name[repository], path) and cord["key"] == cord_key(repository, path)
-                and
+                _git_path(path) and _in_scope(by_name[repository], path) and
+                cord["key"] == cord_key(repository, path) and
                 type(cord["blob_sha1"]) is str and SHA40.fullmatch(cord["blob_sha1"]) and
                 type(cord["sha256"]) is str and SHA64.fullmatch(cord["sha256"]) and
                 type(cord["family"]) is str and FAMILY.fullmatch(cord["family"]) and
@@ -532,8 +614,9 @@ def validate_census(value, section, *, family_map: dict | None = None) -> list:
         repository, path = item["repository"], item["path"]
         # An unavailable entry names one in-scope file of one observed policy repository.
         require(type(repository) is str and repository in counted and type(path) is str and
-                _in_scope(by_name[repository], path) and item["key"] == cord_key(repository, path)
-                and item["reason"] in UNAVAILABLE_REASONS, "CENSUS_CORD_FIELDS_INVALID")
+                _git_path(path) and _in_scope(by_name[repository], path) and
+                item["key"] == cord_key(repository, path) and
+                item["reason"] in UNAVAILABLE_REASONS, "CENSUS_CORD_FIELDS_INVALID")
         missing_keys.append(item["key"])
         missing_per_repo[item["repository"]] = missing_per_repo.get(item["repository"], 0) + 1
     require(missing_keys == sorted(set(missing_keys)) and not set(keys) & set(missing_keys),
@@ -541,6 +624,9 @@ def validate_census(value, section, *, family_map: dict | None = None) -> list:
     require(all(per_repo.get(name, 0) == pair[0] and missing_per_repo.get(name, 0) == pair[1]
                 for name, pair in counted.items()), "CENSUS_CORD_COUNT_MISMATCH")
     observed = sum(r["state"] == "OBSERVED" for r in rows)
+    # natural() first: Python's == would let True stand for 1 and False for 0.
+    natural(value["repositories_required"], "CENSUS_STATE_INVALID")
+    natural(value["repositories_observed"], "CENSUS_STATE_INVALID")
     require(value["repositories_required"] == len(rows) and
             value["repositories_observed"] == observed and
             (value["state"] == "COMPLETE") == (observed == len(rows) and not missing) and
@@ -552,6 +638,8 @@ def verify_census_checkouts(value, section, checkouts: dict, *,
                             family_map: dict | None = None) -> list:
     """Re-derive census rows from checkouts of the recorded commits. Returns the names checked.
 
+    A row with no checkout here is skipped, not vouched for: compare the names
+    returned with the observed rows before calling a census re-derived.
     For every repository with a checkout here, the root tree id, the listing
     digest, every count, every cord and every unavailable entry are recomputed
     from that checkout's object store at the row's commit and must be equal.
@@ -621,21 +709,29 @@ def main(argv=None):
                     census.get("family_map_sha256") == map_sha, "CENSUS_INPUTS_DIFFER")
             checked = verify_census_checkouts(census, policy["census"], checkouts,
                                               family_map=family_map)
-            print(json.dumps({"state": "REDERIVED_EQUAL", "census_sha256": census_sha,
-                              "census_state": census["state"],
+            # Only re-derived rows are vouched for; an observed row with no checkout here is not.
+            skipped = [r["repository"] for r in census["repositories"]
+                       if r["state"] == "OBSERVED" and r["repository"] not in checked]
+            complete = bool(checked) and not skipped
+            print(json.dumps({"state": "REDERIVED_EQUAL" if complete else "REDERIVATION_INCOMPLETE",
+                              "census_sha256": census_sha, "census_state": census["state"],
                               "repositories_rederived": len(checked),
+                              "repositories_not_rederived": skipped,
                               "repositories_required": census["repositories_required"],
                               "provider_writes": False}))
-            return 0
+            return 0 if complete else 2
         report = observe(policy["census"], checkouts, family_map=family_map,
                          policy_sha256=policy_sha, family_map_sha256=map_sha)
         write_exclusive(args.output, report, max_bytes=MAX_CENSUS_BYTES, checkout=checkout_root())
+        unverified = [r["repository"] for r in report["repositories"]
+                      if r["state"] == "OBSERVED" and r["checkout_identity"] != IDENTITY_MATCHES]
         print(json.dumps({"state": report["state"], "cords": len(report["cords"]),
                           "unavailable_cords": len(report["unavailable_cords"]),
                           "repositories_observed": report["repositories_observed"],
                           "repositories_required": report["repositories_required"],
+                          "checkout_identity_unverified": unverified,
                           "provider_writes": False}))
-        return 0 if report["state"] == "COMPLETE" else 2
+        return 0 if report["state"] == "COMPLETE" and not unverified else 2
     except InputError as exc:
         code = exc.code
     except Exception:
