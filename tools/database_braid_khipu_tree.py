@@ -264,8 +264,10 @@ def prove(tree, key) -> dict:
 def verify_proof(proof, *, primary_hash_expected, primary_sum_expected) -> bool:
     """Check a proof against a trusted primary hash and total.
 
-    The proof carries no other cord's key or content digest; it does carry the
-    siblings' hashes, knot vectors and pendant sums, which it needs to re-add.
+    The proof carries no other present cord's key or content digest. It does
+    carry the siblings' hashes, knot vectors and pendant sums, which it needs to
+    re-add, the partition identities, and the keys of the unavailable cords,
+    which the primary hash binds.
     """
     closed(proof, ("schema", "knots", "partitions", "unavailable_cords", "cord", "pendant",
                    "primary"), "KHIPU_PROOF_FIELDS_INVALID")
@@ -277,6 +279,10 @@ def verify_proof(proof, *, primary_hash_expected, primary_sum_expected) -> bool:
             all(type(k) is str and KEY.fullmatch(k) for k in missing) and
             missing == sorted(set(missing)), "KHIPU_PROOF_FIELDS_INVALID")
     width = len(names)
+    # The trusted values are typed too: list == would let True stand for a knot of 1.
+    require(type(primary_hash_expected) is str and SHA64.fullmatch(primary_hash_expected),
+            "KHIPU_PROOF_EXPECTED_INVALID")
+    _vector(primary_sum_expected, width, "KHIPU_PROOF_EXPECTED_INVALID")
     cord = closed(proof["cord"], ("key", "digest", "knots"), "KHIPU_PROOF_FIELDS_INVALID")
     require(type(cord["key"]) is str and KEY.fullmatch(cord["key"]) and
             type(cord["digest"]) is str and SHA64.fullmatch(cord["digest"]),

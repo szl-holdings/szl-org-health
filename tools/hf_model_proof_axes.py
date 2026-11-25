@@ -30,6 +30,13 @@ class ProofHold(ValueError):
     """Stable public reason code, never caller-supplied text or file paths."""
 
 
+def _valid_sha40(value: Any) -> bool:
+    """40 lowercase hex characters are necessary, but a zero revision is a placeholder."""
+    return isinstance(value, str) and bool(SHA40.fullmatch(value)) and any(
+        char != "0" for char in value
+    )
+
+
 def _require(condition: bool, reason: str) -> None:
     if not condition:
         raise ProofHold(reason)
@@ -43,7 +50,7 @@ def _status(row: dict[str, Any], scope: str) -> tuple[str, str]:
         return "UNKNOWN", "VISIBILITY_NOT_PUBLICLY_PROVED"
     if type(row.get("private")) is not bool:
         return "UNKNOWN", "VISIBILITY_UNAVAILABLE"
-    if not isinstance(row.get("sha"), str) or not SHA40.fullmatch(row["sha"]):
+    if not _valid_sha40(row.get("sha")):
         return "UNKNOWN", "IMMUTABLE_MODEL_REVISION_UNAVAILABLE"
     contract = row.get("contract")
     if not isinstance(contract, str) or not contract:
@@ -82,8 +89,7 @@ def _status(row: dict[str, Any], scope: str) -> tuple[str, str]:
 
 def evaluate(snapshot: dict[str, Any], *, scope: str, source_revision: str) -> dict[str, Any]:
     _require(scope in {"public", "authenticated"}, "INVALID_SCOPE")
-    _require(isinstance(source_revision, str) and bool(SHA40.fullmatch(source_revision)),
-             "SOURCE_REVISION_UNAVAILABLE")
+    _require(_valid_sha40(source_revision), "SOURCE_REVISION_UNAVAILABLE")
     _require(isinstance(snapshot, dict), "INVALID_SNAPSHOT")
     hf = snapshot.get("huggingface", snapshot)
     _require(isinstance(hf, dict) and hf.get("organization") == ORG,
@@ -97,6 +103,9 @@ def evaluate(snapshot: dict[str, Any], *, scope: str, source_revision: str) -> d
     _require(isinstance(rows, list) and type(models.get("count")) is int
              and models["count"] == len(rows), "MODEL_DENOMINATOR_MISMATCH")
     _require(len(rows) <= 2000, "MODEL_ITEM_BUDGET")
+    # A syntactically complete but empty census is not evidence that the
+    # model namespace was successfully enumerated.
+    _require(len(rows) > 0, "MODEL_CENSUS_EMPTY")
     # A public census must not silently count private or unverifiable model rows.
     # Classification as UNKNOWN would still reveal their presence in aggregates.
     if scope == "public" and any(
@@ -132,7 +141,7 @@ def evaluate(snapshot: dict[str, Any], *, scope: str, source_revision: str) -> d
         # These rows belong only in an explicitly owner-private evidence artifact.
         badges.append({"id": identifier, "state": status, "reason": reason,
                        "model_revision": row.get("sha") if isinstance(row, dict)
-                       and isinstance(row.get("sha"), str) and SHA40.fullmatch(row["sha"])
+                       and _valid_sha40(row.get("sha"))
                        else None})
     _require(sum(counts.values()) == len(rows), "COVERAGE_IDENTITY_FAILED")
     return {
@@ -172,9 +181,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--private-receipt", type=Path)
     args = parser.parse_args(argv)
     try:
-        _require(args.snapshot.stat().st_size <= MAX_INPUT_BYTES, "SNAPSHOT_BYTE_BUDGET")
-        raw = args.snapshot.read_bytes()
+        # Bound the actual file-descriptor read, not only a preceding path.stat;
+        # verify that size/mtime did not change while this snapshot was read.
+        with args.snapshot.open("rb") as fd:
+            before = os.fstat(fd.fileno())
+            _require(before.st_size <= MAX_INPUT_BYTES, "SNAPSHOT_BYTE_BUDGET")
+            raw = fd.read(MAX_INPUT_BYTES + 1)
+            after = os.fstat(fd.fileno())
         _require(len(raw) <= MAX_INPUT_BYTES, "SNAPSHOT_BYTE_BUDGET")
+        _require(
+            len(raw) == after.st_size
+            and before.st_size == after.st_size
+            and before.st_mtime_ns == after.st_mtime_ns,
+            "SNAPSHOT_CHANGED_DURING_READ",
+        )
         data = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=_strict_object_pairs,

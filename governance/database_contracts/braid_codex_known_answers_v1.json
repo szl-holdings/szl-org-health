@@ -1100,7 +1100,7 @@
     },
     {
       "id": "egy-horus-roundtrip",
-      "family": "EGYPTIAN_MATH",
+      "family": "LAMBDA_CORE",
       "source": {
         "repository": "szl-holdings/lutar-lean",
         "path": "Lutar/Egyptian/HorusEye.lean",
@@ -2538,7 +2538,7 @@
     },
     {
       "id": "maya-calendar-round-lcm",
-      "family": "MAYA",
+      "family": "CALENDAR_ASTRONOMY",
       "source": {
         "repository": "szl-holdings/lutar-lean",
         "path": "Lutar/Innovations/round4/MayaLCMEpochSync.lean",
@@ -2561,7 +2561,7 @@
     },
     {
       "id": "maya-gcd",
-      "family": "MAYA",
+      "family": "CALENDAR_ASTRONOMY",
       "source": {
         "repository": "szl-holdings/lutar-lean",
         "path": "Lutar/Innovations/round4/MayaLCMEpochSync.lean",
@@ -2584,7 +2584,7 @@
     },
     {
       "id": "maya-haab-cycles",
-      "family": "MAYA",
+      "family": "CALENDAR_ASTRONOMY",
       "source": {
         "repository": "szl-holdings/lutar-lean",
         "path": "Lutar/Innovations/round4/MayaLCMEpochSync.lean",
@@ -2607,7 +2607,7 @@
     },
     {
       "id": "maya-tzolkin-cycles",
-      "family": "MAYA",
+      "family": "CALENDAR_ASTRONOMY",
       "source": {
         "repository": "szl-holdings/lutar-lean",
         "path": "Lutar/Innovations/round4/MayaLCMEpochSync.lean",

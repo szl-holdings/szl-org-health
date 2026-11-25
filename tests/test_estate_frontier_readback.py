@@ -88,6 +88,51 @@ class EstateReadbackTests(unittest.TestCase):
         self.assertTrue(all(r["payment_settlement"] == "UNVERIFIED" for r in links))
         self.assertTrue(all(r["release_readiness"] == "UNVERIFIED" for r in links))
 
+
+    def test_mcp_edge_530_is_retained_without_claiming_origin_or_payment(self):
+        """An anonymous edge 530 must be visible without a production-down inference."""
+        mcp = "https://mcp.a-11-oy.com/healthz"
+        self.assertIn(mcp, module.FIXED_URLS)
+        calls = []
+        def fake(url, method):
+            calls.append((url, method))
+            if url == mcp:
+                return 530
+            return 402 if url.startswith("https://inference.") else 200
+        links = module.probe_fixed_links(fake)
+        result = [x for x in links if x["url"] == mcp]
+        self.assertEqual(len(result), 1)
+        edge = result[0]
+        self.assertEqual(edge["method"], "HEAD")
+        self.assertEqual(edge["head_http_status"], 530)
+        self.assertEqual(edge["http_status"], 530)
+        self.assertEqual(edge["transport"], "OBSERVED")
+        self.assertEqual(edge["release_readiness"], "UNVERIFIED")
+        self.assertEqual(edge["payment_settlement"], "UNVERIFIED")
+        self.assertEqual([method for url, method in calls if url == mcp], ["HEAD"])
+
+    def test_get_only_mcp_readyz_is_never_sent_as_head(self):
+        """A GET-only readiness contract must not produce misleading HEAD evidence."""
+        health = "https://mcp.a-11-oy.com/healthz"
+        ready = "https://mcp.a-11-oy.com/readyz"
+        calls = []
+
+        def fake(url, method):
+            calls.append((url, method))
+            if url == ready:
+                return 405  # Synthetic method mismatch: must remain unobserved.
+            return 530 if url == health else 200
+
+        links = module.probe_fixed_links(fake)
+        self.assertNotIn(ready, module.FIXED_URLS)
+        self.assertNotIn(ready, [item["url"] for item in links])
+        self.assertEqual([method for url, method in calls if url == health], ["HEAD"])
+        self.assertFalse(any(url == ready for url, _ in calls))
+        observed = next(row for row in links if row["url"] == health)
+        self.assertEqual(observed["http_status"], 530)
+        self.assertEqual(observed["release_readiness"], "UNVERIFIED")
+        self.assertEqual(observed["payment_settlement"], "UNVERIFIED")
+
     def test_head_405_source_identity_only_get_fallback(self):
         calls = []
         def probe(url, method):

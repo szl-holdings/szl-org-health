@@ -6,18 +6,23 @@ Every fixture is built here: policy sections are literals, child reports are dic
 and the only git repositories, Hatun sources and interpreters are small stand-ins created
 inside temporary directories that are removed afterwards. A stand-in interpreter is a
 ``venv`` of the running Python whose site-packages hold a stand-in MCP SDK (or nothing).
-No network, no real MCP SDK, no Lean toolchain and no checkout outside this repository are
-used; the real repository's git state is never touched.
+Some stand-ins are tampered on purpose: a pack or replace ref planted in a repository's
+``.git``, an interpreter, site-packages directory or ``.pth`` line that reaches into the
+checkout, a governance module that leaves a descendant behind. No network, no real MCP
+SDK, no Lean toolchain and no checkout outside this repository are used; the real
+repository's git state is never touched.
 """
 from contextlib import redirect_stdout
 from copy import deepcopy
 from datetime import datetime, timezone
+import hashlib
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
 import py_compile
+import shutil
 import struct
 import subprocess
 import sys
@@ -25,6 +30,7 @@ import tempfile
 import time
 from unittest import TestCase, main as unittest_main, mock
 import uuid
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -33,16 +39,25 @@ from tools.database_braid_common import (  # noqa: E402
     NETNS_EMPTY, NETNS_NOT_REQUESTED, NETNS_UNAVAILABLE, SHA40, SHA64, digest, git_blob_sha1,
     network_namespace_state,
 )
+from tools.database_braid_source_census import export_tree, list_tree  # noqa: E402
 from tools import database_braid_hatun_gate as hatun  # noqa: E402
 from tools.database_braid_hatun_gate import (  # noqa: E402
-    CALLER_CONTEXT, DEAD_ENDPOINT, INTERPRETER_FLAGS, MAX_PROBES, MAX_WITNESS_BYTES, SCHEMA,
-    SOURCE_TREE, assemble, child_limits, exported_modules_digest, main, observe, run_child,
-    source_identity, validate_policy, validate_witness,
+    CALLER_CONTEXT, DEAD_ENDPOINT, INTERPRETER_FLAGS, MAX_PROBES, MAX_WITNESS_BYTES,
+    PROCESS_TREES, SCHEMA, SOURCE_TREE, assemble, child_limits, commit_tree, export_matches,
+    exported_modules_digest, interpreter_layout, main, observe, pid_namespace_prefix, run_child,
+    source_identity, tree_object_id, validate_policy, validate_witness, verified_listing,
 )
 
 FALSE_FLAGS = ("deployed_runtime_contacted", "signer_identity_established",
                "two_person_approval_claimed", "external_effects_performed",
                "production_authorized")
+# Every backend URL variable the committed hatun-mcp reads at 1cec847; none of them covers an
+# origin written into its code.
+BACKEND_VARIABLES = ("SZL_A11OY_URL", "SZL_LLM_URL", "SZL_IMMUNE_URL", "SZL_KILLINCHU_URL",
+                     "SZL_COMPANION_URL", "SZL_LEAN_URL", "SZL_ANATOMY_URL",
+                     "SZL_SECOND_BRAIN_URL", "HATUN_MCP_AXLE_URL", "SZL_HF_ROUTER_URL")
+INTERPRETER = {"python": "3.12.7", "prefix": "/opt/braid-venv", "base_prefix": "/usr",
+               "outside_checkout": True}
 COMMIT = "c" * 40
 MODULES = "d" * 64
 PHASES = ["PLAN_AND_SCOPE", "SOURCE_CENSUS_RECONCILIATION", "KHIPU_SUM_TREE_CONSERVATION",
@@ -97,9 +112,11 @@ def section():
 
 def observed(**changes):
     value = {"network_namespace": NETNS_UNAVAILABLE, "export_files": 5,
-             "export_skipped_entries": 0, "isolated_mode": True,
-             "bytecode_writes_disabled": True, "pycache_prefix_fresh_and_unused": True,
-             "hatun_modules_loaded": 4, "hatun_modules_outside_export": 0}
+             "export_skipped_entries": 0, "export_rehashed_to_commit": True,
+             "interpreter": dict(INTERPRETER), "process_tree": "PROCESS_GROUP_ONLY",
+             "isolated_mode": True, "bytecode_writes_disabled": True,
+             "pycache_prefix_fresh_and_unused": True, "hatun_modules_loaded": 4,
+             "hatun_modules_outside_export": 0}
     value.update(changes)
     return value
 
@@ -154,13 +171,21 @@ class RefusalMixin:
         self.assertEqual(witness["caller_identity"], "LOCAL_DEMO_CONTEXT_NOT_AN_IDENTITY")
         self.assertEqual(witness["caller_context"], "SET_THROUGH_HATUN_TEST_HOOKS")
         self.assertIs(witness["api_key_authentication_path_exercised"], False)
-        self.assertIs(witness["backend_endpoints_disabled_by_environment"], True)
+        self.assertEqual(witness["backend_url_variables_redirected"], list(BACKEND_VARIABLES))
+        self.assertEqual(witness["backend_redirect_target"], "http://127.0.0.1:9")
+        self.assertIs(witness["hardcoded_backend_origins_redirected"], False)
         self.assertIn(witness["network_namespace"], (NETNS_EMPTY, NETNS_UNAVAILABLE))
         self.assertIs(witness["direct_network_egress_blocked"],
                       witness["network_namespace"] == NETNS_EMPTY)
         self.assertEqual(witness["source_tree"], "FRESH_EXPORT_OF_COMMIT")
-        self.assertNotIn("network_isolated_by_environment", witness)
-        self.assertNotIn("source_tree_matches_commit", witness)
+        self.assertIs(witness["export_rehashed_to_commit"], True)
+        self.assertIs(witness["interpreter"]["outside_checkout"], True)
+        self.assertIn(witness["child"]["process_tree"], PROCESS_TREES)
+        if witness["child"]["process_tree"] == "OWN_PID_NAMESPACE":
+            self.assertEqual(witness["network_namespace"], NETNS_EMPTY)
+        for retired in ("network_isolated_by_environment", "source_tree_matches_commit",
+                        "backend_endpoints_disabled_by_environment"):
+            self.assertNotIn(retired, witness)
         for flag in FALSE_FLAGS:
             self.assertIs(witness[flag], False, flag)
         self.assertIn(witness["state"], ("VETO_LADDER_CONFORMS", "HOLD"))
@@ -322,10 +347,14 @@ class AssembleTest(RefusalMixin, TestCase):
             "flags": list(INTERPRETER_FLAGS), "isolated_mode": True,
             "bytecode_writes_disabled": True, "pycache_prefix_fresh_and_unused": True,
             "hatun_modules_loaded": 4, "hatun_modules_outside_export": 0,
-            "limits": child_limits()})
+            "process_tree": "PROCESS_GROUP_ONLY", "limits": child_limits()})
         self.assertEqual(witness["interpreter"], {
-            "python": "3.12.7", "site_packages": "INTERPRETER_SITE_PACKAGES_TRUSTED_NOT_VERIFIED",
+            "python": "3.12.7", "prefix": "/opt/braid-venv", "base_prefix": "/usr",
+            "outside_checkout": True,
+            "site_packages": "INTERPRETER_SITE_PACKAGES_TRUSTED_NOT_VERIFIED",
             "loaded_distributions": DISTRIBUTIONS})
+        self.assertIs(witness["export_rehashed_to_commit"], True)
+        self.assertEqual(witness["backend_url_variables_redirected"], list(BACKEND_VARIABLES))
 
     def test_invalid_policy_refused_before_reading_child_output(self):
         sec = section()
@@ -577,7 +606,9 @@ class AssembleTest(RefusalMixin, TestCase):
         raw["mcp"]["server_name"] = "<script>alert(1)</script>"
         raw["mcp"]["probes"][0]["backend_endpoint"] = "http://10.0.0.1/steal"
         witness = self.build(raw)
-        self.assertIsNone(witness["interpreter"]["python"])
+        # The interpreter is described by this process's own -I -S probe, never by the child.
+        self.assertEqual(witness["interpreter"]["python"], INTERPRETER["python"])
+        self.assertNotIn("rm -rf", json.dumps(witness))
         self.assertIsNone(witness["kernel"]["signer_mode"])
         self.assertIsNone(witness["kernel"]["primitives"][0]["tripwire"])
         self.assertIsNone(witness["mcp"]["server_name"])
@@ -639,6 +670,31 @@ class AssembleTest(RefusalMixin, TestCase):
                 self.refuse("HATUN_OBSERVATION_INVALID", assemble, section(), COMMIT, MODULES,
                             child_raw(), observed=value, at=NOW)
 
+    def test_interpreter_and_process_tree_observations_are_checked(self):
+        for changes in ({"interpreter": None}, {"interpreter": dict(INTERPRETER, extra=1)},
+                        {"interpreter": {"python": "3.12.7"}},
+                        {"interpreter": dict(INTERPRETER, prefix="relative/venv")},
+                        {"interpreter": dict(INTERPRETER, prefix=None)},
+                        {"interpreter": dict(INTERPRETER, base_prefix="/usr\n")},
+                        {"interpreter": dict(INTERPRETER, python=None)},
+                        {"interpreter": dict(INTERPRETER, python=3.12)},
+                        {"process_tree": "CGROUP"}, {"process_tree": None},
+                        # A PID namespace is only nested inside an observed empty namespace.
+                        {"process_tree": "OWN_PID_NAMESPACE"}):
+            with self.subTest(changes=changes):
+                self.refuse("HATUN_OBSERVATION_INVALID", witness_of, obs=observed(**changes))
+        for value in (False, None, 1):
+            with self.subTest(outside_checkout=value):
+                self.refuse("HATUN_INTERPRETER_INSIDE_CHECKOUT", witness_of,
+                            obs=observed(interpreter=dict(INTERPRETER, outside_checkout=value)))
+            with self.subTest(export_rehashed_to_commit=value):
+                self.refuse("HATUN_EXPORT_MISMATCH", witness_of,
+                            obs=observed(export_rehashed_to_commit=value))
+        nested = witness_of(obs=observed(network_namespace=NETNS_EMPTY,
+                                         process_tree="OWN_PID_NAMESPACE"))
+        self.assertEqual(nested["child"]["process_tree"], "OWN_PID_NAMESPACE")
+        self.assertIs(validate_witness(nested, section()), True)
+
     def test_loaded_distributions_are_recorded_or_null(self):
         raw = child_raw()
         raw["distributions"] = [["pydantic", "2.14.3"], ["anyio", None]]
@@ -687,11 +743,24 @@ class ValidateWitnessTest(RefusalMixin, TestCase):
                      network_isolated_by_environment=True, source_tree_matches_commit=True)
             for key in ("source_tree", "network_namespace", "direct_network_egress_blocked",
                         "caller_context", "api_key_authentication_path_exercised",
-                        "backend_endpoints_disabled_by_environment", "child",
-                        "export_files", "export_skipped_entries"):
+                        "backend_url_variables_redirected", "backend_redirect_target",
+                        "hardcoded_backend_origins_redirected", "child", "export_files",
+                        "export_skipped_entries", "export_rehashed_to_commit"):
                 w.pop(key)
 
         self.check("HATUN_WITNESS_FIELDS_INVALID", downgrade)
+
+    def test_retired_backend_claim_is_refused(self):
+        # The earlier v2 shape claimed every backend endpoint was disabled; it was not.
+        def retired(w):
+            for key in ("backend_url_variables_redirected", "backend_redirect_target",
+                        "hardcoded_backend_origins_redirected"):
+                w.pop(key)
+            w["backend_endpoints_disabled_by_environment"] = True
+
+        self.check("HATUN_WITNESS_FIELDS_INVALID", retired)
+        self.check("HATUN_WITNESS_FIELDS_INVALID",
+                   lambda w: w.update(backend_endpoints_disabled_by_environment=True))
 
     def test_binding_tamper_refused(self):
         cases = {
@@ -748,11 +817,26 @@ class ValidateWitnessTest(RefusalMixin, TestCase):
                            ("caller_context", "API_KEY_AUTHENTICATED"),
                            ("caller_context", None),
                            ("api_key_authentication_path_exercised", True),
-                           ("api_key_authentication_path_exercised", 0),
-                           ("backend_endpoints_disabled_by_environment", False),
-                           ("backend_endpoints_disabled_by_environment", 1)):
+                           ("api_key_authentication_path_exercised", 0)):
             with self.subTest(key=key, value=value):
                 self.check("HATUN_FALSE_AUTHORITY_CLAIM",
+                           lambda w, k=key, v=value: w.update({k: v}))
+
+    def test_backend_redirect_claims_are_exactly_what_the_environment_did(self):
+        shorter = list(BACKEND_VARIABLES[:-1])
+        for key, value in (("backend_url_variables_redirected", shorter),
+                           ("backend_url_variables_redirected", []),
+                           ("backend_url_variables_redirected", list(BACKEND_VARIABLES)[::-1]),
+                           ("backend_url_variables_redirected", "ALL"),
+                           ("backend_url_variables_redirected",
+                            list(BACKEND_VARIABLES) + ["GITHUB_ESTATE_ORIGIN"]),
+                           ("backend_redirect_target", "http://127.0.0.1:8080"),
+                           ("backend_redirect_target", None),
+                           ("hardcoded_backend_origins_redirected", True),
+                           ("hardcoded_backend_origins_redirected", 0),
+                           ("hardcoded_backend_origins_redirected", None)):
+            with self.subTest(key=key, value=value):
+                self.check("HATUN_NETWORK_CLAIM_INVALID",
                            lambda w, k=key, v=value: w.update({k: v}))
 
     def test_isolation_is_never_claimed_without_an_empty_namespace(self):
@@ -779,6 +863,10 @@ class ValidateWitnessTest(RefusalMixin, TestCase):
             "limits": lambda w: w["child"]["limits"].update(cpu_seconds=10 ** 6),
             "extra": lambda w: w["child"].update(sandbox="MICROVM"),
             "missing": lambda w: w["child"].pop("limits"),
+            "tree_unknown": lambda w: w["child"].update(process_tree="CGROUP"),
+            "tree_missing": lambda w: w["child"].pop("process_tree"),
+            # The witness was observed without an empty namespace, so no PID namespace either.
+            "tree_unbacked": lambda w: w["child"].update(process_tree="OWN_PID_NAMESPACE"),
         }
         for name, mutate in mutations.items():
             with self.subTest(name):
@@ -789,7 +877,13 @@ class ValidateWitnessTest(RefusalMixin, TestCase):
             "trust": lambda w: w["interpreter"].update(site_packages="VERIFIED"),
             "unsorted": lambda w: w["interpreter"]["loaded_distributions"].reverse(),
             "float": lambda w: w["interpreter"].update(python=3.12),
+            "unknown_python": lambda w: w["interpreter"].update(python=None),
             "extra": lambda w: w["interpreter"].update(executable="/usr/bin/python3"),
+            "inside": lambda w: w["interpreter"].update(outside_checkout=False),
+            "inside_unknown": lambda w: w["interpreter"].update(outside_checkout=None),
+            "relative_prefix": lambda w: w["interpreter"].update(prefix=".venv"),
+            "prefix_missing": lambda w: w["interpreter"].pop("prefix"),
+            "base_prefix_control": lambda w: w["interpreter"].update(base_prefix="/usr\x00"),
         }
         for name, mutate in mutations.items():
             with self.subTest(name):
@@ -1134,6 +1228,7 @@ mcp = _Server()
 PROBE = r'''import json, os, resource, sys
 facts = {"isolated": sys.flags.isolated, "dont_write_bytecode": sys.flags.dont_write_bytecode,
          "pycache_prefix": sys.pycache_prefix, "path": list(sys.path), "cwd": os.getcwd(),
+         "pid": os.getpid(),
          "file": os.path.realpath(__file__), "argv": list(sys.argv), "env": dict(os.environ),
          "limits": {name: list(resource.getrlimit(getattr(resource, name)))
                     for name in ("RLIMIT_CPU", "RLIMIT_AS", "RLIMIT_FSIZE", "RLIMIT_CORE")}}
@@ -1151,6 +1246,85 @@ sys.stdout.write(json.dumps(facts))
 sys.stdout.flush()
 os._exit(0)
 '''
+
+
+def git_raw(repo, *args, home, stdin=None):
+    """Exact bytes from git, for objects and stdin-fed commands the text helper would alter."""
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
+           "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+           "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
+    return subprocess.run(["git", *args], cwd=str(repo), env=env, input=stdin,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout
+
+
+def reachable_objects(repo, *, home, swap=None):
+    """``(object id, type, body)`` for everything HEAD reaches, with ``swap`` bodies replaced."""
+    swap = swap or {}
+    found = []
+    for line in git_raw(repo, "rev-list", "--objects", "HEAD", home=home).decode().splitlines():
+        oid = line.split(" ", 1)[0]
+        kind = git_raw(repo, "cat-file", "-t", oid, home=home).decode().strip()
+        found.append((oid, kind, swap.get(oid) or git_raw(repo, "cat-file", kind, oid,
+                                                         home=home)))
+    return found
+
+
+def plant_pack(repo, objects):
+    """Write a pack of ``(object id, type, body)`` into ``repo``'s .git, newer than any other.
+
+    Git searches its most recently used pack first and starts with the newest one, so when
+    every object a listing touches is in the planted pack, an object stored there under
+    another object's id is what ``git ls-tree -r`` lists, without re-hashing its content.
+    """
+    kinds = {"commit": 1, "tree": 2, "blob": 3}
+    data, entries = b"PACK" + struct.pack(">II", 2, len(objects)), []
+    for oid, kind, body in objects:
+        size, head = len(body), bytearray()
+        first = (kinds[kind] << 4) | (size & 15)
+        size >>= 4
+        while size:
+            head.append(first | 0x80)
+            first, size = size & 0x7F, size >> 7
+        head.append(first)
+        packed = bytes(head) + zlib.compress(body)
+        entries.append((bytes.fromhex(oid), len(data), zlib.crc32(packed) & 0xFFFFFFFF))
+        data += packed
+    data += hashlib.sha1(data, usedforsecurity=False).digest()
+    entries.sort()
+    index = b"\xfftOc" + struct.pack(">I", 2)
+    index += b"".join(struct.pack(">I", sum(e[0][0] <= i for e in entries)) for i in range(256))
+    index += b"".join(e[0] for e in entries) + b"".join(struct.pack(">I", e[2]) for e in entries)
+    index += b"".join(struct.pack(">I", e[1]) for e in entries) + data[-20:]
+    index += hashlib.sha1(index, usedforsecurity=False).digest()
+    name = "pack-" + hashlib.sha1(data[:-20], usedforsecurity=False).hexdigest()
+    folder = Path(repo) / ".git" / "objects" / "pack"
+    (folder / (name + ".pack")).write_bytes(data)
+    (folder / (name + ".idx")).write_bytes(index)
+    later = time.time() + 10 ** 6
+    os.utime(folder / (name + ".pack"), (later, later))
+
+
+def swap_blob(repo, tree, path_name, new_blob, *, home):
+    """The raw body of ``tree`` with the entry ``path_name`` pointing at ``new_blob``."""
+    body = git_raw(repo, "cat-file", "tree", tree, home=home)
+    old = bytes.fromhex(git(repo, "rev-parse", "%s:%s" % (tree, path_name), home=home))
+    marker = path_name.encode("utf-8") + b"\0"
+    assert body.count(marker + old) == 1
+    return body.replace(marker + old, marker + bytes.fromhex(new_blob))
+
+
+def survivors(tag):
+    """Process ids whose command line is ``sleep <tag>``."""
+    found = []
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            try:
+                if (entry / "cmdline").read_bytes() == b"sleep\0" + tag.encode() + b"\0":
+                    found.append(int(entry.name))
+            except OSError:
+                # That process ended while the table was being read.
+                continue
+    return found
 
 
 def make_hatun_repo(base, name, *, server=False, governance=GOVERNANCE, extra=None):
@@ -1340,6 +1514,15 @@ class ExportIsolationTest(RefusalMixin, TestCase):
         self.assertEqual(seen["network_namespace"], network_namespace_state())
         if seen["network_namespace"] == NETNS_EMPTY:
             self.assertEqual(raw["interfaces"], ["lo"])
+        self.assertEqual(seen["process_tree"],
+                         "OWN_PID_NAMESPACE" if pid_namespace_prefix() else "PROCESS_GROUP_ONLY")
+        if seen["process_tree"] == "OWN_PID_NAMESPACE":
+            self.assertEqual(raw["pid"], 1)
+        self.assertEqual(seen["interpreter"], {
+            "python": "%d.%d.%d" % sys.version_info[:3],
+            "prefix": os.path.abspath(Path(self.bare).parent.parent),
+            "base_prefix": sys.base_prefix, "outside_checkout": True})
+        self.assertIs(seen["export_rehashed_to_commit"], True)
         self.assertEqual(seen["export_files"], 4)
         self.assertIs(seen["isolated_mode"], False)  # the probe replaced the driver's report
 
@@ -1416,6 +1599,52 @@ class ExportIsolationTest(RefusalMixin, TestCase):
         commit, _modules = source_identity(repo)
         self.refuse("HATUN_EXPORT_MISMATCH", run_child, repo, section(), python=self.bare,
                     commit=commit, modules_digest="0" * 64)
+        self.refuse("HATUN_EXPORT_MISMATCH", run_child, repo, section(), python=self.bare,
+                    commit="0" * 40, modules_digest=_modules)
+
+    def test_planted_pack_cannot_swap_a_committed_subtree(self):
+        repo = make_hatun_repo(self.base, "planted-pack")
+        git(repo, "gc", "-q", home=self.base)
+        commit = git(repo, "rev-parse", "HEAD", home=self.base)
+        subtree = git(repo, "rev-parse", "HEAD:hatun_mcp", home=self.base)
+        evil = PERMISSIVE.replace("@MARK@", "PACKED").encode("utf-8")
+        blob = git_raw(repo, "hash-object", "-w", "--stdin", stdin=evil,
+                       home=self.base).decode("ascii").strip()
+        # Valid copies of every committed object, and a different tree under the subtree's id.
+        plant_pack(repo, reachable_objects(repo, home=self.base, swap={
+            subtree: swap_blob(repo, subtree, "governance.py", blob, home=self.base)}))
+        (repo / "hatun_mcp/governance.py").write_bytes(evil)
+        # Control: git itself now lists the planted bytes for the committed path, at the same
+        # commit, and the work tree agrees with that listing.
+        raw = git_raw(repo, "ls-tree", "-r", "HEAD", home=self.base).decode("ascii")
+        listed = {line.split("\t", 1)[1]: line.split()[2] for line in raw.splitlines()}
+        self.assertEqual(listed["hatun_mcp/governance.py"], blob)
+        self.assertEqual(git(repo, "rev-parse", "HEAD", home=self.base), commit)
+        # The census itself now re-hashes trees, so it is the first layer to refuse.
+        self.refuse("CENSUS_LISTING_NOT_COMMIT_TREE", list_tree, repo)
+        self.refuse("CENSUS_LISTING_NOT_COMMIT_TREE", verified_listing, repo)
+        self.refuse("CENSUS_LISTING_NOT_COMMIT_TREE", source_identity, repo)
+        self.refuse("CENSUS_LISTING_NOT_COMMIT_TREE", observe, section(), repo, python=self.bare)
+
+    def test_replace_ref_cannot_swap_a_committed_subtree(self):
+        repo = make_hatun_repo(self.base, "replace-ref")
+        subtree = git(repo, "rev-parse", "HEAD:hatun_mcp", home=self.base)
+        evil = PERMISSIVE.replace("@MARK@", "REPLACED").encode("utf-8")
+        blob = git_raw(repo, "hash-object", "-w", "--stdin", stdin=evil,
+                       home=self.base).decode("ascii").strip()
+        listing = git_raw(repo, "ls-tree", subtree, home=self.base).decode("ascii")
+        old = git(repo, "rev-parse", "HEAD:hatun_mcp/governance.py", home=self.base)
+        swapped = git_raw(repo, "mktree", stdin=listing.replace(old, blob).encode("ascii"),
+                          home=self.base).decode("ascii").strip()
+        git(repo, "replace", subtree, swapped, home=self.base)
+        # Control: by default git now shows the replaced bytes for the committed path.
+        shown = git(repo, "ls-tree", "-r", "HEAD", "hatun_mcp/governance.py", home=self.base)
+        self.assertIn(blob, shown)
+        commit, rows = verified_listing(repo)
+        self.assertEqual(tree_object_id(rows), commit_tree(repo, commit))
+        witness = observe(section(), repo, python=self.bare, at=NOW)
+        self.assertEqual(witness["commit"], commit)
+        self.assert_committed_kernel_ran(witness)
 
     def assert_committed_kernel_ran(self, witness):
         self.assertIs(validate_witness(witness, section()), True)
@@ -1428,6 +1657,238 @@ class ExportIsolationTest(RefusalMixin, TestCase):
         self.assertIs(kernel["primitives"][3]["yuyay_passed"], False)
         self.assertEqual(witness["child"]["hatun_modules_outside_export"], 0)
         self.assertEqual((witness["state"], witness["probes_matched"]), ("HOLD", 4))
+
+
+class CommittedTreeTest(RefusalMixin, TestCase):
+    """The listing and the export are re-hashed to the commit id, not taken from git on trust."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="braid-hatun-tree-")
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+
+    def shapes(self):
+        repo = make_hatun_repo(self.base, "shapes", extra={
+            "a.txt": "a\n", "a-b/x": "x\n", "a/b/c.py": "c = 1\n", "a/b.py": "b = 1\n",
+            "a0": "0\n", "z/run.sh": "#!/bin/sh\n", "deep/" * 20 + "leaf": "leaf\n"})
+        (repo / "z/run.sh").chmod(0o755)
+        os.symlink("a.txt", repo / "link")
+        first = git(repo, "rev-parse", "HEAD", home=self.base)
+        git(repo, "add", "-A", home=self.base)
+        # A submodule entry with no checkout behind it: the index alone records it.
+        git(repo, "update-index", "--add", "--cacheinfo", "160000,%s,vendor/sub" % first,
+            home=self.base)
+        git(repo, "commit", "-q", "-m", "shapes", home=self.base)
+        return repo
+
+    def test_tree_id_is_rebuilt_exactly_as_git_builds_it(self):
+        repo = self.shapes()
+        commit, _shallow, rows = list_tree(repo)
+        modes = {mode for mode, _kind, _sha, _size, _path in rows}
+        self.assertEqual(modes, {"100644", "100755", "120000", "160000"})
+        tree = git(repo, "rev-parse", "HEAD^{tree}", home=self.base)
+        # "a" is ordered as "a/": after "a-b" and "a.txt", before "a0".
+        self.assertEqual(tree_object_id(rows), tree)
+        self.assertEqual(commit_tree(repo, commit), tree)
+        self.assertEqual(verified_listing(repo), (commit, rows))
+        reordered = sorted(rows, key=lambda row: row[4], reverse=True)
+        self.assertEqual(tree_object_id(reordered), tree)
+        changed = [(m, k, "0" * 40 if p == "a/b.py" else s, z, p) for m, k, s, z, p in rows]
+        self.assertNotEqual(tree_object_id(changed), tree)
+        flipped = [("100755" if p == "a.txt" else m, k, s, z, p) for m, k, s, z, p in rows]
+        self.assertNotEqual(tree_object_id(flipped), tree)
+        self.assertNotEqual(tree_object_id([r for r in rows if r[4] != "link"]), tree)
+
+    def test_malformed_listing_rows_are_refused(self):
+        good = ("100644", "blob", "a" * 40, 1, "x/y")
+        for row in (("040000", "tree", "a" * 40, None, "x"), ("100644", "blob", "A" * 40, 1, "x"),
+                    ("100644", "blob", "a" * 40, 1, "x//y"), ("100644", "blob", "a" * 40, 1, ""),
+                    ("100644", "blob", "a" * 40, 1, None), ("100644", "blob", "a" * 40, 1, "x"),
+                    ("100644", "blob", "a" * 40, 1, "x/y"),
+                    ("100644", "blob", "a" * 40, 1, "/".join(["d"] * 300))):
+            with self.subTest(row=row[0::4]):
+                self.refuse("HATUN_LISTING_INVALID", tree_object_id, [good, row])
+
+    def test_commit_object_must_rehash_to_its_id(self):
+        repo = make_hatun_repo(self.base, "commits")
+        first = git(repo, "rev-parse", "HEAD", home=self.base)
+        (repo / "README.md").write_text("second\n", encoding="utf-8")
+        git(repo, "commit", "-q", "-am", "second", home=self.base)
+        second = git(repo, "rev-parse", "HEAD", home=self.base)
+        tree = git(repo, "rev-parse", "HEAD^{tree}", home=self.base)
+        self.assertEqual(commit_tree(repo, second), tree)
+        for bad in ("0" * 40, "C" * 40, "c" * 39, None, tree):
+            with self.subTest(bad=bad):
+                self.refuse("HATUN_COMMIT_OBJECT_INVALID", commit_tree, repo, bad)
+        git(repo, "gc", "-q", home=self.base)
+        # The first commit's bytes stored under the second commit's id.
+        plant_pack(repo, reachable_objects(repo, home=self.base, swap={
+            second: git_raw(repo, "cat-file", "commit", first, home=self.base)}))
+        self.assertEqual(git_raw(repo, "cat-file", "commit", second, home=self.base),
+                         git_raw(repo, "cat-file", "commit", first, home=self.base))
+        self.refuse("HATUN_COMMIT_OBJECT_INVALID", commit_tree, repo, second)
+
+    def test_export_must_hold_exactly_the_listed_files(self):
+        repo = self.shapes()
+        commit, rows = verified_listing(repo)
+
+        def exported(mutate=None):
+            dest = Path(tempfile.mkdtemp(prefix="export-", dir=self.base))
+            counts = export_tree(repo, commit, dest, max_blob_bytes=1 << 20,
+                                 max_total_bytes=1 << 24)
+            self.assertEqual((counts["files"], counts["skipped_entries"]), (11, 2))
+            if mutate is not None:
+                mutate(dest)
+            return export_matches(dest, rows)
+
+        self.assertIs(exported(), True)
+        mutations = {
+            "extra": lambda d: (d / "planted.py").write_text("x\n", encoding="utf-8"),
+            "missing": lambda d: (d / "a0").unlink(),
+            "bytes": lambda d: (d / "a/b.py").write_text("b = 2\n", encoding="utf-8"),
+            "mode": lambda d: (d / "a.txt").chmod(0o700),
+            "mode_lost": lambda d: (d / "z/run.sh").chmod(0o600),
+            "symlink": lambda d: ((d / "a0").unlink(), (d / "a0").symlink_to(d / "a.txt")),
+            "linked_dir": lambda d: (d / "linked").symlink_to(d / "a"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name):
+                self.assertIs(exported(mutate), False)
+
+
+class InterpreterLocationTest(RefusalMixin, TestCase):
+    """An interpreter that could load code from the checkout is refused."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory(prefix="braid-hatun-interp-")
+        cls.addClassCleanup(cls._tmp.cleanup)
+        cls.base = Path(cls._tmp.name)
+        cls.bare = make_python(cls.base, "bare-python")
+
+    def marker_line(self, marker):
+        return "import pathlib; pathlib.Path(%r).write_text('ran')\n" % str(marker)
+
+    def test_venv_inside_the_checkout_is_refused_before_it_runs(self):
+        repo = make_hatun_repo(self.base, "venv-inside", server=True)
+        marker = self.base / "venv-inside-ran"
+        python = make_python(repo, ".venv", {**SDK_FILES, "zz_marker.pth":
+                                             self.marker_line(marker)})
+        # Control: started normally, that interpreter runs code planted in the checkout.
+        subprocess.run([python, "-I", "-c", "pass"], check=True, timeout=60)
+        self.assertTrue(marker.exists())
+        marker.unlink()
+        self.refuse("HATUN_INTERPRETER_INSIDE_CHECKOUT", observe, section(), repo, python=python)
+        self.refuse("HATUN_INTERPRETER_INSIDE_CHECKOUT", interpreter_layout, python, repo)
+        self.assertFalse(marker.exists())
+
+    def test_interpreter_file_inside_the_checkout_never_runs(self):
+        repo = make_hatun_repo(self.base, "wrapper-inside")
+        marker = self.base / "wrapper-ran"
+        script = repo / "local" / "python"
+        script.parent.mkdir()
+        script.write_text("#!/bin/sh\necho ran > %s\nexec %s \"$@\"\n" % (marker, self.bare),
+                          encoding="utf-8")
+        script.chmod(0o755)
+        link = self.base / "python-link"
+        link.symlink_to(script)
+        for python in (str(script), str(link)):
+            with self.subTest(python=python):
+                self.refuse("HATUN_INTERPRETER_INSIDE_CHECKOUT", observe, section(), repo,
+                            python=python)
+        self.assertFalse(marker.exists())
+
+    def test_venv_home_inside_the_checkout_is_refused(self):
+        repo = make_hatun_repo(self.base, "home-inside")
+        python = make_python(self.base, "home-python")
+        config = Path(python).parent.parent / "pyvenv.cfg"
+        config.write_text(config.read_text(encoding="utf-8") + "home = %s\n" % (repo / "bin"),
+                          encoding="utf-8")
+        self.refuse("HATUN_INTERPRETER_INSIDE_CHECKOUT", observe, section(), repo, python=python)
+
+    def test_site_packages_linked_into_the_checkout_is_refused(self):
+        repo = make_hatun_repo(self.base, "linked-site", server=True)
+        planted = repo / ".site"
+        for path, text in SDK_FILES.items():
+            (planted / path).parent.mkdir(parents=True, exist_ok=True)
+            (planted / path).write_text(text, encoding="utf-8")
+        python = make_python(self.base, "linked-python")
+        site = next(Path(python).parent.parent.glob("lib/python*/site-packages"))
+        shutil.rmtree(site)
+        site.symlink_to(planted, target_is_directory=True)
+        self.refuse("HATUN_INTERPRETER_INSIDE_CHECKOUT", observe, section(), repo, python=python)
+
+    def test_pth_path_line_into_the_checkout_is_refused(self):
+        repo = make_hatun_repo(self.base, "pth-path", server=True)
+        planted = repo / ".planted"
+        for path, text in SDK_FILES.items():
+            (planted / path).parent.mkdir(parents=True, exist_ok=True)
+            (planted / path).write_text(text, encoding="utf-8")
+        python = make_python(self.base, "pth-path-python", {"planted.pth": "%s\n" % planted})
+        self.refuse("HATUN_INTERPRETER_INSIDE_CHECKOUT", observe, section(), repo, python=python)
+
+    def test_pth_import_line_into_the_checkout_is_caught_on_the_first_line(self):
+        repo = make_hatun_repo(self.base, "pth-import", server=True)
+        python = make_python(self.base, "pth-import-python", {
+            "sneaky.pth": "import sys; sys.path.append(%r)\n" % str(repo)})
+        # An import line is code; nothing but running it shows where it points.
+        self.assertIs(interpreter_layout(python, repo)["outside_checkout"], True)
+        self.refuse("HATUN_INTERPRETER_INSIDE_CHECKOUT", observe, section(), repo, python=python)
+
+    def test_witness_records_where_the_interpreter_lives(self):
+        repo = make_hatun_repo(self.base, "records")
+        layout = interpreter_layout(self.bare, repo)
+        self.assertEqual(layout, {"python": "%d.%d.%d" % sys.version_info[:3],
+                                  "prefix": os.path.abspath(Path(self.bare).parent.parent),
+                                  "base_prefix": sys.base_prefix, "outside_checkout": True})
+        witness = observe(section(), repo, python=self.bare, at=NOW)
+        self.assertEqual({k: witness["interpreter"][k] for k in layout}, layout)
+        self.assertIs(validate_witness(witness, section()), True)
+
+
+class ProcessTreeTest(RefusalMixin, TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory(prefix="braid-hatun-tree-")
+        cls.addClassCleanup(cls._tmp.cleanup)
+        cls.base = Path(cls._tmp.name)
+        cls.bare = make_python(cls.base, "bare-python")
+
+    def test_process_tree_is_recorded_as_observed(self):
+        repo = make_hatun_repo(self.base, "recorded")
+        _raw, seen = run_child(repo, section(), python=self.bare)
+        nested = pid_namespace_prefix()
+        self.assertEqual(seen["process_tree"],
+                         "OWN_PID_NAMESPACE" if nested else "PROCESS_GROUP_ONLY")
+        if nested:
+            self.assertEqual(seen["network_namespace"], NETNS_EMPTY)
+        with mock.patch.object(hatun, "_PID_NAMESPACE", [None]):
+            _raw, seen = run_child(repo, section(), python=self.bare)
+        self.assertEqual(seen["process_tree"], "PROCESS_GROUP_ONLY")
+
+    def test_descendant_that_left_the_process_group_dies_with_the_child(self):
+        tag = "300.%06d" % (uuid.uuid4().int % 10 ** 6)
+        escape = ("\nimport subprocess\nsubprocess.Popen(['sleep', %r], start_new_session=True,"
+                  " stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,"
+                  " stderr=subprocess.DEVNULL)\n" % tag)
+        repo = make_hatun_repo(self.base, "escaper", governance=GOVERNANCE + escape)
+        try:
+            witness = observe(section(), repo, python=self.bare, at=NOW)
+            self.assertEqual(witness["kernel"]["state"], "EXECUTED")
+            left = survivors(tag)
+            for _ in range(50):
+                if not left:
+                    break
+                time.sleep(0.1)
+                left = survivors(tag)
+            if witness["child"]["process_tree"] == "OWN_PID_NAMESPACE":
+                self.assertEqual(left, [])
+            else:
+                # Disclosed, not claimed: the process group alone cannot reach this one.
+                self.assertEqual(witness["child"]["process_tree"], "PROCESS_GROUP_ONLY")
+        finally:
+            for pid in survivors(tag):
+                os.kill(pid, 9)
 
 
 class ChildRunTest(RefusalMixin, TestCase):
@@ -1511,8 +1972,10 @@ class ChildRunTest(RefusalMixin, TestCase):
         self.refuse("HATUN_CHILD_UNAVAILABLE", run_child, self.plain, section(),
                     python=str(self.base / "no-such-python"))
         self.refuse("HATUN_CHILD_UNAVAILABLE", run_child, self.plain, section(), python="python3")
-        for name, code in (("false", "HATUN_CHILD_FAILED"), ("true", "HATUN_CHILD_FAILED"),
-                           ("echo", "HATUN_CHILD_OUTPUT_INVALID")):
+        # Each of these fails the -I -S interpreter probe, before any Hatun code is exported.
+        for name, code in (("false", "HATUN_INTERPRETER_PROBE_FAILED"),
+                           ("true", "HATUN_INTERPRETER_PROBE_FAILED"),
+                           ("echo", "HATUN_INTERPRETER_LAYOUT_INVALID")):
             exe = next((p for p in ("/bin/" + name, "/usr/bin/" + name) if os.path.isfile(p)),
                        None)
             if exe is None:
@@ -1524,6 +1987,22 @@ class ChildRunTest(RefusalMixin, TestCase):
         repo = make_hatun_repo(self.base, "list-report", governance=(
             "import os, sys\nsys.stdout.write('[1, 2]')\nsys.stdout.flush()\nos._exit(0)\n"))
         self.refuse("HATUN_CHILD_OUTPUT_INVALID", run_child, repo, section(), python=self.bare)
+
+    def test_child_that_exits_without_a_report_failed(self):
+        repo = make_hatun_repo(self.base, "silent", governance="import os\nos._exit(0)\n")
+        self.refuse("HATUN_CHILD_FAILED", run_child, repo, section(), python=self.bare)
+
+    def test_first_line_must_be_the_layout(self):
+        for output in (b'{"layout": {"pid": 7, "path": ["/usr/lib/python3"]}}',
+                       b'{"pid": 7}\n{}', b'{"layout": {"pid": 7}}\n{}',
+                       b'{"layout": {"pid": "7", "path": []}}\n{}',
+                       b'{"layout": {"pid": 7, "path": ["relative"]}}\n{}',
+                       b'{"layout": {"pid": 7, "path": []}, "extra": 1}\n{}',
+                       b'{"layout": {"pid": 7, "path": []}}\n[]', b"\xff\n{}"):
+            with self.subTest(output=output):
+                self.refuse("HATUN_CHILD_OUTPUT_INVALID", hatun._child_lines, output)
+        layout, report = hatun._child_lines(b'{"layout": {"pid": 1, "path": ["/x"]}}\n{"a": 1}')
+        self.assertEqual((layout, report), ({"pid": 1, "path": ["/x"]}, {"a": 1}))
 
     def test_deadline_kills_the_child(self):
         repo = make_hatun_repo(self.base, "sleeper",

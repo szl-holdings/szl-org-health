@@ -188,6 +188,29 @@ class NetworkNamespaceTests(_Scratch):
         self.assertEqual(network_namespace_state(), network_namespace_state())
 
 
+class SignalExitCodeTests(_Scratch):
+    """A child's own exit status reaches the result unchanged, isolated or not."""
+
+    def test_exit_codes_and_signal_deaths_pass_through_in_both_modes(self):
+        for isolate in (False, True):
+            with self.subTest(isolate=isolate):
+                self.assertEqual(self.run_child(["sh", "-c", "exit 3"],
+                                                isolate_network=isolate)["exit_code"], 3)
+            for signum in (signal.SIGKILL, signal.SIGTERM):
+                with self.subTest(isolate=isolate, signum=int(signum)):
+                    run = self.run_child(["sh", "-c", f"kill -{int(signum)} $$"],
+                                         isolate_network=isolate)
+                    self.assertEqual((run["exit_code"], run["output"]), (-signum, b""))
+
+    def test_the_cpu_limit_kill_is_reported_as_a_signal_when_isolated(self):
+        spin = self.run_child([sys.executable, "-c", "while True: pass"], cpu_seconds=1,
+                              timeout=60, isolate_network=True)
+        self.assertIn(spin["network_namespace"], (NETNS_EMPTY, NETNS_UNAVAILABLE))
+        self.assertIs(spin["timed_out"], False)
+        self.assertIn(spin["exit_code"], (-signal.SIGXCPU, -signal.SIGKILL))
+        self.assertEqual(spin["output"], b"")
+
+
 class LeanCodeOnlyLiteralTests(TestCase):
     def test_strings_hide_comment_markers_but_not_code(self):
         self.assertEqual(lean_code_only('def s := "/- not a comment" ; theorem t := sorry'),
@@ -220,11 +243,17 @@ class LeanCodeOnlyLiteralTests(TestCase):
         self.assertEqual(lean_code_only("α'\"' sorry \""), "α'\"\"")
 
     def test_nested_and_line_comments_ignore_literals_inside_them(self):
-        self.assertEqual(lean_code_only("/- a /- b -/ c -/ sorry"), " sorry")
-        self.assertEqual(lean_code_only("/- \"-/\" -/ sorry"), '""')
+        # A block comment leaves one space where it was, as Lean reads it.
+        self.assertEqual(lean_code_only("/- a /- b -/ c -/ sorry"), "  sorry")
+        self.assertEqual(lean_code_only("/- \"-/\" -/ sorry"), ' ""')
         self.assertEqual(lean_code_only("-- \"\nsorry"), "\nsorry")
         self.assertEqual(lean_code_only("-- /- \nsorry"), "\nsorry")
-        self.assertEqual(lean_code_only("x/--doc-/ sorry"), "x sorry")
+        self.assertEqual(lean_code_only("x/--doc-/ sorry"), "x  sorry")
+
+    def test_a_block_comment_between_two_tokens_keeps_them_apart(self):
+        self.assertEqual(lean_code_only("by/- c -/sorry"), "by sorry")
+        self.assertEqual(lean_code_only("exact/- a /- b -/ -/sorry"), "exact sorry")
+        self.assertEqual(lean_code_only("x/- open"), "x")
 
 
 class WriteNewBytesTests(_Scratch):
@@ -271,51 +300,29 @@ class RationalTextTests(TestCase):
 
 
 class EscapedGrandchildTests(_Scratch):
-    """A grandchild that leaves the process group with setsid() must still die with the child."""
+    """What a timeout kills is the process group, and the result says no more than that."""
 
-    def test_setsid_grandchild_dies_with_a_timed_out_isolated_child(self):
-        marker = self.dir / "grandchild.pid"
-        script = f"setsid sh -c 'echo $$ > {marker}; exec sleep 300' & sleep 60"
+    def test_a_grandchild_in_the_group_dies_and_a_setsid_escapee_is_a_known_residual(self):
+        marker = self.dir / "escaped.pid"
+        script = (f"sleep 300 & echo $! > {self.dir / 'grouped.pid'}; "
+                  f"setsid sh -c 'echo $$ > {marker}; exec sleep 301' & sleep 60")
         run = self.run_child(["sh", "-c", script], isolate_network=True, timeout=2)
         self.assertTrue(run["timed_out"])
+        self.assertLess(run["exit_code"], 0)
         deadline = time.monotonic() + 5
-        while not marker.exists() and time.monotonic() < deadline:
+        while not (marker.exists() and (self.dir / "grouped.pid").exists()) and \
+                time.monotonic() < deadline:
             time.sleep(0.05)
-        if run["network_namespace"] != NETNS_EMPTY:
-            # Without a PID namespace only the process group is killed; that is what is claimed.
-            self.assertEqual(run["network_namespace"], NETNS_UNAVAILABLE)
-            if marker.exists():
-                pid = int(marker.read_text().split()[0])
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    # Already gone: the cleanup this branch exists for has happened.
-                    pass
-            return
-        self.assertTrue(marker.exists())
-        # The pid written inside the namespace is not the host pid, so check by command line.
-        self.assertTrue(gone_by_cmdline("sleep 300"), "a setsid grandchild survived")
-
-
-def gone_by_cmdline(needle, wait=10.0):
-    deadline = time.monotonic() + wait
-    while time.monotonic() < deadline:
-        alive = False
-        for entry in Path("/proc").iterdir():
-            if not entry.name.isdigit():
-                continue
-            try:
-                raw = (entry / "cmdline").read_bytes()
-                state = (entry / "stat").read_text().rsplit(")", 1)[1].split()[0]
-            except (FileNotFoundError, ProcessLookupError, PermissionError, IndexError):
-                continue
-            if raw.replace(b"\0", b" ").strip() == needle.encode() and state not in ("Z", "X"):
-                alive = True
-                break
-        if not alive:
-            return True
-        time.sleep(0.1)
-    return False
+        grouped = int((self.dir / "grouped.pid").read_text().split()[0])
+        self.assertTrue(gone(grouped), "a grandchild in the process group survived")
+        # The setsid() escapee is outside the group: documented as a residual, cleaned up here.
+        escaped = int(marker.read_text().split()[0])
+        try:
+            os.kill(escaped, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            # It may already have exited; either way nothing is left behind by this test.
+            pass
+        self.assertIn("setsid()", Path(common.__file__).read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

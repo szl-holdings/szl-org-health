@@ -5,7 +5,7 @@
   "source_binding": {
     "repository": "szl-holdings/a11oy",
     "path": "migrations/20260820_memory_covenant_v2_postmerge_hardening.sql",
-    "git_blob_sha1": "162cd077150c58f008b568bb530628ec799ecdff"
+    "git_blob_sha1": "18050de00db455da9b6db67244bd5d2f6fb8ee56"
   },
   "required_stages": [
     "source_ledger",

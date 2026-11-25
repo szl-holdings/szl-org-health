@@ -68,6 +68,7 @@ def make_estate(base: Path) -> dict:
         _git(directory, "init", "-q", "-b", "main")
         _git(directory, "add", "-A")
         _git(directory, "commit", "-q", "-m", "fixture")
+        _git(directory, "remote", "add", "origin", "https://github.com/" + repository + ".git")
         checkouts[repository] = directory
     return checkouts
 
@@ -243,6 +244,29 @@ class CensusOnlyTurnTests(TestCase):
         census["observed_at"] = (AT + timedelta(seconds=1)).isoformat()
         refused(self, "BRAID_TURN_REPLAY_DIVERGED", braid.replay_turn, self.report,
                 ESTATE.policy, census, input_digests=ESTATE.digests())
+
+    def test_census_rows_record_and_require_a_matching_checkout(self):
+        identities = {r["repository"]: r["checkout_identity"]
+                      for r in self.report["census"]["repositories"]}
+        self.assertEqual(set(identities.values()), {"ORIGIN_MATCHES"})
+        census = deepcopy(ESTATE.census)
+        census["repositories"][0]["checkout_identity"] = "ORIGIN_DIFFERS"
+        report, _ = braid.turn(ESTATE.policy, census, input_digests=ESTATE.digests())
+        self.assertIn("CENSUS_CHECKOUT_IDENTITY_UNVERIFIED", report["decision"]["sub_reasons"])
+
+    def test_a_relabelled_family_is_refused_not_braided(self):
+        census = deepcopy(ESTATE.census)
+        census["cords"][0]["family"] = "SOMETHING_ELSE"
+        with self.assertRaises(InputError):
+            braid.turn(ESTATE.policy, census, input_digests=ESTATE.digests())
+
+    def test_a_census_taken_with_a_family_map_needs_that_map(self):
+        census = deepcopy(ESTATE.census)
+        census["family_map_sha256"] = "9" * 64
+        refused(self, "BRAID_FAMILY_MAP_REQUIRED", braid.turn, ESTATE.policy, census,
+                input_digests=ESTATE.digests())
+        refused(self, "BRAID_FAMILY_MAP_REQUIRED", ESTATE.turn, family_map={},
+                family_map_sha256="9" * 64)
 
     def test_genesis_is_never_a_fixed_point(self):
         self.assertIs(self.report["ouroboros_fixed_point"], False)
@@ -469,13 +493,55 @@ class ChainTests(TestCase):
         second, _ = self.chained(kat_report=None)
         self.assertIs(second["ouroboros_fixed_point"], False)
 
-    def test_tampered_previous_turn_is_not_consumed(self):
+    def test_tampered_previous_turn_is_recorded_and_a_new_chain_starts(self):
         tampered = deepcopy(self.first)
         tampered["known_answers"]["passed"] = 2
+        report, tree = ESTATE.turn(previous_turn=tampered, previous_tree=self.first_tree,
+                                   previous_turn_sha256=self.first_sha,
+                                   input_digests=ESTATE.digests(previous_turn=self.first_sha))
+        self.assertEqual(report["previous_turn_rejected"],
+                         {"sha256": self.first_sha, "code": "BRAID_TURN_SUMMARY_DRIFT"})
+        self.assertEqual((report["ordinal"], report["previous_turn_id"],
+                          report["previous_turn_sha256"]), (1, None, None))
+        self.assertIn("PREVIOUS_TURN_REJECTED", report["decision"]["sub_reasons"])
+        self.assertIs(report["ouroboros_fixed_point"], False)
+        self.assertEqual(report["loop_trace"][0]["state"], "HOLD")
+        self.assertIn("TAIL_REJECTED_NEW_CHAIN", report["loop_trace"][0]["detail"])
+        self.assertTrue(braid.verify_turn(report, policy_for_shape=ESTATE.policy, tree=tree))
+
+    def test_a_previous_turn_of_another_shape_is_rejected_not_fatal(self):
+        older = deepcopy(self.first)
+        del older["previous_turn_rejected"]
+        report, _ = ESTATE.turn(previous_turn=older, previous_tree=self.first_tree,
+                                previous_turn_sha256=self.first_sha,
+                                input_digests=ESTATE.digests(previous_turn=self.first_sha))
+        self.assertEqual(report["previous_turn_rejected"]["code"], "BRAID_TURN_FIELDS_INVALID")
+        self.assertEqual(report["ordinal"], 1)
+
+    def test_a_rejection_record_cannot_ride_on_a_chained_turn(self):
+        second, tree = self.chained()
+        forged = deepcopy(second)
+        forged["previous_turn_rejected"] = {"sha256": "1" * 64, "code": "ANYTHING_AT_ALL"}
         with self.assertRaises(InputError):
-            ESTATE.turn(previous_turn=tampered, previous_tree=self.first_tree,
-                        previous_turn_sha256=self.first_sha,
-                        input_digests=ESTATE.digests(previous_turn=self.first_sha))
+            braid.verify_turn(forged, policy_for_shape=ESTATE.policy, tree=tree)
+        report, _ = ESTATE.turn()
+        for bad in ({"sha256": "1" * 64}, {"sha256": "x", "code": "OK_CODE"},
+                    {"sha256": "1" * 64, "code": "bad code 9"}):
+            forged = deepcopy(report)
+            forged["previous_turn_rejected"] = bad
+            with self.assertRaises(InputError):
+                braid.verify_turn(forged)
+
+    def test_the_rejection_guard_cannot_be_dropped(self):
+        tampered = deepcopy(self.first)
+        tampered["ordinal"] = 7
+        report, tree = ESTATE.turn(previous_turn=tampered, previous_tree=self.first_tree,
+                                   previous_turn_sha256=self.first_sha,
+                                   input_digests=ESTATE.digests(previous_turn=self.first_sha))
+        forged = deepcopy(report)
+        forged["decision"]["sub_reasons"].remove("PREVIOUS_TURN_REJECTED")
+        with self.assertRaises(InputError):
+            braid.verify_turn(forged, policy_for_shape=ESTATE.policy, tree=tree)
 
     def test_fixed_point_claim_checked_against_the_previous_turn(self):
         second, tree = self.chained(kat_report=None)
@@ -624,6 +690,7 @@ class FullStackTests(TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         base = Path(cls.tmp.name)
         cls.lean_repo = lean_tests.make_checkout(base / "lean-home", name="synthetic-lean")
+        _git(cls.lean_repo, "remote", "add", "origin", "https://github.com/" + cls.LEAN)
         estate = make_estate(base / "others")
         cls.checkouts = {HATUN_REPO: estate[HATUN_REPO], LAKE_REPO: estate[LAKE_REPO],
                          cls.LEAN: cls.lean_repo}
@@ -640,7 +707,8 @@ class FullStackTests(TestCase):
         cls.witness = {
             name: lean.observe(policy["lean"], cls.lean_repo, toolchain_bin=base / "bin",
                                run=lean_tests.FakeLake(**fake), at=AT)
-            for name, fake in (("good", {"fail_request": ()}), ("hold", {"allowed": 2}))}
+            for name, fake in (("good", {"fail_request": ()}), ("hold", {"allowed": 2}),
+                               ("no_census", {"fail_request": (), "census_exit": 1}))}
         rows = {r["repository"]: r for r in cls.census["repositories"]}
         section = policy["hatun"]
         cls.hatun = hatun.assemble(section, rows[HATUN_REPO]["commit"], "d" * 64,
@@ -737,6 +805,25 @@ class FullStackTests(TestCase):
         report, _ = self.turn(self.floored(), witness="hold")
         self.assertIn("LEAN_WITNESS_NOT_KERNEL_EXECUTED", report["decision"]["sub_reasons"])
         self.assertIsNone(report["decision"]["exact"])
+        # A HOLD witness's numbers are not scored, not even as information.
+        for name in ("lean_files_kernel_accepted", "theorems_trust_base_only",
+                     "locked_set_guard"):
+            self.assertNotIn(name, report["decision"]["axes_computed"])
+
+    def test_a_witness_whose_census_failed_holds_with_reasons_not_a_crash(self):
+        witness = self.witness["no_census"]
+        self.assertEqual(witness["state"], "HOLD")
+        self.assertIn("AXIOM_CENSUS_UNAVAILABLE", witness["hold_reasons"])
+        report, tree = self.turn(self.floored(), witness="no_census")
+        reasons = report["decision"]["sub_reasons"]
+        self.assertIn("LEAN_WITNESS_NOT_KERNEL_EXECUTED", reasons)
+        self.assertIn("KHIPU_LEAN_CARRIER_NOT_KERNEL_CLEAN", reasons)
+        self.assertIsNone(report["lean"]["khipu_carrier"]["found"])
+        # Theorem counts are unknown, so nothing is compared with the floor as a zero.
+        self.assertIsNone(report["ratchet"]["debt"])
+        self.assertEqual(report["ratchet"]["floor_state"], "NOT_COMPARABLE_NO_EXECUTED_KERNEL_WITNESS")
+        self.assertEqual(report["ratchet"]["violations"], [])
+        self.assertTrue(braid.verify_turn(report, tree=tree))
 
     def test_floor_breach_refuses_the_aggregate(self):
         policy = self.floored()

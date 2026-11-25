@@ -13,6 +13,7 @@ COPY census/github_inventory.py /app/census/github_inventory.py
 COPY census/governance.py /app/census/governance.py
 COPY census/huggingface.py /app/census/huggingface.py
 COPY census/space_readiness.py /app/census/space_readiness.py
+COPY census/vertical_contracts.py /app/census/vertical_contracts.py
 COPY census/report.py /app/census/report.py
 COPY census/portal_projection.py /app/census/portal_projection.py
 COPY census/system_design.py /app/census/system_design.py

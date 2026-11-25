@@ -46,7 +46,9 @@ RUNG_AM = "ARITHMETIC_MEAN_REFUTES"
 RUNG_POWER = "EXACT_POWER_COMPARISON"
 MAX_AXES = 64
 MAX_WEIGHT = 64
-MAX_AXIS_BITS = 1400
+# The largest bit length whose numbers all have at most 401 decimal digits, the most
+# parse_rational accepts per part, so verify_decision can read back any record decide writes.
+MAX_AXIS_BITS = 1332
 MAX_OPERAND_BITS = 13000
 PPM = 10 ** 6
 _FIELDS = (

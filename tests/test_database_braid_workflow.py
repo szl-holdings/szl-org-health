@@ -15,14 +15,40 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/ouroboros-braid-turn.yml"
 POLICY = ROOT / "governance/database_contracts/ouroboros_braid_v2.json"
 LOCK = ROOT / "requirements-braid.lock"
-USES = re.compile(r"^\s*(?:- )?uses:\s*(\S+)", re.M)
+# A `uses` or `run` key in any spelling YAML allows on one line: block or flow style, quoted
+# or bare, any spacing around the dash and the colon. A value on a later line is captured as
+# empty, so it can never pass as pinned.
+USES = re.compile(r"""(?<![\w-])["']?uses["']?[ \t]*:[ \t]*["']?([^\s"',}\]#]*)""")
 PINNED = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}\Z")
-RUN_STEP = re.compile(r"^\s*(?:- )?run:", re.M)
+RUN_STEP = re.compile(r"""(?<![\w-])["']?run["']?[ \t]*:""")
 ATTEST_ACTIONS = (
     "step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c",
     "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
     "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8",
 )
+# The attestation job may only be written in plain block style with these keys, so no escape,
+# flow mapping, alias, tag or block scalar can spell a step that runs anything.
+ATTEST_KEYS = {"name", "needs", "if", "runs-on", "timeout-minutes", "permissions", "contents",
+               "id-token", "attestations", "steps", "uses", "with", "egress-policy", "path",
+               "subject-path"}
+PLAIN_LINE = re.compile(r"( *)(- )?([a-z][a-z-]*):(?: (.+))?\Z")
+PLAIN_VALUE = re.compile(r"[^\s{}\[\]&*!|>\"'%@`]")
+EVASIONS = ("      -   run: curl x | sh", '      - "run": curl x', "      - {name: x, run: curl x}",
+            "        run : curl x", "        'run': curl x", '      - "r\\u0075n": curl x',
+            "      - ? run\n        : curl x", "      - name: x\n        <<: *runner")
+
+
+def plain_block_violations(job_text):
+    """Lines of a job that are not blank, a comment, or a plain allowed ``key: value``."""
+    bad = []
+    for line in job_text.strip("\n").splitlines()[1:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        match = PLAIN_LINE.fullmatch(line)
+        if (match is None or match.group(3) not in ATTEST_KEYS or
+                (match.group(4) is not None and not PLAIN_VALUE.match(match.group(4)))):
+            bad.append(line)
+    return bad
 
 
 def job(text, name):
@@ -77,16 +103,33 @@ class BraidTurnWorkflowContract(TestCase):
         self.assertNotIn("actions/checkout@", self.attest)
         self.assertNotRegex(self.attest, RUN_STEP)
         self.assertNotIn("python", self.attest)
+        self.assertEqual(plain_block_violations(self.attest), [])
         self.assertEqual(sorted(USES.findall(self.attest)), sorted(ATTEST_ACTIONS))
 
     def test_run_step_check_is_not_vacuous(self):
-        # The same check must see a run step anywhere in a job, not only at its first line.
+        # The same checks must see a run step anywhere in a job, in any YAML spelling.
         self.assertRegex(self.turn, RUN_STEP)
+        self.assertNotEqual(plain_block_violations(self.turn), [])
         planted = self.attest + "\n      - name: planted\n        run: curl https://example.invalid\n"
         self.assertRegex(planted, RUN_STEP)
-        self.assertNotEqual(sorted(USES.findall(planted + "        uses: actions/checkout@" +
-                                                "3d3c42e5aac5ba805825da76410c181273ba90b1\n")),
-                            sorted(ATTEST_ACTIONS))
+        for evasion in EVASIONS:
+            with self.subTest(evasion=evasion):
+                self.assertNotEqual(plain_block_violations(self.attest + evasion + "\n"), [])
+        for evasion in EVASIONS[:5]:
+            with self.subTest(regex=evasion):
+                self.assertRegex(evasion, RUN_STEP)
+        pin = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+        for spelling in (f"      -   uses: {pin}", f'      - "uses": "{pin}"',
+                         f"      - {{name: x, uses: {pin}}}", f"        uses : {pin}"):
+            with self.subTest(uses=spelling):
+                self.assertEqual(USES.findall(spelling), [pin])
+                self.assertNotEqual(sorted(USES.findall(self.attest + spelling + "\n")),
+                                    sorted(ATTEST_ACTIONS))
+        # A reference the pin check cannot read is reported, never skipped.
+        for unread in ("        uses:\n          actions/checkout@v4", "        uses: *pinned",
+                       "        uses: >-\n          actions/checkout@v4"):
+            with self.subTest(unread=unread):
+                self.assertNotRegex(USES.findall(unread)[0], PINNED)
 
     def test_header_names_suites_that_exist_and_claims_no_more_than_it_does(self):
         header = self.text[:self.text.index("\non:")]

@@ -172,7 +172,8 @@ def _stage(args, staging: Path, checkouts: dict) -> dict:
                     db_plan=plan, action_policy=action_policy, source_policy=source_policy,
                     previous_turn=previous, previous_tree=previous_tree,
                     previous_lake_wrap=previous_wrap,
-                    previous_turn_sha256=digests.get("previous_turn"))
+                    previous_turn_sha256=digests.get("previous_turn"),
+                    family_map=family_map, family_map_sha256=map_sha)
     report, tree = braid.turn(policy, census, input_digests=digests, produced=produced,
                               **evidence)
     keep("khipu_tree.json", tree, braid.MAX_TREE_BYTES)
@@ -200,7 +201,8 @@ def _stage(args, staging: Path, checkouts: dict) -> dict:
 
     turn_again = again("turn.json", braid.MAX_TURN_BYTES)
     tree_again = again("khipu_tree.json", braid.MAX_TREE_BYTES)
-    braid.verify_turn(turn_again, policy_for_shape=policy, tree=tree_again, previous=previous)
+    consumed = previous if turn_again["previous_turn_rejected"] is None else None
+    braid.verify_turn(turn_again, policy_for_shape=policy, tree=tree_again, previous=consumed)
     braid.replay_turn(
         turn_again, policy, again("census.json", census_tool.MAX_CENSUS_BYTES),
         input_digests=digests,
@@ -212,6 +214,7 @@ def _stage(args, staging: Path, checkouts: dict) -> dict:
         "schema": SCHEMA, "turn_id": report["turn_id"], "ordinal": report["ordinal"],
         "state": report["state"], "refusal_path": report["decision"]["refusal_path"],
         "sub_reasons": report["decision"]["sub_reasons"], "stages": stages,
+        "previous_turn_rejected": report["previous_turn_rejected"],
         "evidence_produced_in_invocation": report["evidence_produced_in_invocation"],
         "host_network_namespace": network_namespace_state(),
         "verified_from_written_files": True, "replayed_byte_identical": True,
@@ -262,7 +265,8 @@ def main(argv=None):
                     type=Path)
     ap.add_argument("--lean-packages-dir", "--packages-dir", dest="lean_packages_dir", type=Path,
                     help="Lake dependency cache (default: the Lean checkout's .lake/packages)")
-    ap.add_argument("--python", help="absolute interpreter that has the Hatun and receipt libraries")
+    ap.add_argument("--python",
+                    help="absolute interpreter that has the Hatun and receipt libraries")
     ap.add_argument("--db-plan", type=Path)
     ap.add_argument("--db-action-policy", type=Path)
     ap.add_argument("--source-policy", type=Path)
