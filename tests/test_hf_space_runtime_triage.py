@@ -1,6 +1,9 @@
 """Offline adversarial tests for bounded public Space runtime triage."""
 import json
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest.mock import patch
 from tools.hf_space_runtime_triage import (
     BASE, LIMIT, CensusUnavailable, _unique_pairs, audit, fetch_json,
 )
@@ -85,6 +88,56 @@ class TriageTests(unittest.TestCase):
         with self.assertRaises(CensusUnavailable):
             json.loads('{"runtime":{"stage":"RUNNING","stage":"PAUSED"}}',
                        object_pairs_hook=_unique_pairs)
+
+    def test_redirects_denied_without_contacting_destination(self):
+        # Fully offline: the origin and redirect target are loopback only.
+        # No Hugging Face Space, production endpoint, or secret is accessed.
+        target_hits = []
+        redirect_status = [302]
+
+        class Target(BaseHTTPRequestHandler):
+            def do_GET(self):
+                target_hits.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"untrusted":true}')
+
+            def log_message(self, *args):
+                pass
+
+        target = ThreadingHTTPServer(("127.0.0.1", 0), Target)
+
+        class Origin(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(redirect_status[0])
+                self.send_header(
+                    "Location",
+                    f"http://127.0.0.1:{target.server_address[1]}/app-runtime",
+                )
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        origin = ThreadingHTTPServer(("127.0.0.1", 0), Origin)
+        for server in (target, origin):
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            base = f"http://127.0.0.1:{origin.server_address[1]}"
+            with patch("tools.hf_space_runtime_triage.BASE", base):
+                url = f"{base}/api/spaces?author=SZLHOLDINGS&limit={LIMIT}&full=true"
+                for status in (301, 302, 303, 307, 308):
+                    with self.subTest(status=status):
+                        redirect_status[0] = status
+                        with self.assertRaisesRegex(
+                            CensusUnavailable, "REDIRECT_NOT_ALLOWED"
+                        ):
+                            fetch_json(url)
+                        self.assertEqual(target_hits, [])
+        finally:
+            for server in (origin, target):
+                server.shutdown()
+                server.server_close()
 
     def test_url_allowlist(self):
         for url in ("https://example.com/", BASE + "/api/whoami-v2",
