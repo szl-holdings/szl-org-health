@@ -397,7 +397,7 @@ def export_tree(directory: Path, commit: str, dest: Path, *, max_blob_bytes: int
                 stream.write(body)
             written += len(body)
         # Dropped before the next batch is read, so it never sits beside git's next output.
-        body = None
+        del body
     return {"files": len(files), "bytes": written, "skipped_entries": len(rows) - len(files)}
 
 
@@ -458,7 +458,7 @@ def census_repository(repo_policy, directory: Path, explicit: dict, *, max_blob_
                       "lfs": body.startswith(LFS_MAGIC),
                       "sorry": lean_text_sorry_tokens(body) if sha in lean_blobs else 0}
         # Dropped before the next batch is read, so it never sits beside git's next output.
-        body = None
+        del body
     cords, unavailable = [], []
     for path, sha, _size in sorted(chosen):
         fact = facts[sha]
