@@ -2,30 +2,52 @@
 # SPDX-License-Identifier: Apache-2.0
 """Execute the pinned Hatun veto ladder locally for the SZL Ouroboros braid v2.
 
-Only committed bytes run. The checkout's HEAD commit is exported from the git
-object store into a new temporary directory, and the child can import Hatun
-code from that export alone: an untracked or ignored file in the checkout (a
-shadow package, a planted ``__pycache__`` file, a root-level module) is never
-on its path. The child is ``python -I -B -X pycache_prefix=<new empty
-directory> -c DRIVER``, so Python environment variables, the user site and the
-current directory are ignored and no cached bytecode is read or written. The
-export is appended after the interpreter's own paths and the child reports
-where every loaded ``hatun_mcp`` module came from; a module from anywhere else
-refuses the witness. Third-party dependencies (the MCP SDK, pydantic, httpx
-and the rest) are the given interpreter's site-packages: they are trusted, not
-verified here, and the distributions that were loaded are recorded with their
-versions.
+Only committed bytes run. The checkout's HEAD commit object is re-hashed to its
+id, the listing of its tree is rebuilt into git tree objects whose root must be
+the tree that commit names, and the commit is exported from the object store
+into a new temporary directory whose every file is re-hashed against that
+listing. A planted object, pack or replace ref in the checkout's ``.git``, or an
+untracked or ignored file in its work tree (a shadow package, a planted
+``__pycache__`` file, a root-level module), therefore cannot change what runs.
+The child is ``python -I -B -X pycache_prefix=<new empty directory> -c
+DRIVER``, so Python environment variables, the user site and the current
+directory are ignored and no cached bytecode is read or written. The export is
+appended after the interpreter's own paths and the child reports where every
+loaded ``hatun_mcp`` module came from; a module from anywhere else refuses the
+witness. Object ids are git's SHA-1 ids, recomputed here as git computes them.
 
-The child gets a temporary HOME, no proxy, no receipt sink and no signing key,
-and its backend endpoints point at a closed local port. It runs under CPU,
-address-space and file-size limits, a wall-clock deadline and an output cap
-read as it arrives; its whole process group is killed when the deadline or the
-cap is exceeded. It is started in a new network namespace when the host allows
-one, and the witness records the namespace that was observed. Only with
-EMPTY_NETWORK_NAMESPACE can no IP traffic leave the machine: the child sees
-loopback alone (filesystem UNIX sockets stay reachable, since no mount
-namespace is made). With NOT_AVAILABLE_ON_THIS_HOST the proxy and backend
-endpoints were removed but direct sockets were not blocked.
+The interpreter is refused when it could load code from the checkout: when the
+path given, its target, a venv root or ``home`` named by a pyvenv.cfg beside it,
+its prefixes, its standard-library path or its site-packages directories lie
+inside the checkout, when a ``.pth`` file there or a directory one of its path
+lines adds does, or when any entry of the child's own ``sys.path`` does (the
+child reports that path on its first output line, before it imports anything
+outside the standard library). The prefixes and site-packages directories come
+from one run of the interpreter as ``-I -S``, which executes no site-packages
+code. Third-party dependencies (the MCP SDK, pydantic, httpx and the rest) are
+that interpreter's site-packages: they, the import lines of their ``.pth``
+files and any ``sitecustomize`` are trusted, not verified here. An import line
+that puts the checkout on the path is caught by the child's first line, unless
+it also lets a ``sitecustomize`` planted in the checkout run before that line
+and forge it. The distributions that were loaded are recorded with their
+versions, and the interpreter's prefix and base prefix are recorded.
+
+The child gets a temporary HOME, no proxy, no receipt sink and no signing key.
+The backend URL variables listed in the witness point at a closed local port
+(127.0.0.1:9). Origins written into the committed code itself (for example its
+GitHub, Hugging Face and payment-key origins) are not covered by those
+variables: they are unreachable only in an empty network namespace. The child
+runs under CPU, address-space and file-size limits, a wall-clock deadline and
+an output cap read as it arrives. It is started in a new network namespace when
+the host allows one, and the witness records the namespace that was observed.
+Only with EMPTY_NETWORK_NAMESPACE can no IP traffic leave the machine: the
+child sees loopback alone (filesystem UNIX sockets stay reachable, since no
+mount namespace is made). With NOT_AVAILABLE_ON_THIS_HOST the proxy was removed
+and the listed variables redirected, but direct sockets were not blocked. When
+the host can nest one, the child is also PID 1 of its own PID namespace, so
+every descendant dies with it (OWN_PID_NAMESPACE); otherwise its process group
+is killed at the deadline, at the cap and once it exits, and a descendant that
+left the group with ``setsid()`` can outlive it (PROCESS_GROUP_ONLY).
 
 Two tiers are attempted and reported separately:
 
@@ -51,17 +73,21 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
+import stat
 import sys
 import tempfile
 
 try:
     from tools.database_braid_common import (
         NETNS_EMPTY, NETNS_UNAVAILABLE, REPOSITORY, SHA40, SHA64, bounded_run, checkout_root,
-        closed, digest, git_blob_sha1, natural, read_json, require, strict_json, write_exclusive,
+        closed, digest, git_blob_sha1, natural, network_namespace_state, read_json, require,
+        strict_json, write_exclusive,
     )
     from tools.database_braid_source_census import export_tree, list_tree
     from tools.database_catalog_admission import InputError
@@ -69,7 +95,8 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from tools.database_braid_common import (
         NETNS_EMPTY, NETNS_UNAVAILABLE, REPOSITORY, SHA40, SHA64, bounded_run, checkout_root,
-        closed, digest, git_blob_sha1, natural, read_json, require, strict_json, write_exclusive,
+        closed, digest, git_blob_sha1, natural, network_namespace_state, read_json, require,
+        strict_json, write_exclusive,
     )
     from tools.database_braid_source_census import export_tree, list_tree
     from tools.database_catalog_admission import InputError
@@ -80,12 +107,21 @@ TOOL = re.compile(r"[a-z][a-z0-9_]{2,63}\Z")
 CODE = re.compile(r"[A-Za-z0-9_.() -]{0,80}\Z")
 DISTRIBUTION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}\Z")
 DISTRIBUTION_VERSION = re.compile(r"[A-Za-z0-9.+!_-]{1,40}\Z")
+PATH_TEXT = re.compile(r"/[^\x00-\x1f\x7f]{0,4095}\Z")
 MAX_PROBES = 24
 MAX_DISTRIBUTIONS = 128
 MAX_COUNT = 1000000
 MAX_EXPORT_FILES = 200000
 MAX_WITNESS_BYTES = 262144
+MAX_LAYOUT_BYTES = 262144
+MAX_LAYOUT_PATHS = 512
+MAX_SITE_FILES = 1024
+MAX_SITE_FILE_BYTES = 1048576
+MAX_TREE_DEPTH = 256
+MAX_COMMIT_BYTES = 1048576
 CHILD_TIMEOUT_SECONDS = 180
+PROBE_TIMEOUT_SECONDS = 60
+GIT_TIMEOUT_SECONDS = 120
 CHILD_CPU_SECONDS = 120
 CHILD_ADDRESS_BYTES = 2147483648
 CHILD_FILE_BYTES = 0
@@ -100,28 +136,36 @@ INTERPRETER_FLAGS = ("-I", "-B", "-X", "pycache_prefix=FRESH_EMPTY_DIRECTORY")
 TRANSPORT = "MCP_SDK_IN_MEMORY_JSON_RPC"
 SERVER_INSTANCE = "LOCAL_PROCESS_EXPORTED_COMMIT"
 STATES = ("VETO_LADDER_CONFORMS", "HOLD")
+PROCESS_TREES = ("OWN_PID_NAMESPACE", "PROCESS_GROUP_ONLY")
+_UNSHARE_SEARCH = "/usr/bin:/bin:/usr/sbin:/sbin"
+_LEAF_MODES = ("100644", "100755", "120000", "160000")
 _BACKEND_VARS = ("SZL_A11OY_URL", "SZL_LLM_URL", "SZL_IMMUNE_URL", "SZL_KILLINCHU_URL",
                  "SZL_COMPANION_URL", "SZL_LEAN_URL", "SZL_ANATOMY_URL", "SZL_SECOND_BRAIN_URL",
-                 "HATUN_MCP_AXLE_URL")
+                 "HATUN_MCP_AXLE_URL", "SZL_HF_ROUTER_URL")
 _FALSE_FLAGS = ("deployed_runtime_contacted", "signer_identity_established",
                 "two_person_approval_claimed", "external_effects_performed",
                 "production_authorized")
 _WITNESS_FIELDS = (
     "schema", "observed_at", "repository", "commit", "source_modules_digest", "source_tree",
-    "export_files", "export_skipped_entries", "interpreter", "child", "kernel", "mcp",
-    "probes_expected", "probes_matched", "state", "effect_authority", "caller_identity",
-    "caller_context", "api_key_authentication_path_exercised",
-    "backend_endpoints_disabled_by_environment", "network_namespace",
+    "export_files", "export_skipped_entries", "export_rehashed_to_commit", "interpreter",
+    "child", "kernel", "mcp", "probes_expected", "probes_matched", "state", "effect_authority",
+    "caller_identity", "caller_context", "api_key_authentication_path_exercised",
+    "backend_url_variables_redirected", "backend_redirect_target",
+    "hardcoded_backend_origins_redirected", "network_namespace",
     "direct_network_egress_blocked", "policy_section_sha256", *_FALSE_FLAGS,
 )
-_INTERPRETER_FIELDS = ("python", "site_packages", "loaded_distributions")
+_INTERPRETER_FIELDS = ("python", "prefix", "base_prefix", "outside_checkout", "site_packages",
+                       "loaded_distributions")
+_SEEN_INTERPRETER_FIELDS = ("python", "prefix", "base_prefix", "outside_checkout")
+_LAYOUT_FIELDS = ("python", "executable", "prefix", "exec_prefix", "base_prefix",
+                  "base_exec_prefix", "path", "site_packages")
 _CHILD_FIELDS = ("flags", "isolated_mode", "bytecode_writes_disabled",
                  "pycache_prefix_fresh_and_unused", "hatun_modules_loaded",
-                 "hatun_modules_outside_export", "limits")
+                 "hatun_modules_outside_export", "process_tree", "limits")
 _OBSERVED_FIELDS = ("network_namespace", "export_files", "export_skipped_entries",
-                    "isolated_mode", "bytecode_writes_disabled",
-                    "pycache_prefix_fresh_and_unused", "hatun_modules_loaded",
-                    "hatun_modules_outside_export")
+                    "export_rehashed_to_commit", "interpreter", "process_tree", "isolated_mode",
+                    "bytecode_writes_disabled", "pycache_prefix_fresh_and_unused",
+                    "hatun_modules_loaded", "hatun_modules_outside_export")
 _LOOP_FIELDS = ("loop_exit", "loop_steps", "loop_max_budget", "loop_doctrine",
                 "loop_walked_all_phases", "chain_verified", "signer_mode")
 _KERNEL_FIELDS = ("state", "reason", *_LOOP_FIELDS, "primitives")
@@ -142,9 +186,33 @@ _MCP_TEXT = {"sdk_version": 24, "server_name": 40, "server_version": 24,
 _MCP_ROW_TEXT = {"status": 16, "decline_reason": 80, "owasp_class": 16, "tripwire": 8,
                  "backend_endpoint": 80, "signer_mode": 24}
 
+# Runs as -I -S -B: the standard library alone, before any site-packages code or .pth file.
+# site.py treats a pyvenv.cfg beside the executable or one level up as a venv whose prefix is
+# the directory above the executable's; the same rule finds the site-packages it would add.
+INTERPRETER_PROBE = r'''
+import json, os, site, sys
+here = os.path.dirname(os.path.abspath(sys.executable))
+venv = os.path.dirname(here)
+prefixes = (sys.prefix, sys.exec_prefix, sys.base_prefix, sys.base_exec_prefix)
+found = site.getsitepackages(prefixes)
+if any(os.path.isfile(os.path.join(d, "pyvenv.cfg")) for d in (here, venv)):
+    sys.prefix = sys.exec_prefix = venv
+found += site.getsitepackages((sys.prefix, *prefixes))
+sys.stdout.write(json.dumps({
+    "python": "%d.%d.%d" % sys.version_info[:3], "executable": sys.executable,
+    "prefix": sys.prefix, "exec_prefix": sys.exec_prefix, "base_prefix": sys.base_prefix,
+    "base_exec_prefix": sys.base_exec_prefix, "path": list(sys.path),
+    "site_packages": list(dict.fromkeys(found))}))
+'''
+
 # Runs inside the child interpreter, whose only Hatun source is the exported commit.
 DRIVER = r'''
-import asyncio, importlib.metadata as metadata, importlib.util, json, os, sys
+import json, os, sys
+# Written before anything outside the standard library is imported: this process id (1 in
+# its own PID namespace) and the path every later import searches.
+sys.stdout.write(json.dumps({"layout": {"pid": os.getpid(), "path": list(sys.path)}}) + "\n")
+sys.stdout.flush()
+import asyncio, importlib.metadata as metadata, importlib.util
 root = os.path.realpath(sys.argv[1])
 spec = json.loads(sys.stdin.read())
 os.environ["HATUN_MCP_DISABLE_DYNAMIC"] = "true"
@@ -315,13 +383,83 @@ def validate_policy(section) -> dict:
     return section
 
 
+def _git_environment(home: str) -> dict:
+    return {"PATH": "/usr/bin:/bin", "HOME": home, "LC_ALL": "C", "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0",
+            "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_NO_LAZY_FETCH": "1"}
+
+
+def commit_tree(checkout: Path, commit: str) -> str:
+    """The root tree id written in the commit object, once that object re-hashes to ``commit``."""
+    require(type(commit) is str and SHA40.fullmatch(commit) is not None,
+            "HATUN_COMMIT_OBJECT_INVALID")
+    with tempfile.TemporaryDirectory(prefix="braid-hatun-git-") as home:
+        run = bounded_run(["git", "-c", "core.fsmonitor=false", "-C", str(checkout), "cat-file",
+                           "commit", commit], cwd=home, env=_git_environment(home),
+                          timeout=GIT_TIMEOUT_SECONDS, max_output=MAX_COMMIT_BYTES,
+                          merge_stderr=False)
+    raw = run["output"]
+    header = b"commit " + str(len(raw)).encode("ascii") + b"\0"
+    named = raw[5:45].decode("ascii", "replace")
+    require(run["exit_code"] == 0 and not run["timed_out"] and not run["truncated"] and
+            hashlib.sha1(header + raw, usedforsecurity=False).hexdigest() == commit and
+            raw[:5] == b"tree " and SHA40.fullmatch(named) is not None and raw[45:46] == b"\n",
+            "HATUN_COMMIT_OBJECT_INVALID")
+    return named
+
+
+def _tree_hash(node: dict) -> str:
+    entries = []
+    for name, item in node.items():
+        raw = name.encode("utf-8")
+        if type(item) is dict:
+            # Git orders a subtree as if its name ended in "/".
+            entries.append((raw + b"/", b"40000 " + raw + b"\0" + bytes.fromhex(_tree_hash(item))))
+        else:
+            entries.append((raw, item[0].encode("ascii") + b" " + raw + b"\0" +
+                            bytes.fromhex(item[1])))
+    body = b"".join(entry for _key, entry in sorted(entries))
+    return hashlib.sha1(b"tree " + str(len(body)).encode("ascii") + b"\0" + body,
+                        usedforsecurity=False).hexdigest()
+
+
+def tree_object_id(rows) -> str:
+    """Git's id for the tree whose leaves are ``rows`` (as ``list_tree`` returns them)."""
+    root = {}
+    for mode, _kind, sha, _size, path in rows:
+        parts = path.split("/") if type(path) is str else []
+        require(0 < len(parts) <= MAX_TREE_DEPTH and all(parts) and mode in _LEAF_MODES and
+                type(sha) is str and SHA40.fullmatch(sha) is not None, "HATUN_LISTING_INVALID")
+        node = root
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+            require(type(node) is dict, "HATUN_LISTING_INVALID")
+        require(parts[-1] not in node, "HATUN_LISTING_INVALID")
+        node[parts[-1]] = (mode, sha)
+    return _tree_hash(root)
+
+
+def verified_listing(checkout: Path) -> tuple:
+    """``(commit, rows)`` for HEAD, with the listing re-hashed to the commit's own tree.
+
+    Git's listing is not taken on trust: its leaves are rebuilt into tree objects
+    here and the root must equal the tree named in the commit object, which must
+    itself re-hash to the commit id. A planted object, pack, graft or replace ref
+    in the checkout's ``.git`` cannot make the listing differ from the commit.
+    """
+    commit, _shallow, rows = list_tree(checkout)
+    require(tree_object_id(rows) == commit_tree(checkout, commit), "HATUN_LISTING_NOT_COMMIT_TREE")
+    return commit, rows
+
+
 def source_identity(checkout: Path) -> tuple:
     """``(commit, digest)`` after proving the working files ARE the committed blobs.
 
-    The digest names the committed ``hatun_mcp/*.py`` set. The child never runs
-    these working files; it runs an export of the same commit.
+    The digest names the committed ``hatun_mcp/*.py`` set of a listing re-hashed
+    to the commit. The child never runs these working files; it runs an export of
+    the same commit.
     """
-    commit, _shallow, rows = list_tree(checkout)
+    commit, rows = verified_listing(checkout)
     pinned = sorted((path, sha) for mode, kind, sha, _size, path in rows
                     if kind == "blob" and path.startswith("hatun_mcp/") and path.endswith(".py"))
     require(len(pinned) > 0, "HATUN_SOURCE_MISSING")
@@ -340,6 +478,169 @@ def exported_modules_digest(root: Path) -> str:
         require(path.is_file() and not path.is_symlink(), "HATUN_EXPORT_MISMATCH")
         pinned.append([path.relative_to(root).as_posix(), git_blob_sha1(path.read_bytes())])
     return digest(sorted(pinned))
+
+
+def export_matches(root: Path, rows) -> bool:
+    """Whether ``root`` holds exactly the regular files of ``rows``: paths, modes and bytes."""
+    wanted = {path: (mode, sha) for mode, kind, sha, _size, path in rows
+              if kind == "blob" and mode in ("100644", "100755")}
+    found = {}
+    for folder, folders, files in os.walk(root):
+        for name in folders + files:
+            entry = Path(folder) / name
+            info = entry.lstat()
+            if stat.S_ISDIR(info.st_mode):
+                continue
+            if not stat.S_ISREG(info.st_mode) or len(found) >= len(wanted):
+                return False
+            found[entry.relative_to(root).as_posix()] = (
+                "100755" if info.st_mode & stat.S_IXUSR else "100644",
+                git_blob_sha1(entry.read_bytes()))
+    return found == wanted
+
+
+def _roots(checkout: Path) -> tuple:
+    return tuple(sorted({os.path.abspath(checkout), os.path.realpath(checkout)}))
+
+
+def _inside(path: str, roots) -> bool:
+    """Whether ``path``, as written or resolved, is one of ``roots`` or lies under one."""
+    for form in {os.path.abspath(path), os.path.realpath(path)}:
+        for root in roots:
+            if form == root or form.startswith(root.rstrip(os.sep) + os.sep):
+                return True
+    return False
+
+
+def _small_file(path: str) -> bytes:
+    try:
+        with open(path, "rb") as stream:
+            raw = stream.read(MAX_SITE_FILE_BYTES + 1)
+    except OSError:
+        raise InputError("HATUN_INTERPRETER_LAYOUT_INVALID") from None
+    require(len(raw) <= MAX_SITE_FILE_BYTES, "HATUN_INTERPRETER_LAYOUT_INVALID")
+    return raw
+
+
+def _interpreter_places(python: str) -> list:
+    """What the interpreter's own files come from, found without running it."""
+    given = os.path.abspath(python)
+    places = [given, os.path.realpath(given)]
+    here = os.path.dirname(given)
+    venv = os.path.dirname(here)
+    # As site.py decides: a pyvenv.cfg beside the executable or one level up makes a venv,
+    # and its "home" names where the standard library is found.
+    for config in (os.path.join(here, "pyvenv.cfg"), os.path.join(venv, "pyvenv.cfg")):
+        if not os.path.isfile(config):
+            continue
+        places += [here, venv, config]
+        for line in _small_file(config).decode("utf-8", "replace").splitlines():
+            key, equals, value = line.partition("=")
+            if equals and key.strip().lower() == "home":
+                require(os.path.isabs(value.strip()), "HATUN_INTERPRETER_LAYOUT_INVALID")
+                places.append(value.strip())
+    return places
+
+
+def _site_places(folders) -> list:
+    """Each ``.pth`` file in ``folders`` and each directory its path lines would add.
+
+    Import lines are code carried by the trusted site-packages; they are not analysed.
+    """
+    places = []
+    for folder in folders:
+        if not os.path.isdir(folder):
+            continue
+        try:
+            names = sorted(name for name in os.listdir(folder) if name.endswith(".pth"))
+        except OSError:
+            raise InputError("HATUN_INTERPRETER_LAYOUT_INVALID") from None
+        require(len(names) <= MAX_SITE_FILES, "HATUN_INTERPRETER_LAYOUT_INVALID")
+        for name in names:
+            path = os.path.join(folder, name)
+            places.append(path)
+            for line in _small_file(path).decode("utf-8", "replace").splitlines():
+                if line.strip() and not line.startswith(("#", "import ", "import\t")):
+                    places.append(os.path.join(folder, line.rstrip()))
+    return places
+
+
+def _path_list(value) -> bool:
+    return (type(value) is list and len(value) <= MAX_LAYOUT_PATHS and
+            all(type(p) is str and PATH_TEXT.fullmatch(p) for p in value))
+
+
+def interpreter_layout(python: str, checkout: Path) -> dict:
+    """Refuse an interpreter that could load code from ``checkout``; describe the one used.
+
+    Nothing runs before the path given, its target, and a venv root and ``home``
+    beside it are checked. The interpreter then runs once as ``-I -S -B`` (the
+    standard library only: no site-packages code, no ``.pth`` file, no
+    ``sitecustomize``) to report its prefixes, path and site-packages directories.
+    Those, every ``.pth`` file in them and every directory a ``.pth`` path line
+    adds must all lie outside the checkout, as written and as resolved.
+    """
+    roots = _roots(checkout)
+    require(not any(_inside(place, roots) for place in _interpreter_places(python)),
+            "HATUN_INTERPRETER_INSIDE_CHECKOUT")
+    with tempfile.TemporaryDirectory(prefix="braid-hatun-probe-") as scratch:
+        base = Path(scratch)
+        cache, home, temp, work = (base / name for name in ("pycache", "home", "tmp", "work"))
+        for directory in (cache, home, temp, work):
+            directory.mkdir()
+        run = bounded_run([python, "-I", "-S", "-B", "-X",
+                           "pycache_prefix=" + os.path.realpath(cache), "-c", INTERPRETER_PROBE],
+                          cwd=work, env=_child_environment(home, temp),
+                          timeout=PROBE_TIMEOUT_SECONDS, max_output=MAX_LAYOUT_BYTES,
+                          isolate_network=True, cpu_seconds=CHILD_CPU_SECONDS,
+                          file_bytes=CHILD_FILE_BYTES, address_bytes=CHILD_ADDRESS_BYTES,
+                          merge_stderr=False)
+    require(run["exit_code"] == 0 and not run["timed_out"] and not run["truncated"] and
+            len(run["output"]) > 0, "HATUN_INTERPRETER_PROBE_FAILED")
+    try:
+        layout = json.loads(run["output"].decode("utf-8", "strict"))
+    except (UnicodeError, ValueError, RecursionError):
+        raise InputError("HATUN_INTERPRETER_LAYOUT_INVALID") from None
+    closed(layout, _LAYOUT_FIELDS, "HATUN_INTERPRETER_LAYOUT_INVALID")
+    single = [layout[name] for name in ("executable", "prefix", "exec_prefix", "base_prefix",
+                                        "base_exec_prefix")]
+    require(type(layout["python"]) is str and _text(layout["python"], 16) == layout["python"] and
+            _path_list(single) and _path_list(layout["path"]) and
+            _path_list(layout["site_packages"]), "HATUN_INTERPRETER_LAYOUT_INVALID")
+    places = single + layout["path"] + layout["site_packages"]
+    places += _site_places(layout["site_packages"])
+    require(not any(_inside(place, roots) for place in places),
+            "HATUN_INTERPRETER_INSIDE_CHECKOUT")
+    return {"python": layout["python"], "prefix": layout["prefix"],
+            "base_prefix": layout["base_prefix"], "outside_checkout": True}
+
+
+_PID_NAMESPACE: list = []
+
+
+def pid_namespace_prefix():
+    """``unshare --pid --fork --kill-child --`` when the host can nest it, else ``None``.
+
+    Measured once per process by starting a shell that way inside the child's network
+    namespace and checking that it is PID 1 there.
+    """
+    if not _PID_NAMESPACE:
+        _PID_NAMESPACE.append(_probe_pid_namespace())
+    return _PID_NAMESPACE[0]
+
+
+def _probe_pid_namespace():
+    binary = shutil.which("unshare", path=_UNSHARE_SEARCH)
+    if binary is None or network_namespace_state() != NETNS_EMPTY:
+        return None
+    prefix = (binary, "--pid", "--fork", "--kill-child", "--")
+    with tempfile.TemporaryDirectory(prefix="braid-hatun-pidns-") as work:
+        run = bounded_run([*prefix, "/bin/sh", "-c", "echo $$"], cwd=work,
+                          env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"}, timeout=20,
+                          max_output=64, isolate_network=True)
+    found = (run["exit_code"] == 0 and run["output"].strip() == b"1" and
+             run["network_namespace"] == NETNS_EMPTY)
+    return prefix if found else None
 
 
 def child_limits() -> dict:
@@ -369,23 +670,48 @@ def _count(value):
     return value if type(value) is int and 0 <= value <= MAX_COUNT else None
 
 
+def _child_lines(output: bytes) -> tuple:
+    """``(layout, report)``: the child's first line, then the JSON report after it."""
+    head, newline, tail = output.partition(b"\n")
+    try:
+        first = json.loads(head.decode("utf-8", "strict"))
+    except (UnicodeError, ValueError, RecursionError):
+        raise InputError("HATUN_CHILD_OUTPUT_INVALID") from None
+    layout = first.get("layout") if type(first) is dict and set(first) == {"layout"} else None
+    require(newline == b"\n" and type(layout) is dict and set(layout) == {"pid", "path"} and
+            type(layout["pid"]) is int and _path_list(layout["path"]),
+            "HATUN_CHILD_OUTPUT_INVALID")
+    # The layout line alone: the child stopped before it reported anything.
+    require(len(tail) > 0, "HATUN_CHILD_FAILED")
+    try:
+        report = json.loads(tail.decode("utf-8", "strict"))
+    except (UnicodeError, ValueError, RecursionError):
+        raise InputError("HATUN_CHILD_OUTPUT_INVALID") from None
+    require(type(report) is dict, "HATUN_CHILD_OUTPUT_INVALID")
+    return layout, report
+
+
 def run_child(checkout: Path, section: dict, *, python: str, commit: str | None = None,
               modules_digest: str | None = None) -> tuple:
     """Export ``commit`` of ``checkout`` and run the driver over that export only.
 
     Returns ``(child_report, observed)``: the child's own JSON, and what this
-    process observed about the run (namespace, export, interpreter mode, where
-    the loaded Hatun modules came from).
+    process observed about the run (interpreter, namespaces, export, interpreter
+    mode, where the loaded Hatun modules came from).
     """
     require(_interpreter_ok(python), "HATUN_CHILD_UNAVAILABLE")
     if commit is None or modules_digest is None:
         commit, modules_digest = source_identity(checkout)
+    interpreter = interpreter_layout(python, checkout)
+    listed, rows = verified_listing(checkout)
+    require(listed == commit, "HATUN_EXPORT_MISMATCH")
     request = {"loop_phases": section["loop_phases"], "loop_max_steps": section["loop_max_steps"],
                "primitive_probes": [{k: p[k] for k in ("id", "text", "authenticated", "scope_ok",
                                                         "state_changing")}
                                     for p in section["primitive_probes"]],
                "mcp_probes": [{k: p[k] for k in ("id", "tool", "arguments", "context")}
                               for p in section["mcp_probes"]]}
+    nested = pid_namespace_prefix()
     with tempfile.TemporaryDirectory(prefix="braid-hatun-") as scratch:
         base = Path(scratch)
         export, cache, home, temp, work = (base / name for name in
@@ -394,11 +720,13 @@ def run_child(checkout: Path, section: dict, *, python: str, commit: str | None 
             directory.mkdir()
         counts = export_tree(checkout, commit, export, max_blob_bytes=EXPORT_MAX_BLOB_BYTES,
                              max_total_bytes=EXPORT_MAX_TOTAL_BYTES)
-        require(exported_modules_digest(export) == modules_digest, "HATUN_EXPORT_MISMATCH")
+        require(exported_modules_digest(export) == modules_digest and
+                export_matches(export, rows), "HATUN_EXPORT_MISMATCH")
         prefix = os.path.realpath(cache)
-        run = bounded_run([python, "-I", "-B", "-X", "pycache_prefix=" + prefix, "-c", DRIVER,
-                           str(export)], cwd=work, env=_child_environment(home, temp),
-                          timeout=CHILD_TIMEOUT_SECONDS, max_output=MAX_WITNESS_BYTES,
+        run = bounded_run([*(nested or ()), python, "-I", "-B", "-X", "pycache_prefix=" + prefix,
+                           "-c", DRIVER, str(export)], cwd=work,
+                          env=_child_environment(home, temp), timeout=CHILD_TIMEOUT_SECONDS,
+                          max_output=MAX_WITNESS_BYTES,
                           stdin_bytes=json.dumps(request).encode("utf-8"),
                           isolate_network=True, cpu_seconds=CHILD_CPU_SECONDS,
                           file_bytes=CHILD_FILE_BYTES, address_bytes=CHILD_ADDRESS_BYTES,
@@ -407,14 +735,17 @@ def run_child(checkout: Path, section: dict, *, python: str, commit: str | None 
     require(not run["timed_out"], "HATUN_CHILD_TIMEOUT")
     require(not run["truncated"], "HATUN_CHILD_OUTPUT_TOO_LARGE")
     require(run["exit_code"] == 0 and len(run["output"]) > 0, "HATUN_CHILD_FAILED")
-    try:
-        raw = json.loads(run["output"].decode("utf-8", "strict"))
-    except (UnicodeError, ValueError, RecursionError):
-        raise InputError("HATUN_CHILD_OUTPUT_INVALID") from None
-    require(type(raw) is dict, "HATUN_CHILD_OUTPUT_INVALID")
+    layout, raw = _child_lines(run["output"])
+    roots = _roots(checkout)
+    require(not any(_inside(entry, roots) for entry in layout["path"]),
+            "HATUN_INTERPRETER_INSIDE_CHECKOUT")
+    require(nested is None or (layout["pid"] == 1 and run["network_namespace"] == NETNS_EMPTY),
+            "HATUN_CHILD_NOT_ISOLATED")
     process = raw.get("process") if type(raw.get("process")) is dict else {}
     observed = {"network_namespace": run["network_namespace"], "export_files": counts["files"],
                 "export_skipped_entries": counts["skipped_entries"],
+                "export_rehashed_to_commit": True, "interpreter": interpreter,
+                "process_tree": PROCESS_TREES[0] if nested else PROCESS_TREES[1],
                 "isolated_mode": process.get("isolated") is True,
                 "bytecode_writes_disabled": process.get("dont_write_bytecode") is True,
                 "pycache_prefix_fresh_and_unused":
@@ -534,6 +865,12 @@ def _distributions(value):
     return sorted(pairs) if len(names) == len(set(names)) else None
 
 
+def _interpreter_seen_ok(value) -> bool:
+    return (type(value["python"]) is str and _text(value["python"], 16) == value["python"] and
+            all(type(value[k]) is str and PATH_TEXT.fullmatch(value[k]) is not None
+                for k in ("prefix", "base_prefix")))
+
+
 def _child_record(observed) -> dict:
     closed(observed, _OBSERVED_FIELDS, "HATUN_OBSERVATION_INVALID")
     require(observed["network_namespace"] in (NETNS_EMPTY, NETNS_UNAVAILABLE),
@@ -542,6 +879,14 @@ def _child_record(observed) -> dict:
     natural(observed["export_skipped_entries"], "HATUN_OBSERVATION_INVALID",
             maximum=MAX_EXPORT_FILES)
     require(observed["export_files"] > 0, "HATUN_OBSERVATION_INVALID")
+    require(observed["export_rehashed_to_commit"] is True, "HATUN_EXPORT_MISMATCH")
+    seen = closed(observed["interpreter"], _SEEN_INTERPRETER_FIELDS, "HATUN_OBSERVATION_INVALID")
+    require(_interpreter_seen_ok(seen), "HATUN_OBSERVATION_INVALID")
+    require(seen["outside_checkout"] is True, "HATUN_INTERPRETER_INSIDE_CHECKOUT")
+    # A PID namespace is only ever nested inside an observed empty network namespace.
+    require(observed["process_tree"] in PROCESS_TREES and
+            (observed["process_tree"] != PROCESS_TREES[0] or
+             observed["network_namespace"] == NETNS_EMPTY), "HATUN_OBSERVATION_INVALID")
     require(observed["isolated_mode"] is True and observed["bytecode_writes_disabled"] is True
             and observed["pycache_prefix_fresh_and_unused"] is True, "HATUN_CHILD_NOT_ISOLATED")
     require(_count(observed["hatun_modules_loaded"]) is not None and
@@ -551,7 +896,8 @@ def _child_record(observed) -> dict:
     return {"flags": list(INTERPRETER_FLAGS), "isolated_mode": True,
             "bytecode_writes_disabled": True, "pycache_prefix_fresh_and_unused": True,
             "hatun_modules_loaded": observed["hatun_modules_loaded"],
-            "hatun_modules_outside_export": 0, "limits": child_limits()}
+            "hatun_modules_outside_export": 0, "process_tree": observed["process_tree"],
+            "limits": child_limits()}
 
 
 def assemble(section, commit, modules_digest, raw, *, observed, at=None) -> dict:
@@ -559,6 +905,7 @@ def assemble(section, commit, modules_digest, raw, *, observed, at=None) -> dict
     validate_policy(section)
     require(type(raw) is dict, "HATUN_CHILD_OUTPUT_INVALID")
     child = _child_record(observed)
+    seen = observed["interpreter"]
     kernel = _kernel_tier(section, raw.get("kernel"))
     mcp = _mcp_tier(section, raw.get("mcp"))
     expected = len(section["primitive_probes"]) + len(section["mcp_probes"])
@@ -571,14 +918,19 @@ def assemble(section, commit, modules_digest, raw, *, observed, at=None) -> dict
         "source_modules_digest": modules_digest, "source_tree": SOURCE_TREE,
         "export_files": observed["export_files"],
         "export_skipped_entries": observed["export_skipped_entries"],
-        "interpreter": {"python": _text(raw.get("python"), 16), "site_packages": SITE_PACKAGES,
+        "export_rehashed_to_commit": True,
+        "interpreter": {"python": seen["python"], "prefix": seen["prefix"],
+                        "base_prefix": seen["base_prefix"], "outside_checkout": True,
+                        "site_packages": SITE_PACKAGES,
                         "loaded_distributions": _distributions(raw.get("distributions"))},
         "child": child, "kernel": kernel, "mcp": mcp,
         "probes_expected": expected, "probes_matched": matched,
         "state": _ladder_state(kernel, mcp, matched, expected),
         "effect_authority": "NOT_ATTACHED", "caller_identity": CALLER_IDENTITY,
         "caller_context": CALLER_CONTEXT, "api_key_authentication_path_exercised": False,
-        "backend_endpoints_disabled_by_environment": True, "network_namespace": namespace,
+        "backend_url_variables_redirected": list(_BACKEND_VARS),
+        "backend_redirect_target": DEAD_ENDPOINT,
+        "hardcoded_backend_origins_redirected": False, "network_namespace": namespace,
         "direct_network_egress_blocked": namespace == NETNS_EMPTY,
         "policy_section_sha256": digest(section),
     }
@@ -666,7 +1018,8 @@ def _check_mcp(mcp, section) -> int:
 def _check_interpreter(value):
     closed(value, _INTERPRETER_FIELDS, "HATUN_WITNESS_FIELDS_INVALID")
     loaded = value["loaded_distributions"]
-    require(_text_ok(value["python"], 16) and value["site_packages"] == SITE_PACKAGES and
+    require(_interpreter_seen_ok(value) and value["outside_checkout"] is True and
+            value["site_packages"] == SITE_PACKAGES and
             (loaded is None or _distributions(loaded) == loaded), "HATUN_WITNESS_FIELDS_INVALID")
 
 
@@ -678,6 +1031,7 @@ def _check_child(value):
             _count(value["hatun_modules_loaded"]) is not None and
             value["hatun_modules_outside_export"] == 0 and
             type(value["hatun_modules_outside_export"]) is int and
+            value["process_tree"] in PROCESS_TREES and
             value["limits"] == child_limits(), "HATUN_CHILD_RECORD_INVALID")
 
 
@@ -689,7 +1043,7 @@ def validate_witness(value, section) -> bool:
             type(value["commit"]) is str and SHA40.fullmatch(value["commit"]) and
             type(value["source_modules_digest"]) is str and
             SHA64.fullmatch(value["source_modules_digest"]) and
-            value["source_tree"] == SOURCE_TREE and
+            value["source_tree"] == SOURCE_TREE and value["export_rehashed_to_commit"] is True and
             value["policy_section_sha256"] == digest(section), "HATUN_WITNESS_BINDING_INVALID")
     natural(value["export_files"], "HATUN_WITNESS_FIELDS_INVALID", maximum=MAX_EXPORT_FILES)
     natural(value["export_skipped_entries"], "HATUN_WITNESS_FIELDS_INVALID",
@@ -700,15 +1054,20 @@ def validate_witness(value, section) -> bool:
             value["effect_authority"] == "NOT_ATTACHED" and
             value["caller_identity"] == CALLER_IDENTITY and
             value["caller_context"] == CALLER_CONTEXT and
-            value["api_key_authentication_path_exercised"] is False and
-            value["backend_endpoints_disabled_by_environment"] is True,
+            value["api_key_authentication_path_exercised"] is False,
             "HATUN_FALSE_AUTHORITY_CLAIM")
-    # Isolation is claimed only for an observed empty namespace, never otherwise.
+    # Isolation is claimed only for an observed empty namespace, never otherwise; the
+    # environment redirects the listed variables and nothing written into the code.
     require(value["network_namespace"] in (NETNS_EMPTY, NETNS_UNAVAILABLE) and
-            value["direct_network_egress_blocked"] is (value["network_namespace"] == NETNS_EMPTY),
+            value["direct_network_egress_blocked"] is (value["network_namespace"] == NETNS_EMPTY)
+            and value["backend_url_variables_redirected"] == list(_BACKEND_VARS) and
+            value["backend_redirect_target"] == DEAD_ENDPOINT and
+            value["hardcoded_backend_origins_redirected"] is False,
             "HATUN_NETWORK_CLAIM_INVALID")
     _check_interpreter(value["interpreter"])
     _check_child(value["child"])
+    require(value["child"]["process_tree"] != PROCESS_TREES[0] or
+            value["network_namespace"] == NETNS_EMPTY, "HATUN_CHILD_RECORD_INVALID")
     natural(value["probes_expected"], "HATUN_WITNESS_FIELDS_INVALID", maximum=2 * MAX_PROBES)
     natural(value["probes_matched"], "HATUN_WITNESS_FIELDS_INVALID", maximum=2 * MAX_PROBES)
     require(type(value["kernel"]) is dict and type(value["mcp"]) is dict,
@@ -752,6 +1111,7 @@ def main(argv=None):
                           "probes_matched": witness["probes_matched"],
                           "probes_expected": witness["probes_expected"],
                           "network_namespace": witness["network_namespace"],
+                          "process_tree": witness["child"]["process_tree"],
                           "effect_authority": "NOT_ATTACHED",
                           "external_effects_performed": False}))
         return 0 if witness["state"] == "VETO_LADDER_CONFORMS" else 2

@@ -6,45 +6,94 @@ For the HEAD commit of one Lean checkout this tool:
 
 1. writes the commit's committed regular files, read from the object store,
    into a new empty temporary directory, so no untracked, ignored or earlier
-   build file of the checkout can stand in for a committed source. The
-   project's ``.lake/build`` does not exist when the first build starts;
+   build file of the checkout's own tree can stand in for a committed source.
+   The project's ``.lake/build`` does not exist when the first build starts;
 2. links that export's ``.lake/packages`` to an existing dependency cache
-   (never copied) and records each manifest revision next to the revision
-   actually checked out in the cache. A mismatch is UNAVAILABLE, not a build;
-3. in the export, runs the repository's default ``lake build``, its own
-   reviewed guard scripts (locked-set axiom guard, axiom check), builds and
-   runs the executables the policy names, and asks Lake to build every
-   library module the default build does NOT reach, so a file nobody imports
-   is still judged by the kernel, one way or the other;
+   (never copied) and records each manifest revision next to the commit
+   checked out in each package directory. Only commits are compared: the
+   package work trees and the build products inside them are not. A mismatch
+   is UNAVAILABLE, not a build;
+3. in the export, runs the repository's default ``lake build``, reads the
+   search path Lake would give Lean, runs the repository's own reviewed guard
+   scripts (locked-set axiom guard, axiom check), builds and runs the
+   executables the policy names, and asks Lake to build every library module
+   the default build does NOT reach, so a file nobody imports is still judged
+   by the kernel, one way or the other;
 4. loads every accepted module into one Lean program and reads, from the
    kernel's own records, the axioms each theorem depends on.
 
-Every tracked regular ``.lean`` file gets exactly one status. A module is
-accepted only when its ``.olean`` was written during the step that judged it
-and the de-duplicated diagnostics of the whole run hold no error for its file;
-otherwise it is REJECTED. A file nobody checks is NOT_CHECKED_BY_POLICY, and
-neither is ever counted as proved. ``sorry`` is detected as the kernel axiom
-``sorryAx`` reached through any chain of lemmas, which a text search cannot do.
-Lake's job lines are read per step: a project module that Lake took from a
-trace or cache instead of building, with no earlier step of this run having
-built it, is an anomaly in a fresh export and holds the witness, and so does an
-accepted module that no job line reports as built.
+Every tracked regular ``.lean`` file gets exactly one status and names the
+step that judged it. Which build step judges a module follows the import
+headers as Lake itself reads them (a port of Lean 4.35's fast header reader).
+A module is accepted only when its ``.olean`` exists after that step and was
+written during this run, no Lake job line of the run reports its build as
+failed, and the de-duplicated diagnostics of the whole run hold no error for
+its file; otherwise it is REJECTED. A file nobody checks is
+NOT_CHECKED_BY_POLICY, and neither is ever counted as proved. ``sorry`` is
+detected as the kernel axiom ``sorryAx`` reached through any chain of lemmas,
+which a text search cannot do. Lake's job lines are read per step: a project
+module that Lake took from a trace or cache instead of building, with no
+earlier step of this run having built it, is an anomaly in a fresh export and
+holds the witness, and so does an accepted module that no job line reports as
+built by the step that judged it or an earlier one.
+
+Lake builds a module from the exact files it names, but the guard scripts, the
+stand-alone files and the census are elaborated by Lean on its own, and Lean
+looks each import up on its search path. The witness asks ``lake env``, with
+no command, for that path: Lake then prints its environment itself and starts
+no program. Each of those steps runs the ``lean`` that comes first on the
+runner's PATH (the toolchain directory: the binary that ``lean --version``
+reported) with exactly that ``LEAN_PATH`` added to the runner's minimal
+environment. None runs through ``lake env``, which would put every package's
+build directory first on PATH and on the shared-library path, so a program
+or a library planted there is not what runs. Lake puts every dependency's
+library directory on the search path BEFORE the project's own, and Lean takes
+a module from the first entry that holds its root namespace, so a project
+namespace planted in the dependency cache (which by default lives in the
+checkout's ignored ``.lake``) is what those steps would load. The project's
+namespaces are the first name component of every tracked ``.lean`` file's
+module and of every root the policy names. The witness reads the search path
+once, before the first such step, looks for those namespaces in every entry
+other than the export's own library then and again after the last stand-alone
+file, and holds when it finds one; a stand-alone file is accepted only when it
+found none. The census program prints the file each loaded module was read
+from: a module of a project namespace, or one whose ``.olean`` the export's
+library holds, read from anywhere else makes the census unavailable.
 
 Limits, stated plainly. The kernel elaborates the project's own modules in the
-export. Dependency ``.olean`` files (Mathlib and the rest) come from the cache:
-they are trusted, NOT re-checked by the kernel, and how the cache was filled is
-not observed here. Executables are built and run only because the policy asks
-for them. Building runs the commit's own lakefile. Each Lake and Lean child is
-started in an empty network namespace only when the host allows one; every step
-records what it got, and nothing more about the network is claimed. This is
-one elaboration by one toolchain on one machine: not an independent second
-kernel, not a signature, and not a review of what the theorems MEAN. A theorem
-with a clean axiom footprint can still state something weaker than its name
-suggests. No tracked file of the checkout is written and nothing is promoted.
-When the dependency cache holds fewer ``.olean`` files than the policy minimum,
-or differs from the manifest, the result is UNAVAILABLE rather than a
-from-source build of the dependencies; a cache that passes those checks but
-lacks some build product is completed by Lake in place, which is not observed.
+export. Everything in the dependency cache is trusted, as code and not only as
+data, and how the cache was filled is not observed here. Its ``.olean`` files
+(Mathlib and the rest) are NOT re-checked by the kernel. Lean runs the
+``initialize`` code of every ``.olean`` it imports, in the build of each
+project module and in every step above. ``lake exe`` runs an executable linked
+with the cache's compiled code, with every package's build directory on its
+PATH and shared-library path. Whoever can write into the cache, even into the
+ignored build directory of a package whose commit matches the manifest, can
+therefore make any step print anything, and no check here can tell: the checks
+above catch a stale or misplaced build product, not a deliberate writer.
+Comparing the cache's build products with a digest pinned from a trusted build
+would catch such a writer; that is ROADMAP, not done here. The toolchain's own
+library is trusted with the toolchain, which counts as the pinned one only when
+the checkout's ``lean-toolchain`` names the policy's pin and both
+``lean --version`` and ``lake --version`` report that Lean version; otherwise
+the result is UNAVAILABLE. Executables are built and run only because the
+policy asks for them. Building runs the commit's own lakefile. Each Lake and Lean
+child is started in an empty network namespace only when the host allows one;
+every step records what it got, and nothing more about the network is claimed.
+The search path is looked at between steps, not while one runs. This is one
+elaboration by one toolchain on one machine: not an independent second kernel,
+not a signature, and not a review of what the theorems MEAN. A theorem with a
+clean axiom footprint can still state something weaker than its name suggests.
+No tracked file of the checkout is written and nothing is promoted. When the
+dependency cache holds fewer ``.olean`` files than the policy minimum, or
+differs from the manifest, the result is UNAVAILABLE rather than a from-source
+build of the dependencies; a cache that passes those checks but lacks some
+build product is completed by Lake in place, which is not observed. The checks
+of a witness file re-derive every state and count from the rows it carries;
+rows rewritten consistently with each other cannot be told from observed ones
+without the step logs, whose digests the witness records. With no package rows
+(a cache too small to look at), the mathlib revision is the manifest's pin as
+read, which nothing in the witness can re-derive.
 """
 from __future__ import annotations
 
@@ -63,8 +112,8 @@ import tempfile
 try:
     from tools.database_braid_common import (
         NETNS_EMPTY, NETNS_NOT_REQUESTED, NETNS_STATES, NETNS_UNAVAILABLE, REPOSITORY, SHA40,
-        SHA64, bounded_run, checkout_root, closed, digest, git_blob_sha1, lean_code_only, natural,
-        read_json, require, sha256_hex, strict_json, write_exclusive, write_new_bytes,
+        SHA64, bounded_run, checkout_root, closed, digest, git_blob_sha1, natural, read_json,
+        require, sha256_hex, strict_json, write_exclusive, write_new_bytes,
     )
     from tools.database_braid_source_census import export_tree, list_tree
     from tools.database_catalog_admission import InputError
@@ -72,22 +121,28 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from tools.database_braid_common import (
         NETNS_EMPTY, NETNS_NOT_REQUESTED, NETNS_STATES, NETNS_UNAVAILABLE, REPOSITORY, SHA40,
-        SHA64, bounded_run, checkout_root, closed, digest, git_blob_sha1, lean_code_only, natural,
-        read_json, require, sha256_hex, strict_json, write_exclusive, write_new_bytes,
+        SHA64, bounded_run, checkout_root, closed, digest, git_blob_sha1, natural, read_json,
+        require, sha256_hex, strict_json, write_exclusive, write_new_bytes,
     )
     from tools.database_braid_source_census import export_tree, list_tree
     from tools.database_catalog_admission import InputError
 
-SCHEMA = "szl.database-braid-lean-witness/v2"
+# v3 adds the search-path record, each row's build evidence and the census's olean count, and its
+# Lean steps run the toolchain's lean directly on the search path the witness checked. A v2 witness
+# has another shape and is refused, never re-read.
+SCHEMA = "szl.database-braid-lean-witness/v3"
 BUILD_TREE = "FRESH_EXPORT_OF_COMMIT"
 MODULE = re.compile(r"[A-Za-z_][A-Za-z0-9_']*(?:\.[A-Za-z_][A-Za-z0-9_']*)*\Z")
 DECL = re.compile(r"[^\x00-\x1f\x7f]{1,300}\Z")
 TOOLCHAIN = re.compile(r"leanprover/lean4:v[0-9]+\.[0-9]+\.[0-9]+(?:-rc[0-9]+)?\Z")
+# What `lean --version` and `lake --version` print, e.g. "Lean (version 4.35.0, x86_64-...)" and
+# "Lake version 5.0.0-src+eb6cafb (Lean version 4.35.0)".
+LEAN_REPORTS = re.compile(r"\bLean \(version ([0-9A-Za-z.+-]{1,40})[,)]")
+LAKE_REPORTS = re.compile(r"\bLake version \S{1,60} \(Lean version ([0-9A-Za-z.+-]{1,40})\)")
 GLOB = re.compile(r"[A-Za-z0-9_.*?/+@-]{1,200}\Z")
-_NAME = r"[A-Za-z_][A-Za-z0-9_'.]*"
-HEADER = re.compile(r"\A\s*(?:module\s+)?(?:prelude\s+)?(?:(?:(?:public|private|meta)\s+)*"
-                    r"import\s+(?:all\s+)?" + _NAME + r"(?![A-Za-z0-9_'.])\s*)*")
-IMPORT = re.compile(r"(?<![A-Za-z0-9_'.])import\s+(?:all\s+)?(" + _NAME + r")")
+REASON = re.compile(r"[A-Z][A-Z_]{2,60}\Z")
+LOCAL_PATH = re.compile(r"[^\x00-\x1f\x7f]{1,4096}\Z")
+PACKAGE_NAME = re.compile(r"[A-Za-z0-9_.+-]{1,100}\Z")
 ACCEPTED_DEFAULT = "ACCEPTED_DEFAULT_BUILD"
 ACCEPTED_REQUEST = "ACCEPTED_ON_REQUEST"
 ACCEPTED_STANDALONE = "ACCEPTED_STANDALONE"
@@ -109,11 +164,14 @@ STATE_UNAVAILABLE = "UNAVAILABLE"
 STATES = (STATE_EXECUTED, STATE_HOLD, STATE_UNAVAILABLE)
 UNAVAILABLE_REASONS = ("DEPENDENCY_CACHE_ABSENT", "DEPENDENCY_CACHE_MISMATCH",
                        "TOOLCHAIN_UNAVAILABLE_OR_PIN_MISMATCH")
-CENSUS_REASONS = ("CENSUS_PROGRAM_FAILED", "NO_ACCEPTED_MODULES")
+CENSUS_REASONS = ("CENSUS_OLEAN_OUTSIDE_EXPORT", "CENSUS_PROGRAM_FAILED", "NO_ACCEPTED_MODULES")
 HOLD_REASONS = ("ACCEPTED_MODULE_WITHOUT_BUILD_LINE", "AXIOM_CENSUS_UNAVAILABLE",
                 "AXIOM_CHECK_FAILED", "DEFAULT_BUILD_FAILED", "EXECUTABLE_FAILED",
+                "LEAN_SEARCH_PATH_SHADOWS_PROJECT", "LEAN_SEARCH_PATH_UNVERIFIED",
                 "LOCKED_GUARD_FAILED", "PROJECT_MODULE_REPLAYED_NOT_BUILT",
                 "STEP_OUTPUT_TRUNCATED", "STEP_TIMED_OUT")
+OLEAN_STATES = ("ABSENT", "FRESH", "STALE")
+SEARCH_PATH_STATES = ("EXPORT_ONLY", "SHADOWED", "UNVERIFIED")
 DEPENDENCY_STATES = ("ABSENT", "MANIFEST_INVALID", "MATCHES_MANIFEST", "MISMATCH", "NO_MANIFEST")
 PACKAGE_STATES = ("DIRECTORY_ABSENT", "MATCHES_MANIFEST", "NOT_A_GIT_CHECKOUT",
                   "NOT_PINNED_BY_MANIFEST", "REVISION_DIFFERS")
@@ -143,19 +201,26 @@ _FALSE_FLAGS = ("independent_kernel_replay", "sources_modified", "proofs_promote
 _STEP_FIELDS = ("name", "exit_code", "output_sha256", "seconds", "timed_out", "truncated",
                 "network_namespace", "project_modules_built", "project_modules_replayed",
                 "project_modules_failed")
-_CENSUS_FIELDS = ("state", "reason", "constants", "modules", "modules_loaded", "rows_sha256")
+_CENSUS_FIELDS = ("state", "reason", "constants", "modules", "modules_loaded", "rows_sha256",
+                  "project_oleans_from_export")
 _CACHE_FIELDS = ("state", "manifest_sha256", "packages", "dependency_oleans", "origin",
                  "dependency_oleans_rechecked_by_kernel")
+_FILE_FIELDS = ("path", "module", "status", "reason", "elaborator_sorry_declarations",
+                "error_lines", "judging_step", "olean", "built_in_step", "build_job_failed")
+_SEARCH_FIELDS = ("exit_code", "state", "entries", "export_library_entries",
+                  "project_namespaces", "shadowed_namespaces")
 _FIELDS = ("schema", "observed_at", "repository", "commit", "worktree_matches_commit",
            "build_tree", "build_tree_files", "build_tree_skipped_entries", "toolchain",
            "manifest_sha256", "mathlib_revision", "dependency_cache", "network_namespace",
-           "steps", "default_build", "locked_guard", "axiom_check", "executables",
-           "on_request_build", "files", "file_totals", "modules", "theorem_totals",
-           "declared_axioms", "sorry_sources", "carrier_theorems", "census",
+           "steps", "default_build", "lean_search_path", "locked_guard", "axiom_check",
+           "executables", "on_request_build", "files", "file_totals", "modules",
+           "theorem_totals", "declared_axioms", "sorry_sources", "carrier_theorems", "census",
            "project_modules_built_by_this_run", "project_modules_replayed", "hold_reasons",
            "state", "policy_section_sha256", "kernel_executed_by_this_run", *_FALSE_FLAGS)
+# Replace refs are ignored too, so a planted refs/replace entry cannot change what a commit is.
 _GIT_HARDENING = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
                   "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0",
+                  "GIT_NO_REPLACE_OBJECTS": "1",
                   "GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "core.fsmonitor",
                   "GIT_CONFIG_VALUE_0": "false", "GIT_CONFIG_KEY_1": "core.untrackedCache",
                   "GIT_CONFIG_VALUE_1": "false"}
@@ -231,7 +296,14 @@ elab "#braid_axiom_census" : command => do
           , ("direct_sorry", (directConsts ci).contains ``sorryAx)
           , ("axioms", toJson (axs.map toString))
           , ("sorry_sources", toJson (src.map toString)) ]).compress
-  IO.println (Json.mkObj [("census_end", true), ("modules", nMods), ("constants", nConsts)]).compress
+  -- `import` found each module with `findOLean` on this same search path.
+  for m in names do
+    let path : Json := match ← (findOLean m).toBaseIO with
+      | .ok p => toJson p.toString
+      | .error _ => Json.null
+    IO.println (Json.mkObj [("census_olean", toString m), ("path", path)]).compress
+  IO.println (Json.mkObj [("census_end", true), ("modules", nMods), ("constants", nConsts),
+    ("loaded", names.size)]).compress
 
 #braid_axiom_census
 '''
@@ -310,27 +382,183 @@ def validate_policy(section) -> dict:
     return section
 
 
+def _module_stem(path: str, source_dirs) -> str:
+    """A ``.lean`` path without its suffix and its longest matching source directory."""
+    stem = path[:-5]
+    for directory in sorted((d for d in source_dirs if d != "."), key=len, reverse=True):
+        if stem.startswith(directory + "/"):
+            return stem[len(directory) + 1:]
+    return stem
+
+
 def module_name(path: str, source_dirs) -> str | None:
     """Module name of a tracked ``.lean`` path under the first matching source directory."""
     if not path.endswith(".lean"):
         return None
-    stem = path[:-5]
-    for directory in sorted((d for d in source_dirs if d != "."), key=len, reverse=True):
-        if stem.startswith(directory + "/"):
-            stem = stem[len(directory) + 1:]
-            break
-    name = stem.replace("/", ".")
+    name = _module_stem(path, source_dirs).replace("/", ".")
     return name if MODULE.fullmatch(name) else None
 
 
-def lean_imports(text: str) -> list:
-    """Every module named by the ``import`` commands of the file header.
+def _root_namespace(path: str, source_dirs) -> str | None:
+    """First name component of the module at a ``.lean`` path, whatever its characters."""
+    return re.split(r"[/.]", _module_stem(path, source_dirs), maxsplit=1)[0] or None
 
-    Comments and literals are removed first; the header ends at the first token
-    that is not part of an import, so ``import A import B`` gives ``[A, B]``.
+
+def project_roots(paths, section) -> list:
+    """Root namespaces of every tracked ``.lean`` path and of every root the policy names."""
+    named = (*section["default_roots"], *section["library_roots"],
+             *(e["root"] for e in section["executables"]))
+    roots = {_root_namespace(p, section["source_dirs"]) for p in paths if p.endswith(".lean")}
+    roots |= {name.split(".")[0] for name in named}
+    roots.discard(None)
+    return sorted(roots)
+
+
+def _letter_like(c: str) -> bool:
+    """Lean 4.35's ``isLetterLike`` (Init/Meta/Defs.lean)."""
+    v = ord(c)
+    return ((0x3b1 <= v <= 0x3c9 and v != 0x3bb) or
+            (0x391 <= v <= 0x3a9 and v not in (0x3a0, 0x3a3)) or 0x3ca <= v <= 0x3fb or
+            0x1f00 <= v <= 0x1ffe or 0x2100 <= v <= 0x214f or 0x1d49c <= v <= 0x1d59f or
+            (0xc0 <= v <= 0xff and v not in (0xd7, 0xf7)) or 0x100 <= v <= 0x17f)
+
+
+def _id_first(c: str) -> bool:
+    """Lean's ``isIdFirst``: ASCII letters, ``_`` and the letter-like blocks."""
+    return "A" <= c <= "Z" or "a" <= c <= "z" or c == "_" or _letter_like(c)
+
+
+def _id_rest(c: str) -> bool:
+    """Lean's ``isIdRest``: ``isIdFirst``, ASCII digits, ``' ! ?`` and the subscripts."""
+    v = ord(c)
+    return (_id_first(c) or "0" <= c <= "9" or c in ("'", "!", "?") or 0x2080 <= v <= 0x2089
+            or 0x2090 <= v <= 0x209c or 0x1d62 <= v <= 0x1d6a or v == 0x2c7c)
+
+
+def _header_comment_end(text: str, i: int) -> int | None:
+    """Just past the ``-/`` closing a block comment whose body starts at ``i``; nesting counts."""
+    depth, size = 1, len(text)
+    while i < size:
+        c = text[i]
+        i += 1
+        if c in ("-", "/") and i >= size:
+            return None
+        if c == "-" and text[i] == "/":
+            if depth == 1:
+                return i + 1
+            depth, i = depth - 1, i + 1
+        elif c == "/" and text[i] == "-":
+            depth, i = depth + 1, i + 1
+    return None
+
+
+def _header_space(text: str, i: int) -> int:
+    """Past the spaces and comments at ``i``, as Lake's header reader skips them; -1 on its errors.
+
+    A tab or an unclosed comment is an error; ``/--`` and ``/-!`` are doc comments, which are
+    tokens and end the run of space. The character after ``/-`` is skipped unread, as there.
     """
-    header = HEADER.match(lean_code_only(text)).group(0)
-    return [hit.group(1) for hit in IMPORT.finditer(header)]
+    size = len(text)
+    while i < size:
+        if text[i] == "\t":
+            return -1
+        if text[i] in (" ", "\r", "\n"):
+            i += 1
+        elif text.startswith("--", i):
+            end = text.find("\n", i + 2)
+            i = size if end < 0 else end
+        elif text.startswith("/-", i) and text[i + 2:i + 3] not in ("-", "!"):
+            end = _header_comment_end(text, i + 3)
+            if end is None:
+                return -1
+            i = end
+        else:
+            break
+    return i
+
+
+def _name_parts(text: str, i: int = 0) -> tuple:
+    """``(components, end)`` of the Lean name at ``i``, «escapes» removed; ``(None, i)`` if none.
+
+    A ``.`` continues the name only when an identifier or ``«`` follows it.
+    """
+    size, parts = len(text), []
+    while True:
+        if i >= size:
+            return None, i
+        if text[i] == "«":
+            end = text.find("»", i + 1)
+            if end < 0:
+                return None, i
+            parts.append(text[i + 1:end])
+            i = end + 1
+        elif _id_first(text[i]):
+            j = i + 1
+            while j < size and _id_rest(text[j]):
+                j += 1
+            parts.append(text[i:j])
+            i = j
+        else:
+            return None, i
+        if not (i + 1 < size and text[i] == "." and
+                (_id_first(text[i + 1]) or text[i + 1] == "«")):
+            return parts, i
+        i += 1
+
+
+def lean_imports(text: str) -> list:
+    """The modules a file's header imports, read the way Lake reads them.
+
+    A port of Lean 4.35's ``ParseImportsFast`` (Lean/Elab/ParseImportsFast.lean),
+    which Lake uses to find each module's imports: comments are skipped, a doc
+    comment or any other token ends the header, keywords match as prefixes, and
+    names follow Lean's identifier rules, so ``import Lutar.Λ`` and
+    ``import «Lutar».X`` are read whole (as ``Lutar.Λ`` and ``Lutar.X``). Where
+    that reader fails (a tab, an unclosed comment, a missing name, or
+    ``public``, ``meta`` or ``all`` in a file that is not a ``module``), Lake
+    knows no import of the file, and the result is ``[]``. The implicit ``Init``
+    import of a file without ``prelude`` is not listed.
+    """
+    i = _header_space(text, 0)
+    is_module = i >= 0 and text.startswith("module", i)
+    if is_module:
+        i = _header_space(text, i + 6)
+    if i >= 0 and text.startswith("prelude", i):
+        i = _header_space(text, i + 7)
+    if i < 0:
+        return []
+    names = []
+    while True:
+        j, modifier = i, False
+        for word in ("public", "meta"):
+            if j >= 0 and text.startswith(word, j):
+                j, modifier = _header_space(text, j + len(word)), True
+        # Up to here a failure only ends the header; after ``import`` it fails the whole read.
+        if j < 0 or not text.startswith("import", j):
+            return names
+        j = _header_space(text, j + 6)
+        if j < 0:
+            return names
+        if text.startswith("all", j):
+            j, modifier = _header_space(text, j + 3), True
+            if j < 0:
+                return []
+        parts, j = _name_parts(text, j)
+        if parts is None or (modifier and not is_module):
+            return []
+        names.append(".".join(parts))
+        i = _header_space(text, j)
+        if i < 0:
+            return []
+
+
+def source_imports(raw: bytes) -> list:
+    """``lean_imports`` of a source file's bytes. Lake reads a source with Lean's
+    ``IO.FS.readFile``, which refuses bytes that are not UTF-8: then no import is known."""
+    try:
+        return lean_imports(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        return []
 
 
 def import_closure(imports_of: dict, roots) -> set:
@@ -364,9 +592,14 @@ def census_program(modules) -> str:
             .replace("__MODULES__", ", ".join("`" + n for n in names)))
 
 
-def parse_census(text: str, modules) -> list:
-    """Strictly parse census output; requires the terminal marker and exact module set."""
-    rows, end = [], None
+def parse_census_output(text: str, modules) -> tuple:
+    """``(rows, oleans)``: strictly parsed census output.
+
+    ``oleans`` holds one ``{"census_olean", "path"}`` record per module the
+    census program loaded. The terminal marker must be the last record and
+    must agree with the rows, the listed module set and the loaded count.
+    """
+    rows, oleans, end = [], [], None
     for line in text.splitlines():
         if not line.startswith("{"):
             continue
@@ -374,23 +607,75 @@ def parse_census(text: str, modules) -> list:
             item = json.loads(line)
         except ValueError:
             raise InputError("WITNESS_CENSUS_LINE_INVALID") from None
+        require(type(item) is dict and end is None, "WITNESS_CENSUS_LINE_INVALID")
         if item.get("census_end") is True:
             end = item
+        elif "census_olean" in item:
+            require(set(item) == {"census_olean", "path"} and
+                    type(item["census_olean"]) is str and DECL.fullmatch(item["census_olean"]) and
+                    (item["path"] is None or (type(item["path"]) is str and
+                                              LOCAL_PATH.fullmatch(item["path"]))),
+                    "WITNESS_CENSUS_LINE_INVALID")
+            oleans.append(item)
+        else:
+            require(set(item) == {"module", "decl", "kind", "internal", "direct_sorry", "axioms",
+                                  "sorry_sources"} and
+                    type(item["module"]) is str and item["module"] in modules and
+                    type(item["decl"]) is str and DECL.fullmatch(item["decl"]) and
+                    item["kind"] in ("axiom", "def", "theorem", "opaque", "quot", "inductive",
+                                     "constructor", "recursor") and
+                    type(item["internal"]) is bool and type(item["direct_sorry"]) is bool and
+                    all(type(item[f]) is list and all(type(a) is str and DECL.fullmatch(a)
+                                                      for a in item[f])
+                        for f in ("axioms", "sorry_sources")), "WITNESS_CENSUS_LINE_INVALID")
+            rows.append(item)
+    require(type(end) is dict and set(end) == {"census_end", "modules", "constants", "loaded"}
+            and end["constants"] == len(rows) and end["modules"] == len(set(modules)) and
+            end["loaded"] == len(oleans) and
+            len({o["census_olean"] for o in oleans}) == len(oleans), "WITNESS_CENSUS_INCOMPLETE")
+    return rows, oleans
+
+
+def parse_census(text: str, modules) -> list:
+    """The rows of strictly parsed census output (see ``parse_census_output``)."""
+    return parse_census_output(text, modules)[0]
+
+
+def oleans_in_export(oleans, roots, library: Path, listed, cwd: Path):
+    """How many loaded modules were read from the export's ``library``, or ``None``.
+
+    Every loaded module of a project root namespace, and every loaded module
+    whose ``.olean`` the library holds, must have been read from the library: a
+    relative path is read from ``cwd``, where Lean ran. ``None`` when one was
+    read from anywhere else, could not be found, is not a regular file there,
+    has a name that is not a module name, or when a module of ``listed`` was
+    not loaded. Other modules (dependencies, the toolchain's) are not judged.
+    """
+    base = os.path.realpath(library)
+    seen = set()
+    for item in oleans:
+        name, found = item["census_olean"], item["path"]
+        parts, end = _name_parts(name)
+        if (parts is None or end != len(name) or
+                any(p in ("", ".", "..") or "/" in p or "\x00" in p for p in parts)):
+            return None
+        expected = os.path.join(base, *parts[:-1], parts[-1] + ".olean")
+        if parts[0] not in roots and not os.path.lexists(expected):
             continue
-        require(type(item) is dict and set(item) == {"module", "decl", "kind", "internal",
-                                                     "direct_sorry", "axioms", "sorry_sources"}
-                and type(item["module"]) is str and item["module"] in modules and
-                type(item["decl"]) is str and DECL.fullmatch(item["decl"]) and
-                item["kind"] in ("axiom", "def", "theorem", "opaque", "quot", "inductive",
-                                 "constructor", "recursor") and
-                type(item["internal"]) is bool and type(item["direct_sorry"]) is bool and
-                all(type(item[f]) is list and all(type(a) is str and DECL.fullmatch(a)
-                                                  for a in item[f])
-                    for f in ("axioms", "sorry_sources")), "WITNESS_CENSUS_LINE_INVALID")
-        rows.append(item)
-    require(type(end) is dict and end.get("constants") == len(rows) and
-            end.get("modules") == len(set(modules)), "WITNESS_CENSUS_INCOMPLETE")
-    return rows
+        if found is None:
+            return None
+        found = os.path.join(cwd, found)
+        if (os.path.basename(found) != os.path.basename(expected) or
+                os.path.realpath(os.path.dirname(found)) != os.path.dirname(expected)):
+            return None
+        try:
+            info = os.lstat(expected)
+        except OSError:
+            return None
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        seen.add(item["census_olean"])
+    return len(seen) if set(listed) <= seen else None
 
 
 def census_digest(rows) -> str:
@@ -529,8 +814,9 @@ def _elan_home() -> str | None:
 def _runner(toolchain_bin: Path, home: str):
     """Runner for lake and lean steps: minimal environment, private HOME, no network if possible.
 
-    Each call returns ``bounded_run``'s result. No address-space limit is set:
-    Lean reserves a large address space by design.
+    The toolchain directory comes first on PATH, and nothing names a shared-library
+    path. Each call returns ``bounded_run``'s result. No address-space limit is
+    set: Lean reserves a large address space by design.
     """
     env = {"PATH": f"{toolchain_bin}:/usr/bin:/bin", "HOME": home, "LANG": "C.UTF-8",
            "LC_ALL": "C.UTF-8", "NO_PROXY": "*", "LAKE_ARTIFACT_CACHE": "false",
@@ -578,14 +864,22 @@ def _manifest_packages(raw: bytes):
         if type(entry) is not dict:
             return None
         name, rev = entry.get("name"), entry.get("rev")
-        if (type(name) is not str or not re.fullmatch(r"[A-Za-z0-9_.+-]{1,100}", name) or
-                name in (".", "..")):
+        if type(name) is not str or not PACKAGE_NAME.match(name) or name in (".", ".."):
             return None
         pinned = entry.get("type") == "git" and type(rev) is str and SHA40.fullmatch(rev)
         out.append({"name": name, "rev": rev if pinned else None})
     if len({e["name"] for e in out}) != len(out):
         return None
     return out
+
+
+def toolchain_matches(toolchain, pin: str) -> bool:
+    """The checkout's ``lean-toolchain`` names ``pin``; lean and lake both report its version."""
+    want = pin.split(":v", 1)[1]
+    lean = LEAN_REPORTS.search(toolchain["lean_version"] or "")
+    lake = LAKE_REPORTS.search(toolchain["lake_version"] or "")
+    return (toolchain["pin_in_checkout"] == pin and lean is not None and lake is not None and
+            lean.group(1) == want and lake.group(1) == want)
 
 
 def _dependency_cache(export: Path, packages: Path, home: str, minimum: int) -> tuple:
@@ -727,6 +1021,121 @@ def _not_checked_reason(section, path):
     return None
 
 
+def _standalone(section, path) -> bool:
+    """A file the policy elaborates on its own with Lean, on the search path Lake would give it."""
+    return (_not_checked_reason(section, path) is None and
+            any(fnmatchcase(path, glob) for glob in section["standalone"]))
+
+
+def _standalone_step(path: str) -> str:
+    return "standalone_" + sha256_hex(path.encode())[:12]
+
+
+def _in_library(name: str, library_roots) -> bool:
+    return any(name == root or name.startswith(root + ".") for root in library_roots)
+
+
+def _absent_reason(step_name: str) -> str:
+    if step_name == "default_build":
+        return "DEFAULT_BUILD_FAILED"
+    if step_name == "on_request_build":
+        return "ON_REQUEST_BUILD_FAILED"
+    return "EXECUTABLE_BUILD_FAILED"
+
+
+def _module_verdict(row) -> tuple:
+    """``(status, reason)`` of a module judged by a Lake build step, from its own row."""
+    if row["error_lines"]:
+        return REJECTED, "ELABORATION_FAILED"
+    if row["build_job_failed"]:
+        return REJECTED, "BUILD_JOB_FAILED"
+    if row["olean"] == "STALE":
+        return REJECTED, "OLEAN_NOT_WRITTEN_BY_THIS_RUN"
+    if row["olean"] != "FRESH":
+        return REJECTED, _absent_reason(row["judging_step"])
+    return (ACCEPTED_DEFAULT if row["judging_step"] == "default_build" else ACCEPTED_REQUEST), None
+
+
+def _standalone_verdict(row, exit_code, search_state) -> tuple:
+    """Lean looked a stand-alone file's imports up on its search path: accepted only when no
+    entry but the export's library could have supplied a project module."""
+    if exit_code != 0 or row["error_lines"]:
+        return REJECTED, "ELABORATION_FAILED"
+    if search_state != "EXPORT_ONLY":
+        return REJECTED, "LEAN_SEARCH_PATH_NOT_EXPORT_ONLY"
+    return ACCEPTED_STANDALONE, None
+
+
+def _without_build_line(row, order) -> bool:
+    """An accepted module that no job line reports built by its judging step or earlier."""
+    return (row["status"] in (ACCEPTED_DEFAULT, ACCEPTED_REQUEST) and
+            (row["built_in_step"] is None or
+             order[row["built_in_step"]] > order[row["judging_step"]]))
+
+
+def lean_path_value(exit_code: int, text: str) -> str | None:
+    """The ``LEAN_PATH`` that ``lake env`` printed, or ``None``.
+
+    Without a command, ``lake env`` prints Lake's own environment, one
+    ``NAME=value`` line each, and starts no program. ``None`` unless it exited
+    0 and printed exactly one ``LEAN_PATH=`` line, holding no NUL (which no
+    environment value can hold).
+    """
+    if exit_code != 0:
+        return None
+    found = [line[len("LEAN_PATH="):] for line in text.split("\n")
+             if line.startswith("LEAN_PATH=")]
+    return found[0] if len(found) == 1 and "\x00" not in found[0] else None
+
+
+def _lean_join(entry: str, name: str, cwd) -> str:
+    """Lean's ``FilePath.join`` of a search-path entry and a relative name, read from ``cwd``:
+    an empty entry joins to ``/name``, the filesystem root, and a relative one is read from
+    the directory Lean runs in."""
+    joined = entry + "/" + name
+    return joined if joined.startswith("/") else os.path.join(cwd, joined)
+
+
+def _lean_argv(lean_path, target: str) -> list:
+    """A step Lean elaborates on its own: the ``lean`` first on the runner's PATH (the toolchain's)
+    with only ``LEAN_PATH`` added to the runner's environment, never through ``lake env``. With no
+    search path read, ``LEAN_PATH`` stays unset: an empty one would name the filesystem root."""
+    if lean_path is None:
+        return ["lean", target]
+    return ["env", "LEAN_PATH=" + lean_path, "lean", target]
+
+
+def search_path_check(exit_code: int, text: str, export: Path, library: Path, roots,
+                      earlier=()) -> dict:
+    """Which project root namespaces Lean could find outside the export's library.
+
+    ``text`` is the output of ``lake env`` (see ``lean_path_value``); its
+    ``LEAN_PATH`` is exactly the one the Lean steps get. Lean's ``findOLean``
+    takes a module from the first entry holding a directory or an ``.olean``
+    named after the module's root namespace, so any entry other than the
+    export's library that holds a project root can stand in for the project's
+    own modules. Each entry is joined to a name as Lean joins it (see
+    ``_lean_join``); Lean runs in the export. ``earlier`` are the namespaces
+    an earlier look at the same entries found.
+    """
+    value = lean_path_value(exit_code, text)
+    entries = value.split(os.pathsep) if value is not None else []
+    own, shadowed, base = 0, set(earlier), os.path.realpath(library)
+    for entry in entries:
+        if os.path.realpath(_lean_join(entry, ".", export)) == base:
+            own += 1
+            continue
+        for root in roots:
+            if (os.path.isdir(_lean_join(entry, root, export)) or
+                    os.path.exists(_lean_join(entry, root + ".olean", export))):
+                shadowed.add(root)
+    state = ("SHADOWED" if shadowed else
+             "UNVERIFIED" if exit_code != 0 or own == 0 else "EXPORT_ONLY")
+    return {"exit_code": exit_code, "state": state, "entries": len(entries),
+            "export_library_entries": own, "project_namespaces": len(set(roots)),
+            "shadowed_namespaces": sorted(shadowed)}
+
+
 def observe(section, checkout: Path, *, toolchain_bin: Path, run=None, at=None,
             log_dir: Path | None = None, packages_dir: Path | None = None) -> dict:
     """Build the HEAD commit of ``checkout`` in a fresh export and return the witness.
@@ -785,18 +1194,23 @@ def _build(section, commit, at, *, work, checkout, packages, lean_files, shape, 
         name = module_name(path, dirs)
         if name is not None and name not in path_of:
             path_of[name] = path
-            imports_of[name] = lean_imports((export / path).read_text("utf-8", "replace"))
+            imports_of[name] = source_imports((export / path).read_bytes())
     project = set(path_of)
-    default_set = import_closure(imports_of, section["default_roots"])
-    exe_set = import_closure(imports_of, [e["root"] for e in section["executables"]]) - default_set
-    standalone = [p for p in lean_files if _not_checked_reason(section, p) is None and
-                  any(fnmatchcase(p, g) for g in section["standalone"])]
+    roots = project_roots(lean_files, section)
+    standalone = [p for p in lean_files if _standalone(section, p)]
     require(len(standalone) <= MAX_STANDALONE_FILES, "WITNESS_STANDALONE_BUDGET_EXCEEDED")
-    requested = sorted(name for name, path in path_of.items()
-                       if name not in default_set and name not in exe_set and
-                       _not_checked_reason(section, path) is None and path not in standalone and
-                       any(name == r or name.startswith(r + ".") for r in section["library_roots"]))
-    steps, logs, built, replayed = [], [], set(), set()
+    # A file that a not-checked rule or the stand-alone list claims is never judged as a module.
+    judgeable = {name for name, path in path_of.items()
+                 if _not_checked_reason(section, path) is None and path not in standalone}
+    default_set = import_closure(imports_of, section["default_roots"]) & judgeable
+    exe_sets, claimed = [], set(default_set)
+    for exe in section["executables"]:
+        own = (import_closure(imports_of, [exe["root"]]) & judgeable) - claimed
+        exe_sets.append(own)
+        claimed |= own
+    requested = sorted(name for name in judgeable - claimed
+                       if _in_library(name, section["library_roots"]))
+    steps, logs, built_in, failed, replayed = [], [], {}, set(), set()
 
     def step(name, argv):
         since = _clock(work / "marks", len(steps))
@@ -808,10 +1222,11 @@ def _build(section, commit, at, *, work, checkout, packages, lean_files, shape, 
         raw = result["output"]
         text = raw.decode("utf-8", "replace")
         jobs = parse_jobs(text, project)
-        first = jobs["built"] - built
+        first = jobs["built"] - set(built_in)
         # Reuse of a module that no step of this run built came from outside this run.
-        foreign = jobs["reused"] - built - jobs["built"] - replayed
-        built.update(jobs["built"])
+        foreign = jobs["reused"] - set(built_in) - jobs["built"] - replayed
+        built_in.update(dict.fromkeys(first, name))
+        failed.update(jobs["failed"])
         replayed.update(foreign)
         steps.append({"name": name, "exit_code": result["exit_code"],
                       "output_sha256": sha256_hex(raw), "seconds": result["seconds"],
@@ -832,8 +1247,8 @@ def _build(section, commit, at, *, work, checkout, packages, lean_files, shape, 
                  "lean_version": lean_line.strip()[:200] if code_lean == 0 else None,
                  "lake_version": lake_line.strip()[:200] if code_lake == 0 else None}
     base = {"section": section, "commit": commit, "at": at, "shape": shape, "steps": steps,
-            "toolchain": toolchain, "built": built, "replayed": replayed}
-    if code_lean != 0 or code_lake != 0 or pin != section["toolchain_pin"]:
+            "toolchain": toolchain, "built": built_in, "replayed": replayed}
+    if not toolchain_matches(toolchain, section["toolchain_pin"]):
         return _witness(**base, manifest=None, mathlib=None, cache=None,
                         unavailable="TOOLCHAIN_UNAVAILABLE_OR_PIN_MISMATCH")
     cache, manifest, mathlib, reason = _dependency_cache(
@@ -842,18 +1257,27 @@ def _build(section, commit, at, *, work, checkout, packages, lean_files, shape, 
     if reason is not None:
         return _witness(**base, unavailable=reason)
 
-    judged = {}
-    build_code, _text, since = step("default_build", ["lake", "build"])
-    for name in default_set:
-        judged[name] = (_olean_state(library, name, since), "DEFAULT_BUILD_FAILED")
-    fresh = sum(judged[name][0] == "FRESH" for name in default_set)
+    # Every .olean of the export is written after this mark: its .lake/build did not exist.
+    build_code, _text, run_start = step("default_build", ["lake", "build"])
+    judged, olean = {}, {}
+
+    def judge(names, step_name):
+        for name in names:
+            judged[name] = step_name
+            olean[name] = _olean_state(library, name, run_start)
+
+    judge(default_set, "default_build")
+    fresh = sum(olean[name] == "FRESH" for name in default_set)
     default_ok = build_code == 0 and fresh == len(default_set)
     default_build = {"exit_code": build_code, "state": "PASSED" if default_ok else "FAILED",
                      "modules_in_import_closure": len(default_set),
                      "closure_modules_with_olean": fresh}
+    path_code, path_text, _ = step("lean_search_path", ["lake", "env"])
+    search = search_path_check(path_code, path_text, export, library, roots)
+    lean_path = lean_path_value(path_code, path_text)
 
-    guard_code, guard_log, _ = step("locked_guard", ["lake", "env", "lean",
-                                                     "./" + section["locked_guard"]["path"]])
+    guard_code, guard_log, _ = step("locked_guard",
+                                    _lean_argv(lean_path, "./" + section["locked_guard"]["path"]))
     allowed = guard_log.count('"allowed":true')
     refused = guard_log.count('"allowed":false')
     expected = section["locked_guard"]["expected_allowed"]
@@ -861,87 +1285,88 @@ def _build(section, commit, at, *, work, checkout, packages, lean_files, shape, 
               "expected": expected,
               "state": "PASSED" if guard_code == 0 and refused == 0 and allowed == expected
               else "FAILED"}
-    check_code, check_log, _ = step("axiom_check", ["lake", "env", "lean",
-                                                    "./" + section["axiom_check"]["path"]])
+    check_code, check_log, _ = step("axiom_check",
+                                    _lean_argv(lean_path, "./" + section["axiom_check"]["path"]))
     mentions = check_log.count(SORRY_AXIOM)
     axiom_check = {"exit_code": check_code, "sorry_axiom_mentions": mentions,
                    "state": "PASSED" if check_code == 0 and mentions == 0 else "FAILED"}
     # Executables are not default targets: building and running them is its own request.
-    executables, claimed = [], set(default_set)
-    for exe in section["executables"]:
-        exe_code, _text, since = step("exe_" + exe["name"],
-                                      ["lake", "exe", exe["name"], *exe["arguments"]])
+    executables = []
+    for exe, own in zip(section["executables"], exe_sets):
+        exe_code, _text, _since = step("exe_" + exe["name"],
+                                       ["lake", "exe", exe["name"], *exe["arguments"]])
         executables.append({"name": exe["name"], "root": exe["root"], "exit_code": exe_code,
                             "state": "PASSED" if exe_code == 0 else "FAILED"})
-        for name in import_closure(imports_of, [exe["root"]]) - claimed:
-            judged[name] = (_olean_state(library, name, since), "EXECUTABLE_BUILD_FAILED")
-            claimed.add(name)
+        judge(own, "exe_" + exe["name"])
     request_code = None
     if requested:
-        request_code, _text, since = step("on_request_build",
-                                          ["lake", "build", *("+" + name for name in requested)])
-        for name in requested:
-            judged[name] = (_olean_state(library, name, since), "ON_REQUEST_BUILD_FAILED")
+        request_code, _text, _since = step("on_request_build",
+                                           ["lake", "build", *("+" + name for name in requested)])
+        judge(requested, "on_request_build")
     alone = {}
     for path in standalone:
-        alone[path] = step("standalone_" + sha256_hex(path.encode())[:12],
-                           ["lake", "env", "lean", "./" + path])[0]
+        name = _standalone_step(path)
+        alone[path] = (name, step(name, _lean_argv(lean_path, "./" + path))[0])
+    # The same entries once more: a later build step may have written into the dependency cache.
+    search = search_path_check(path_code, path_text, export, library, roots,
+                               earlier=search["shadowed_namespaces"])
     errors, sorries = parse_logs(logs, _prefixes(export, checkout))
 
     files = []
     for path in lean_files:
         name = module_name(path, dirs)
-        module = name if path_of.get(name) == path else None
-        reason = _not_checked_reason(section, path)
-        row = {"path": path, "module": module, "status": None, "reason": None,
+        module = name if name is not None and path_of.get(name) == path else None
+        row = {"path": path, "module": module, "status": NOT_CHECKED, "reason": None,
                "elaborator_sorry_declarations": sorries.get(path, 0),
-               "error_lines": errors.get(path, 0)}
-        if reason is not None:
-            row.update(status=NOT_CHECKED, reason=reason)
+               "error_lines": errors.get(path, 0), "judging_step": None, "olean": None,
+               "built_in_step": built_in.get(module), "build_job_failed": module in failed}
+        rule = _not_checked_reason(section, path)
+        if rule is not None:
+            row["reason"] = rule
         elif path in alone:
-            ok = alone[path] == 0 and row["error_lines"] == 0
-            row.update(status=ACCEPTED_STANDALONE if ok else REJECTED,
-                       reason=None if ok else "ELABORATION_FAILED")
+            row["judging_step"], code = alone[path]
+            row["status"], row["reason"] = _standalone_verdict(row, code, search["state"])
         elif module is None:
-            row.update(status=NOT_CHECKED, reason="NOT_A_WORKSPACE_MODULE")
+            row["reason"] = "NOT_A_WORKSPACE_MODULE"
         elif module in judged:
-            olean, failure = judged[module]
-            if row["error_lines"]:
-                row.update(status=REJECTED, reason="ELABORATION_FAILED")
-            elif olean == "STALE":
-                row.update(status=REJECTED, reason="OLEAN_NOT_WRITTEN_BY_THIS_STEP")
-            elif olean == "ABSENT":
-                row.update(status=REJECTED, reason=failure)
-            else:
-                row.update(status=ACCEPTED_DEFAULT if module in default_set else ACCEPTED_REQUEST)
+            row.update(judging_step=judged[module], olean=olean[module])
+            row["status"], row["reason"] = _module_verdict(row)
         else:
-            row.update(status=NOT_CHECKED, reason="OUTSIDE_LIBRARY_ROOTS")
+            row["reason"] = "OUTSIDE_LIBRARY_ROOTS"
         files.append(row)
     on_request = None
     if requested:
-        wanted = set(requested)
-        asked = [r for r in files if r["module"] in wanted]
+        asked = [r for r in files if r["judging_step"] == "on_request_build"]
         on_request = {"exit_code": request_code, "modules_requested": len(requested),
                       "modules_accepted": sum(r["status"] == ACCEPTED_REQUEST for r in asked),
                       "modules_rejected": sum(r["status"] == REJECTED for r in asked)}
 
-    roots = {e["root"] for e in section["executables"]}
+    exe_roots = {e["root"] for e in section["executables"]}
     kernel_accepted = {r["module"] for r in files if r["status"] in (ACCEPTED_DEFAULT,
                                                                      ACCEPTED_REQUEST)}
-    accepted = sorted(kernel_accepted - roots)
-    rows, census_state, census_reason = None, "UNAVAILABLE", "NO_ACCEPTED_MODULES"
+    accepted = sorted(kernel_accepted - exe_roots)
+    rows, census_state, from_export = None, "UNAVAILABLE", None
+    census_reason = "NO_ACCEPTED_MODULES"
     if accepted:
         program = work / "census" / "BraidAxiomCensus.lean"
         write_new_bytes(program, census_program(accepted).encode("utf-8"))
-        code, out, _ = step("axiom_census", ["lake", "env", "lean", str(program)])
+        code, out, _ = step("axiom_census", _lean_argv(lean_path, str(program)))
+        census_reason = "CENSUS_PROGRAM_FAILED"
         if code == 0:
-            rows = parse_census(out, set(accepted))
-            census_state, census_reason = "EXECUTED", None
-        else:
-            census_reason = "CENSUS_PROGRAM_FAILED"
+            parsed, oleans = parse_census_output(out, set(accepted))
+            from_export = oleans_in_export(oleans, set(roots), library, accepted, export)
+            if from_export is None:
+                census_reason = "CENSUS_OLEAN_OUTSIDE_EXPORT"
+            else:
+                rows, census_state, census_reason = parsed, "EXECUTED", None
+    order = {s["name"]: i for i, s in enumerate(steps)}
     reasons = set()
     if not default_ok:
         reasons.add("DEFAULT_BUILD_FAILED")
+    if search["state"] == "SHADOWED":
+        reasons.add("LEAN_SEARCH_PATH_SHADOWS_PROJECT")
+    if search["state"] == "UNVERIFIED":
+        reasons.add("LEAN_SEARCH_PATH_UNVERIFIED")
     if locked["state"] != "PASSED":
         reasons.add("LOCKED_GUARD_FAILED")
     if axiom_check["state"] != "PASSED":
@@ -952,29 +1377,32 @@ def _build(section, commit, at, *, work, checkout, packages, lean_files, shape, 
         reasons.add("AXIOM_CENSUS_UNAVAILABLE")
     if replayed:
         reasons.add("PROJECT_MODULE_REPLAYED_NOT_BUILT")
-    if kernel_accepted - built:
+    if any(_without_build_line(r, order) for r in files):
         reasons.add("ACCEPTED_MODULE_WITHOUT_BUILD_LINE")
     if any(s["timed_out"] for s in steps):
         reasons.add("STEP_TIMED_OUT")
     if any(s["truncated"] for s in steps):
         reasons.add("STEP_OUTPUT_TRUNCATED")
-    return _witness(**base, default_build=default_build, locked=locked, axiom_check=axiom_check,
-                    executables=executables, on_request=on_request, files=files, rows=rows,
-                    census_state=census_state, census_reason=census_reason,
-                    module_paths=path_of, loaded=len(accepted), reasons=sorted(reasons))
+    return _witness(**base, default_build=default_build, search=search, locked=locked,
+                    axiom_check=axiom_check, executables=executables, on_request=on_request,
+                    files=files, rows=rows, census_state=census_state,
+                    census_reason=census_reason, from_export=from_export, module_paths=path_of,
+                    loaded=len(accepted), reasons=sorted(reasons))
 
 
 def _witness(*, section, commit, at, shape, steps, toolchain, built, replayed, manifest, mathlib,
-             cache, unavailable=None, default_build=None, locked=None, axiom_check=None,
-             executables=(), on_request=None, files=(), rows=None, census_state="UNAVAILABLE",
-             census_reason=None, module_paths=None, loaded=None, reasons=()) -> dict:
+             cache, unavailable=None, default_build=None, search=None, locked=None,
+             axiom_check=None, executables=(), on_request=None, files=(), rows=None,
+             census_state="UNAVAILABLE", census_reason=None, from_export=None,
+             module_paths=None, loaded=None, reasons=()) -> dict:
     files = list(files)
     if unavailable is not None:
         census_reason = unavailable
     if rows is None:
         modules, totals, declared, sources, carriers = [], None, [], [], []
         census = {"state": "UNAVAILABLE", "reason": census_reason, "constants": None,
-                  "modules": None, "modules_loaded": None, "rows_sha256": None}
+                  "modules": None, "modules_loaded": None, "rows_sha256": None,
+                  "project_oleans_from_export": None}
     else:
         modules, totals, declared, sources = rollup(rows, section["trust_base"], module_paths)
         by_decl = {r["decl"]: r for r in rows}
@@ -988,7 +1416,7 @@ def _witness(*, section, commit, at, shape, steps, toolchain, built, replayed, m
                              if found else None})
         census = {"state": census_state, "reason": None, "constants": len(rows),
                   "modules": len({r["module"] for r in rows}), "modules_loaded": loaded,
-                  "rows_sha256": census_digest(rows)}
+                  "rows_sha256": census_digest(rows), "project_oleans_from_export": from_export}
     state = (STATE_UNAVAILABLE if unavailable is not None
              else STATE_HOLD if reasons else STATE_EXECUTED)
     witness = {
@@ -999,8 +1427,8 @@ def _witness(*, section, commit, at, shape, steps, toolchain, built, replayed, m
         "dependency_cache": cache,
         "network_namespace": NETNS_EMPTY if steps and all(
             s["network_namespace"] == NETNS_EMPTY for s in steps) else NETNS_UNAVAILABLE,
-        "steps": steps, "default_build": default_build, "locked_guard": locked,
-        "axiom_check": axiom_check, "executables": list(executables),
+        "steps": steps, "default_build": default_build, "lean_search_path": search,
+        "locked_guard": locked, "axiom_check": axiom_check, "executables": list(executables),
         "on_request_build": on_request, "files": files,
         "file_totals": {s: sum(f["status"] == s for f in files) for s in STATUSES},
         "modules": modules, "theorem_totals": totals, "declared_axioms": declared,
@@ -1021,8 +1449,10 @@ def _validate_steps(value) -> dict:
     by_name = {}
     for item in steps:
         closed(item, _STEP_FIELDS, "WITNESS_FIELDS_INVALID")
+        # A child exits 0..255 or by a signal (negative); 127 when it could not be started.
         require(type(item["name"]) is str and re.fullmatch(r"[a-z][a-z0-9_]{2,40}", item["name"])
                 and item["name"] not in by_name and type(item["exit_code"]) is int and
+                -255 <= item["exit_code"] <= 255 and
                 type(item["output_sha256"]) is str and SHA64.fullmatch(item["output_sha256"]) and
                 type(item["timed_out"]) is bool and type(item["truncated"]) is bool and
                 item["network_namespace"] in NETNS_STATES, "WITNESS_FIELDS_INVALID")
@@ -1073,7 +1503,8 @@ def _validate_cache(value, section) -> None:
         closed(row, ("name", "manifest_rev", "checked_out_rev", "state"),
                "WITNESS_DEPENDENCY_CACHE_INVALID")
         revs = (row["manifest_rev"], row["checked_out_rev"])
-        require(type(row["name"]) is str and row["state"] in PACKAGE_STATES and
+        require(type(row["name"]) is str and PACKAGE_NAME.match(row["name"]) is not None and
+                row["name"] not in (".", "..") and row["state"] in PACKAGE_STATES and
                 all(r is None or (type(r) is str and SHA40.fullmatch(r)) for r in revs),
                 "WITNESS_DEPENDENCY_CACHE_INVALID")
         if revs[0] is None:
@@ -1098,8 +1529,125 @@ def _validate_cache(value, section) -> None:
             value["mathlib_revision"] == mathlib, "WITNESS_DEPENDENCY_CACHE_INVALID")
 
 
-def _validate_gates(value, section, steps) -> dict:
-    """Each gate's state and exit code, re-derived from its own numbers and its step."""
+def _clean_path(path: str) -> bool:
+    return (LOCAL_PATH.fullmatch(path) is not None and not path.startswith("/") and
+            all(part not in ("", ".", "..", ".git") for part in path.split("/")))
+
+
+def _validate_file_rows(value, steps) -> list:
+    """Each file row's fields, the row order and the pairing of status and reason."""
+    files = value["files"]
+    require(type(files) is list and len(files) <= min(MAX_FILES, value["build_tree_files"]),
+            "WITNESS_FIELDS_INVALID")
+    paths = []
+    for row in files:
+        closed(row, _FILE_FIELDS, "WITNESS_FILE_FIELDS_INVALID")
+        require(type(row["path"]) is str and row["path"].endswith(".lean") and
+                _clean_path(row["path"]) and row["status"] in STATUSES and
+                (row["module"] is None or (type(row["module"]) is str and
+                                           MODULE.fullmatch(row["module"]))) and
+                (row["reason"] is None or (type(row["reason"]) is str and
+                                           REASON.fullmatch(row["reason"]))) and
+                all(row[k] is None or (type(row[k]) is str and row[k] in steps)
+                    for k in ("judging_step", "built_in_step")) and
+                (row["olean"] is None or row["olean"] in OLEAN_STATES) and
+                type(row["build_job_failed"]) is bool and
+                (row["module"] is not None or (row["built_in_step"] is None and
+                                               not row["build_job_failed"])),
+                "WITNESS_FILE_FIELDS_INVALID")
+        natural(row["elaborator_sorry_declarations"], "WITNESS_FILE_FIELDS_INVALID")
+        natural(row["error_lines"], "WITNESS_FILE_FIELDS_INVALID")
+        # A status that is not an acceptance must carry its reason; an acceptance must not.
+        require((row["reason"] is None) == row["status"].startswith("ACCEPTED"),
+                "WITNESS_FILE_REASON_INVALID")
+        # The kernel did not accept a file for which the run logged an error.
+        require(not row["status"].startswith("ACCEPTED") or row["error_lines"] == 0,
+                "WITNESS_ACCEPTED_WITH_ERRORS")
+        require(row["status"] not in (ACCEPTED_DEFAULT, ACCEPTED_REQUEST) or
+                row["module"] is not None, "WITNESS_FILE_FIELDS_INVALID")
+        paths.append(row["path"])
+    require(paths == sorted(set(paths)), "WITNESS_FILE_ORDER_OR_DUPLICATE")
+    return files
+
+
+def _validate_verdicts(files, section, steps, search_state) -> None:
+    """Each file row's module, judging step and verdict, re-derived from its own evidence."""
+    builds = {"default_build", "on_request_build",
+              *("exe_" + e["name"] for e in section["executables"])}
+    owners = set()
+    for row in files:
+        # The first path, in order, that names a module owns it, as the producer assigns them.
+        name = module_name(row["path"], section["source_dirs"])
+        require(row["module"] == (None if name is None or name in owners else name),
+                "WITNESS_FILE_MODULE_DRIFT")
+        owners.add(name)
+        rule, judge = _not_checked_reason(section, row["path"]), row["judging_step"]
+        if _standalone(section, row["path"]):
+            require(judge == _standalone_step(row["path"]) and row["olean"] is None,
+                    "WITNESS_FILE_VERDICT_DRIFT")
+            verdict = _standalone_verdict(row, steps[judge]["exit_code"], search_state)
+        elif rule is None and row["module"] is not None and judge is not None:
+            require(judge in builds and row["olean"] is not None and
+                    (judge != "on_request_build" or
+                     _in_library(row["module"], section["library_roots"])),
+                    "WITNESS_FILE_VERDICT_DRIFT")
+            verdict = _module_verdict(row)
+        else:
+            if rule is None:
+                rule = ("NOT_A_WORKSPACE_MODULE" if row["module"] is None
+                        else "OUTSIDE_LIBRARY_ROOTS")
+            # A judgeable library module is always requested, so it is never left unjudged.
+            require(judge is None and row["olean"] is None and
+                    (rule != "OUTSIDE_LIBRARY_ROOTS" or
+                     not _in_library(row["module"], section["library_roots"])),
+                    "WITNESS_FILE_VERDICT_DRIFT")
+            verdict = (NOT_CHECKED, rule)
+        require((row["status"], row["reason"]) == verdict, "WITNESS_FILE_VERDICT_DRIFT")
+
+
+def _validate_runs(value, section, steps, files) -> None:
+    """The step sequence and the per-step job counts, re-derived from the policy and the rows."""
+    accepted = {f["module"] for f in files if f["status"] in (ACCEPTED_DEFAULT, ACCEPTED_REQUEST)}
+    expected = ["lean_version", "lake_version", "default_build", "lean_search_path",
+                "locked_guard", "axiom_check",
+                *("exe_" + e["name"] for e in section["executables"])]
+    if any(f["judging_step"] == "on_request_build" for f in files):
+        expected.append("on_request_build")
+    expected += [f["judging_step"] for f in files if _standalone(section, f["path"])]
+    if accepted - {e["root"] for e in section["executables"]}:
+        expected.append("axiom_census")
+    require(list(steps) == expected, "WITNESS_STEP_SEQUENCE_DRIFT")
+    require(all(s["project_modules_built"] == sum(f["built_in_step"] == name for f in files)
+                for name, s in steps.items()), "WITNESS_PROJECT_MODULE_TOTALS_DRIFT")
+    failing = sum(f["build_job_failed"] for f in files)
+    per_step = [s["project_modules_failed"] for s in steps.values()]
+    require(max(per_step) <= failing <= sum(per_step), "WITNESS_PROJECT_MODULE_TOTALS_DRIFT")
+
+
+def _validate_search_path(value, section, steps, files) -> str:
+    """The search-path record, re-derived from its own numbers, its step and the tracked paths."""
+    search = closed(value["lean_search_path"], _SEARCH_FIELDS, "WITNESS_SEARCH_PATH_INVALID")
+    roots = project_roots([f["path"] for f in files], section)
+    for field in ("entries", "export_library_entries", "project_namespaces"):
+        natural(search[field], "WITNESS_SEARCH_PATH_INVALID")
+    shadowed, step = search["shadowed_namespaces"], steps.get("lean_search_path")
+    require(type(search["exit_code"]) is int and step is not None and
+            search["exit_code"] == step["exit_code"] and
+            search["export_library_entries"] <= search["entries"] and
+            search["project_namespaces"] == len(roots) and type(shadowed) is list and
+            all(type(r) is str and r in roots for r in shadowed) and
+            shadowed == sorted(set(shadowed)) and
+            (search["exit_code"] == 0 or (search["entries"] == 0 and shadowed == [])),
+            "WITNESS_SEARCH_PATH_INVALID")
+    derived = ("SHADOWED" if shadowed else "UNVERIFIED"
+               if search["exit_code"] != 0 or search["export_library_entries"] == 0
+               else "EXPORT_ONLY")
+    require(search["state"] == derived, "WITNESS_SEARCH_PATH_INVALID")
+    return derived
+
+
+def _validate_gates(value, section, steps, files) -> dict:
+    """Each gate's state, exit code and counts, re-derived from its own numbers, step and rows."""
     def gate(summary, step_name, fields, passed):
         closed(summary, fields, "WITNESS_GATE_DRIFT")
         entry = steps.get(step_name)
@@ -1112,7 +1660,9 @@ def _validate_gates(value, section, steps) -> dict:
     require(type(build) is dict, "WITNESS_GATE_DRIFT")
     for field in ("modules_in_import_closure", "closure_modules_with_olean"):
         natural(build.get(field), "WITNESS_GATE_DRIFT")
-    require(build["closure_modules_with_olean"] <= build["modules_in_import_closure"],
+    closure = [f for f in files if f["judging_step"] == "default_build"]
+    require(build["modules_in_import_closure"] == len(closure) and
+            build["closure_modules_with_olean"] == sum(f["olean"] == "FRESH" for f in closure),
             "WITNESS_GATE_DRIFT")
     states = {"DEFAULT_BUILD_FAILED": not gate(
         build, "default_build",
@@ -1120,8 +1670,9 @@ def _validate_gates(value, section, steps) -> dict:
         build.get("exit_code") == 0 and
         build["closure_modules_with_olean"] == build["modules_in_import_closure"])}
     guard = value["locked_guard"]
-    require(type(guard) is dict and guard.get("expected") == section["locked_guard"][
-        "expected_allowed"], "WITNESS_GATE_DRIFT")
+    require(type(guard) is dict, "WITNESS_GATE_DRIFT")
+    natural(guard.get("expected"), "WITNESS_GATE_DRIFT")
+    require(guard["expected"] == section["locked_guard"]["expected_allowed"], "WITNESS_GATE_DRIFT")
     natural(guard.get("allowed"), "WITNESS_GATE_DRIFT")
     natural(guard.get("refused"), "WITNESS_GATE_DRIFT")
     states["LOCKED_GUARD_FAILED"] = not gate(
@@ -1142,6 +1693,22 @@ def _validate_gates(value, section, steps) -> dict:
     states["EXECUTABLE_FAILED"] = not all([
         gate(e, "exe_" + e["name"], ("name", "root", "exit_code", "state"),
              e.get("exit_code") == 0) for e in executables])
+    request = value["on_request_build"]
+    asked = [f for f in files if f["judging_step"] == "on_request_build"]
+    if not asked:
+        require(request is None and "on_request_build" not in steps, "WITNESS_GATE_DRIFT")
+    else:
+        closed(request, ("exit_code", "modules_requested", "modules_accepted",
+                         "modules_rejected"), "WITNESS_GATE_DRIFT")
+        for field in ("modules_requested", "modules_accepted", "modules_rejected"):
+            natural(request[field], "WITNESS_GATE_DRIFT")
+        require(type(request["exit_code"]) is int and "on_request_build" in steps and
+                request["exit_code"] == steps["on_request_build"]["exit_code"] and
+                request["modules_requested"] == len(asked) and
+                request["modules_accepted"] == sum(f["status"] == ACCEPTED_REQUEST
+                                                   for f in asked) and
+                request["modules_rejected"] == sum(f["status"] == REJECTED for f in asked),
+                "WITNESS_GATE_DRIFT")
     return states
 
 
@@ -1176,38 +1743,11 @@ def validate_witness(value, section) -> bool:
     require((toolchain["lean_version"] is None) == (steps["lean_version"]["exit_code"] != 0) and
             (toolchain["lake_version"] is None) == (steps["lake_version"]["exit_code"] != 0),
             "WITNESS_FIELDS_INVALID")
-    toolchain_ok = (toolchain["pin_in_checkout"] == section["toolchain_pin"] and
-                    toolchain["lean_version"] is not None and toolchain["lake_version"] is not None)
+    toolchain_ok = toolchain_matches(toolchain, section["toolchain_pin"])
     _validate_cache(value, section)
-    files = value["files"]
-    require(type(files) is list and len(files) <= min(MAX_FILES, value["build_tree_files"]),
-            "WITNESS_FIELDS_INVALID")
-    paths = []
-    for row in files:
-        closed(row, ("path", "module", "status", "reason", "elaborator_sorry_declarations",
-                     "error_lines"), "WITNESS_FILE_FIELDS_INVALID")
-        require(type(row["path"]) is str and row["path"].endswith(".lean") and
-                row["status"] in STATUSES and
-                (row["module"] is None or (type(row["module"]) is str and
-                                           MODULE.fullmatch(row["module"]))) and
-                (row["reason"] is None or (type(row["reason"]) is str and
-                                           re.fullmatch(r"[A-Z][A-Z_]{2,60}", row["reason"]))),
-                "WITNESS_FILE_FIELDS_INVALID")
-        natural(row["elaborator_sorry_declarations"], "WITNESS_FILE_FIELDS_INVALID")
-        natural(row["error_lines"], "WITNESS_FILE_FIELDS_INVALID")
-        # A status that is not an acceptance must carry its reason; an acceptance must not.
-        require((row["reason"] is None) == row["status"].startswith("ACCEPTED"),
-                "WITNESS_FILE_REASON_INVALID")
-        # The kernel did not accept a file for which the run logged an error.
-        require(not row["status"].startswith("ACCEPTED") or row["error_lines"] == 0,
-                "WITNESS_ACCEPTED_WITH_ERRORS")
-        require(row["status"] not in (ACCEPTED_DEFAULT, ACCEPTED_REQUEST) or
-                row["module"] is not None, "WITNESS_FILE_FIELDS_INVALID")
-        paths.append(row["path"])
-    require(paths == sorted(set(paths)), "WITNESS_FILE_ORDER_OR_DUPLICATE")
     totals = closed(value["file_totals"], STATUSES, "WITNESS_FIELDS_INVALID")
-    require(all(totals[s] == sum(f["status"] == s for f in files) for s in STATUSES),
-            "WITNESS_FILE_TOTALS_DRIFT")
+    for status in STATUSES:
+        natural(totals[status], "WITNESS_FIELDS_INVALID")
     census = closed(value["census"], _CENSUS_FIELDS, "WITNESS_FIELDS_INVALID")
     require(census["state"] in ("EXECUTED", "UNAVAILABLE"), "WITNESS_FIELDS_INVALID")
     modules = value["modules"]
@@ -1225,32 +1765,26 @@ def validate_witness(value, section) -> bool:
         require(census["reason"] == derived and derived is not None and
                 (value["dependency_cache"] is None) == (not toolchain_ok) and
                 list(steps) == ["lean_version", "lake_version"] and
-                value["theorem_totals"] is None and modules == [] and files == [] and
+                value["theorem_totals"] is None and modules == [] and value["files"] == [] and
+                all(totals[s] == 0 for s in STATUSES) and
                 value["declared_axioms"] == [] and value["sorry_sources"] == [] and
                 value["carrier_theorems"] == [] and census["state"] == "UNAVAILABLE" and
                 all(census[k] is None for k in ("constants", "modules", "modules_loaded",
-                                                "rows_sha256")) and
-                value["default_build"] is None and value["locked_guard"] is None and
-                value["axiom_check"] is None and value["executables"] == [] and
-                value["on_request_build"] is None and reasons == [],
-                "WITNESS_UNAVAILABLE_NOT_UNKNOWN")
+                                                "rows_sha256", "project_oleans_from_export")) and
+                value["default_build"] is None and value["lean_search_path"] is None and
+                value["locked_guard"] is None and value["axiom_check"] is None and
+                value["executables"] == [] and value["on_request_build"] is None and
+                reasons == [], "WITNESS_UNAVAILABLE_NOT_UNKNOWN")
         return True
     require(toolchain_ok and cache_state in ("MATCHES_MANIFEST", "NO_MANIFEST"),
             "WITNESS_STATE_DRIFT")
-    failing = _validate_gates(value, section, steps)
-    request = value["on_request_build"]
-    if request is None:
-        require("on_request_build" not in steps, "WITNESS_GATE_DRIFT")
-    else:
-        closed(request, ("exit_code", "modules_requested", "modules_accepted",
-                         "modules_rejected"), "WITNESS_GATE_DRIFT")
-        for field in ("modules_requested", "modules_accepted", "modules_rejected"):
-            natural(request[field], "WITNESS_GATE_DRIFT")
-        require("on_request_build" in steps and
-                request["exit_code"] == steps["on_request_build"]["exit_code"] and
-                request["modules_requested"] > 0 and request["modules_requested"] ==
-                request["modules_accepted"] + request["modules_rejected"] and
-                request["modules_accepted"] <= totals[ACCEPTED_REQUEST], "WITNESS_GATE_DRIFT")
+    files = _validate_file_rows(value, steps)
+    search_state = _validate_search_path(value, section, steps, files)
+    _validate_verdicts(files, section, steps, search_state)
+    require(all(totals[s] == sum(f["status"] == s for f in files) for s in STATUSES),
+            "WITNESS_FILE_TOTALS_DRIFT")
+    _validate_runs(value, section, steps, files)
+    failing = _validate_gates(value, section, steps, files)
     roots = {e["root"] for e in section["executables"]}
     kernel_accepted = [f["module"] for f in files
                        if f["status"] in (ACCEPTED_DEFAULT, ACCEPTED_REQUEST)]
@@ -1258,35 +1792,37 @@ def validate_witness(value, section) -> bool:
     path_of = {f["module"]: f["path"] for f in files if f["module"] in set(kernel_accepted)}
     census_step = steps.get("axiom_census")
     if census["state"] == "UNAVAILABLE":
-        require(census["reason"] in CENSUS_REASONS and
-                (census["reason"] == "NO_ACCEPTED_MODULES") == (not accepted) and
-                (census_step is None) == (census["reason"] == "NO_ACCEPTED_MODULES") and
-                (census_step is None or census_step["exit_code"] != 0) and
+        reason = census["reason"]
+        require(reason in CENSUS_REASONS and
+                (reason == "NO_ACCEPTED_MODULES") == (not accepted) and
+                (census_step is None) == (reason == "NO_ACCEPTED_MODULES") and
+                (reason != "CENSUS_PROGRAM_FAILED" or census_step["exit_code"] != 0) and
+                (reason != "CENSUS_OLEAN_OUTSIDE_EXPORT" or census_step["exit_code"] == 0) and
                 value["theorem_totals"] is None and modules == [] and
                 value["declared_axioms"] == [] and value["sorry_sources"] == [] and
                 value["carrier_theorems"] == [] and
                 all(census[k] is None for k in ("constants", "modules", "modules_loaded",
-                                                "rows_sha256")),
+                                                "rows_sha256", "project_oleans_from_export")),
                 "WITNESS_UNAVAILABLE_NOT_UNKNOWN")
     else:
         _validate_census_rollup(value, section, accepted, path_of, census_step)
+    order = {name: i for i, name in enumerate(steps)}
     derived = dict(failing)
     derived.update({
+        "ACCEPTED_MODULE_WITHOUT_BUILD_LINE": any(_without_build_line(f, order) for f in files),
         "AXIOM_CENSUS_UNAVAILABLE": census["state"] != "EXECUTED",
+        "LEAN_SEARCH_PATH_SHADOWS_PROJECT": search_state == "SHADOWED",
+        "LEAN_SEARCH_PATH_UNVERIFIED": search_state == "UNVERIFIED",
         "PROJECT_MODULE_REPLAYED_NOT_BUILT": value["project_modules_replayed"] > 0,
         "STEP_TIMED_OUT": any(s["timed_out"] for s in steps.values()),
         "STEP_OUTPUT_TRUNCATED": any(s["truncated"] for s in steps.values()),
     })
     require(all((code in reasons) == holds for code, holds in derived.items()),
             "WITNESS_HOLD_REASONS_DRIFT")
-    # Modules accepted outnumbering modules Lake built means some were never built here.
-    require(len(kernel_accepted) <= value["project_modules_built_by_this_run"] or
-            "ACCEPTED_MODULE_WITHOUT_BUILD_LINE" in reasons, "WITNESS_HOLD_REASONS_DRIFT")
     require((state == STATE_HOLD) == bool(reasons), "WITNESS_STATE_DRIFT")
     if state == STATE_EXECUTED:
         require(value["build_tree"] == BUILD_TREE and value["project_modules_replayed"] == 0 and
-                len(kernel_accepted) <= value["project_modules_built_by_this_run"],
-                "WITNESS_STATE_DRIFT")
+                search_state == "EXPORT_ONLY", "WITNESS_STATE_DRIFT")
     return True
 
 
@@ -1295,13 +1831,15 @@ def _validate_census_rollup(value, section, accepted, path_of, census_step) -> N
     require(census["reason"] is None and type(census["rows_sha256"]) is str and
             SHA64.fullmatch(census["rows_sha256"]) and census_step is not None and
             census_step["exit_code"] == 0, "WITNESS_FIELDS_INVALID")
-    natural(census["constants"], "WITNESS_FIELDS_INVALID")
-    natural(census["modules"], "WITNESS_FIELDS_INVALID")
-    natural(census["modules_loaded"], "WITNESS_FIELDS_INVALID")
+    for field in ("constants", "modules", "modules_loaded", "project_oleans_from_export"):
+        natural(census[field], "WITNESS_FIELDS_INVALID")
     # The census program imports exactly the accepted non-executable modules; a module with no
-    # constants yields no module row, so the row count can only be smaller.
+    # constants yields no module row, so the row count can only be smaller. Each of them, and
+    # every other loaded module of a project namespace, was read from the export's library.
     require(census["modules_loaded"] == len(accepted) and census["modules"] == len(modules) and
-            census["modules"] <= census["modules_loaded"], "WITNESS_CENSUS_MODULES_DRIFT")
+            census["modules"] <= census["modules_loaded"] and
+            census["project_oleans_from_export"] >= census["modules_loaded"],
+            "WITNESS_CENSUS_MODULES_DRIFT")
     keys = ("user_theorems", *CLASSES, "direct_sorry_declarations", "declared_axioms")
     names = []
     for row in modules:
@@ -1316,32 +1854,71 @@ def _validate_census_rollup(value, section, accepted, path_of, census_step) -> N
         names.append(row["module"])
     require(names == sorted(set(names)), "WITNESS_MODULE_ORDER_OR_DUPLICATE")
     sums = closed(value["theorem_totals"], keys, "WITNESS_FIELDS_INVALID")
+    for key in keys:
+        # JSON true equals 1 under ==: a count must be a count first.
+        natural(sums[key], "WITNESS_FIELDS_INVALID")
     require(all(sums[k] == sum(m[k] for m in modules) for k in keys),
             "WITNESS_THEOREM_TOTALS_DRIFT")
-    declared = value["declared_axioms"]
-    require(type(declared) is list and len(declared) == sums["declared_axioms"] and
-            all(type(a) is dict and set(a) == {"decl", "module", "native_decide_auxiliary",
-                                               "user_theorem_load"} and type(a["decl"]) is str
-                for a in declared) and
-            [a["decl"] for a in declared] == sorted({a["decl"] for a in declared}),
-            "WITNESS_AXIOM_LIST_INVALID")
-    sources = value["sorry_sources"]
-    require(type(sources) is list and len(sources) == sums["direct_sorry_declarations"] and
-            all(type(s) is dict and set(s) == {"decl", "module", "taints", "sole_blocker_for"}
-                and type(s["decl"]) is str for s in sources) and
-            [s["decl"] for s in sources] == sorted({s["decl"] for s in sources}),
-            "WITNESS_SORRY_SOURCES_INVALID")
+    # Each user theorem and each declared axiom is a constant of its own.
+    require(census["constants"] >= sums["user_theorems"] + sums["declared_axioms"],
+            "WITNESS_CENSUS_MODULES_DRIFT")
+    _validate_axioms_and_sources(value, sums, {m["module"]: m for m in modules})
+    sources = {s["decl"] for s in value["sorry_sources"]}
     carriers = value["carrier_theorems"]
     require(type(carriers) is list and
             [c.get("decl") if type(c) is dict else None for c in carriers] ==
             [c["decl"] for c in section["carrier_theorems"]], "WITNESS_CARRIERS_INVALID")
-    for item in carriers:
+    for item, wanted in zip(carriers, section["carrier_theorems"]):
         closed(item, ("decl", "role", "found", "axioms", "class"), "WITNESS_CARRIERS_INVALID")
-        require(type(item["found"]) is bool and
-                (item["class"] in CLASSES and type(item["axioms"]) is list
-                 and item["class"] == classify(item["axioms"], section["trust_base"])
-                 if item["found"] else item["class"] is None and item["axioms"] is None),
+        axioms = item["axioms"]
+        require(item["role"] == wanted["role"] and type(item["found"]) is bool and
+                (item["class"] is None and axioms is None if not item["found"] else
+                 type(axioms) is list and all(type(a) is str and DECL.fullmatch(a)
+                                              for a in axioms) and axioms == sorted(axioms) and
+                 item["class"] == classify(axioms, section["trust_base"]) and
+                 # A declaration whose own term holds sorryAx depends on sorryAx.
+                 (item["decl"] not in sources or SORRY_AXIOM in axioms)),
                 "WITNESS_CARRIERS_INVALID")
+
+
+def _validate_axioms_and_sources(value, sums, by_module) -> None:
+    """Declared axioms and sorry sources: shapes, owning modules and per-module counts."""
+    declared = value["declared_axioms"]
+    require(type(declared) is list and len(declared) == sums["declared_axioms"],
+            "WITNESS_AXIOM_LIST_INVALID")
+    # A theorem that rests on a declared axiom is never in the trust-base-only class.
+    reach = sums["user_theorems"] - sums[CLASS_CLEAN]
+    for item in declared:
+        closed(item, ("decl", "module", "native_decide_auxiliary", "user_theorem_load"),
+               "WITNESS_AXIOM_LIST_INVALID")
+        require(type(item["decl"]) is str and DECL.fullmatch(item["decl"]) and
+                type(item["module"]) is str and item["module"] in by_module and
+                item["native_decide_auxiliary"] is (NATIVE_MARK in item["decl"]),
+                "WITNESS_AXIOM_LIST_INVALID")
+        natural(item["user_theorem_load"], "WITNESS_AXIOM_LIST_INVALID")
+        require(item["user_theorem_load"] <= reach, "WITNESS_AXIOM_LIST_INVALID")
+    require([a["decl"] for a in declared] == sorted({a["decl"] for a in declared}) and
+            all(m["declared_axioms"] == sum(a["module"] == name for a in declared)
+                for name, m in by_module.items()), "WITNESS_AXIOM_LIST_INVALID")
+    sources = value["sorry_sources"]
+    require(type(sources) is list and len(sources) == sums["direct_sorry_declarations"],
+            "WITNESS_SORRY_SOURCES_INVALID")
+    for item in sources:
+        closed(item, ("decl", "module", "taints", "sole_blocker_for"),
+               "WITNESS_SORRY_SOURCES_INVALID")
+        require(type(item["decl"]) is str and DECL.fullmatch(item["decl"]) and
+                type(item["module"]) is str and item["module"] in by_module,
+                "WITNESS_SORRY_SOURCES_INVALID")
+        natural(item["taints"], "WITNESS_SORRY_SOURCES_INVALID")
+        natural(item["sole_blocker_for"], "WITNESS_SORRY_SOURCES_INVALID")
+        # A theorem counts towards a source's taints only when it is sorry-tainted, and towards
+        # its sole_blocker_for only when that source is the theorem's only one.
+        require(item["sole_blocker_for"] <= item["taints"] <= sums[CLASS_SORRY],
+                "WITNESS_SORRY_SOURCES_INVALID")
+    require([s["decl"] for s in sources] == sorted({s["decl"] for s in sources}) and
+            sum(s["sole_blocker_for"] for s in sources) <= sums[CLASS_SORRY] and
+            all(m["direct_sorry_declarations"] == sum(s["module"] == name for s in sources)
+                for name, m in by_module.items()), "WITNESS_SORRY_SOURCES_INVALID")
 
 
 def main(argv=None):
@@ -1379,6 +1956,7 @@ def main(argv=None):
                           "theorem_totals": witness["theorem_totals"],
                           "locked_guard": (witness["locked_guard"] or {}).get("state"),
                           "build_tree": witness["build_tree"],
+                          "lean_search_path": (witness["lean_search_path"] or {}).get("state"),
                           "network_namespace": witness["network_namespace"],
                           "project_modules_built_by_this_run":
                               witness["project_modules_built_by_this_run"],

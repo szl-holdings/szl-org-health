@@ -473,6 +473,15 @@ class ProofTests(KhipuTreeCase):
         self.assertEqual(proof["unavailable_cords"], ["z/9"])
         self.assertEqual(proof["partitions"], PARTITIONS)
 
+    def test_both_docstrings_say_a_proof_reveals_the_unavailable_keys(self):
+        # The proof above carries "z/9", another cord's key; no docstring may deny that.
+        module = " ".join(khipu.__doc__.split())
+        checker = " ".join(verify_proof.__doc__.split())
+        self.assertIn("the keys of the unavailable cords", module)
+        self.assertIn("the keys of the unavailable cords", checker)
+        self.assertIn("no other present cord's key or content digest", checker)
+        self.assertNotIn("no other cord's key", checker)
+
     def test_prove_refusals(self):
         self.refused("KHIPU_CORD_NOT_FOUND", prove, self.tree, "nope")
         broken = deepcopy(self.tree)
@@ -514,14 +523,32 @@ class ProofTests(KhipuTreeCase):
             p["primary"]["position"] = 2
         self.proof_refused("KHIPU_PROOF_PRIMARY_MISMATCH", pendants)
 
+    def test_the_trusted_hash_and_total_must_be_typed(self):
+        tiny = build(["count", "flag"], [], [{"key": "r:1", "pendant": "r|X", "digest": "0" * 64,
+                                              "knots": [1, 0]}])
+        proof, trusted = prove(tiny, "r:1"), tiny["primary"]["hash"]
+        self.assertTrue(verify_proof(proof, primary_hash_expected=trusted,
+                                     primary_sum_expected=[1, 0]))
+        # list == would accept True for 1 and False for 0; the trusted total is typed instead.
+        for expected in ({"primary_sum_expected": [True, False]},
+                         {"primary_sum_expected": [1, False]},
+                         {"primary_sum_expected": (1, 0)}, {"primary_sum_expected": [1]},
+                         {"primary_sum_expected": [1, -1]},
+                         {"primary_hash_expected": trusted.upper()},
+                         {"primary_hash_expected": None}):
+            with self.subTest(expected=str(expected)[:60]):
+                arguments = {"primary_hash_expected": trusted, "primary_sum_expected": [1, 0]}
+                arguments.update(expected)
+                with self.assertRaises(InputError) as caught:
+                    verify_proof(proof, **arguments)
+                self.assertEqual(caught.exception.code, "KHIPU_PROOF_EXPECTED_INVALID")
+
     def test_against_another_tree_or_total(self):
         other = tree_fixture(unavailable=[], cords=cords_fixture()[:3])
         self.proof_refused("KHIPU_PROOF_PRIMARY_MISMATCH", lambda p: None,
                            primary_hash_expected=other["primary"]["hash"])
         self.proof_refused("KHIPU_PROOF_PRIMARY_MISMATCH", lambda p: None,
                            primary_sum_expected=[9, 5, 4, 14])
-        self.proof_refused("KHIPU_PROOF_PRIMARY_MISMATCH", lambda p: None,
-                           primary_sum_expected=tuple(self.sum))
         self.proof_refused("KHIPU_PROOF_PRIMARY_MISMATCH", lambda p: p["knots"].__setitem__(3, "mass"))
         proof = prove(other, "a/1")
         self.assertTrue(verify_proof(proof, primary_hash_expected=other["primary"]["hash"],

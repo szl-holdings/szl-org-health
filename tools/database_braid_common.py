@@ -54,10 +54,11 @@ NETNS_EMPTY = "EMPTY_NETWORK_NAMESPACE"
 NETNS_UNAVAILABLE = "NOT_AVAILABLE_ON_THIS_HOST"
 NETNS_NOT_REQUESTED = "NOT_REQUESTED"
 NETNS_STATES = (NETNS_EMPTY, NETNS_UNAVAILABLE, NETNS_NOT_REQUESTED)
-# A new PID namespace too: when the child exits or is killed, the kernel kills every process
-# left in it, including a grandchild that escaped the process group with setsid().
-_UNSHARE = ("unshare", "--user", "--map-root-user", "--net", "--pid", "--fork",
-            "--kill-child", "--")
+# Network namespace only. A PID namespace was tried and dropped: Lean finds its own binary
+# through /proc/<pid>/exe and fails as PID 1 under the host's /proc, and unshare reports a
+# child's death by signal as exit 1. Without it, a descendant that leaves the process group
+# with setsid() survives a timeout; process-tree isolation (cgroup or container) is ROADMAP.
+_UNSHARE = ("unshare", "--user", "--map-root-user", "--net", "--")
 _UNSHARE_SEARCH = "/usr/bin:/bin:/usr/sbin:/sbin"
 # Lean 4's isIdRest: ASCII letters and digits, _ ' ! ?, the letter-like and subscript blocks.
 _IDENT = re.compile("[A-Za-z0-9_'!?.\u0370-\u03ff\u1d62-\u1d6a\u1f00-\u1fff\u2080-\u209c"
@@ -111,8 +112,11 @@ def digest(value) -> str:
 
 def git_blob_sha1(raw: bytes) -> str:
     """Git's blob object id. A source-object identifier, not a security digest."""
-    return hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw,
-                        usedforsecurity=False).hexdigest()
+    # Hashed in two parts so a large blob is never copied just to prepend its header.
+    hasher = hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\0",
+                          usedforsecurity=False)
+    hasher.update(raw)
+    return hasher.hexdigest()
 
 
 def _unique(pairs):
@@ -226,10 +230,11 @@ def lean_code_only(text: str) -> str:
 
     Handles nested ``/- -/`` blocks, ``--`` line comments, ordinary strings with
     escapes, raw strings (``r"..."``, ``r#"..."#``) and character literals. Each
-    literal is replaced by ``""`` so neighbouring tokens stay separate. Text
-    inside an interpolated string's braces is dropped with the string, but a
-    string literal nested inside those braces ends the scan early; this is a
-    text-level filter, not a Lean parser.
+    literal is replaced by ``""`` and each block comment by one space, as Lean
+    reads it, so neighbouring tokens stay separate. Text inside an interpolated
+    string's braces is dropped with the string, but a string literal nested
+    inside those braces ends the scan early; this is a text-level filter, not a
+    Lean parser.
     """
     out, depth, i, size = [], 0, 0, len(text)
     while i < size:
@@ -242,6 +247,8 @@ def lean_code_only(text: str) -> str:
             if pair == "-/":
                 depth -= 1
                 i += 2
+                if not depth:
+                    out.append(" ")
             else:
                 i += 1
             continue
