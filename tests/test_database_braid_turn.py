@@ -91,6 +91,21 @@ class TurnRunnerTests(TestCase):
         self.assertEqual(turn_2["previous_turn_id"], turn_1["turn_id"])
         self.assertEqual(turn_2["previous_turn_lake_receipt"], "NOT_SUPPLIED")
 
+    def test_a_previous_turn_that_does_not_verify_starts_a_recorded_new_chain(self):
+        first, second = self.base / "turn-1", self.base / "turn-2"
+        self.assertEqual(self.run_turn(first)[0], 0)
+        turn_path = first / "turn.json"
+        tampered = json.loads(turn_path.read_text())
+        tampered["state_digest"] = "0" * 64
+        turn_path.chmod(0o600)
+        turn_path.write_text(json.dumps(tampered))
+        code, manifest = self.run_turn(second, "--previous-dir", str(first))
+        self.assertEqual(code, 0)
+        self.assertEqual(manifest["ordinal"], 1)
+        self.assertEqual(manifest["previous_turn_rejected"]["code"],
+                         "BRAID_TURN_DERIVATION_DRIFT")
+        self.assertIn("PREVIOUS_TURN_REJECTED", manifest["sub_reasons"])
+
     def test_output_inside_a_checkout_is_refused_and_nothing_is_written(self):
         for out in (self.checkouts[LEAN_REPO] / "out", ROOT / "braid-out-never"):
             code, result = self.run_turn(out)

@@ -1,0 +1,1509 @@
+From 1a7606ff2eb26b14f7325b9e01a296bc6b586bcc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 19 Nov 2026 14:12:36 +0000
+Subject: [PATCH] candidate: repair 46 Lean files the kernel rejected at
+ 98f1735 (local only, not pushed)
+
+Proposed from the SZL Ouroboros braid v2 session. Each file was repaired so the
+kernel accepts it without adding sorry, axioms or native_decide. Unratified:
+the meaning of each repaired statement still needs owner review.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016fKShCtBf2zn2JqLPT9VU6
+---
+ Lutar/Banach/LiuHuiPi.lean                    | 123 ++++++++++++++---
+ Lutar/CodingTheory/ReedSolomonSingleton.lean  |  14 +-
+ Lutar/DP/RDPComposition.lean                  |  16 ++-
+ .../round10/PhysicsEntropyBounds.lean         |   6 +-
+ .../Innovations/round10/PhysicsLiouville.lean |   1 +
+ .../round11/FrontierBLSAggregation.lean       |   2 +-
+ .../round12/Pachakuti_Lineage_Cohomology.lean |   5 +
+ .../Innovations/round2/MartingaleLambda.lean  |   8 +-
+ Lutar/Innovations/round2/PersistenceGate.lean |   4 +-
+ Lutar/Innovations/round2/Provenon.lean        |   2 +-
+ Lutar/Innovations/round2/SpectralAdmit.lean   |   8 +-
+ Lutar/Innovations/round4/CRTReceiptShard.lean |  12 +-
+ .../round4/CopperScrollDAGHeight.lean         |  11 +-
+ .../round4/ELSBonferroniBound.lean            |  13 +-
+ .../round4/EnochEpochAlignment.lean           |   2 +
+ .../Innovations/round4/MasoreticChecksum.lean |   4 +-
+ .../Innovations/round4/MayaLCMEpochSync.lean  |   3 +
+ .../round4/PlimptonReciprocal.lean            |   2 +
+ .../round4/SexagesimalReciprocal.lean         |  12 +-
+ Lutar/Innovations/round4/SulbaSqrtBound.lean  |  19 +--
+ .../round4/YBCHeronConvergence.lean           |   8 +-
+ .../round5/HermesRGFixedPoint.lean            |   2 +
+ .../Innovations/round5/KeplerFleetScale.lean  |   2 +
+ .../round5/OuroborosKleeneHalt.lean           |   4 +-
+ .../Innovations/round5/TetractysHMBound.lean  |  16 ++-
+ .../round6/CauchySchwartzLambda.lean          |   3 +-
+ .../round6/EulerFleetTopology.lean            |   2 +-
+ Lutar/Innovations/round6/NoetherAudit.lean    |   3 +-
+ .../round7/CalugareanuFleetInvariant.lean     |   3 +-
+ .../round7/KimuraAgentConvergence.lean        |  15 +-
+ Lutar/Innovations/round9/CauchyMultMono.lean  |   2 +-
+ .../round9/MonotoneContinuous.lean            |   5 +-
+ Lutar/Innovations/round9/VCGTruthfulness.lean |   6 +-
+ Lutar/PACBayes/CapabilityImprovementRate.lean | 129 ++++++++++--------
+ Lutar/PACBayes/MadhavaBound.lean              |  91 ++++++++++--
+ Lutar/PACBayes/PACBayes.lean                  |  15 +-
+ Lutar/Puriq/Formulas/PuriqFormulaLean.lean    |   4 +-
+ Lutar/Putnam/P_A1.lean                        |   8 +-
+ Lutar/Putnam/P_A3.lean                        |   2 +-
+ Lutar/Putnam/P_A4.lean                        |   4 +-
+ Lutar/Putnam/P_A5.lean                        |   6 +
+ Lutar/Putnam/P_A6.lean                        |  14 +-
+ Lutar/Putnam/P_B3.lean                        |   5 +-
+ Lutar/Putnam/P_B6.lean                        |   2 +-
+ Lutar/Thesis/TH_V18_04_EgyptianWeightSum.lean |   1 +
+ .../Thesis/TH_V18_15_MultiAgentFairness.lean  |   2 +-
+ 46 files changed, 436 insertions(+), 185 deletions(-)
+
+diff --git a/Lutar/Banach/LiuHuiPi.lean b/Lutar/Banach/LiuHuiPi.lean
+index 66093b3..955a785 100644
+--- a/Lutar/Banach/LiuHuiPi.lean
++++ b/Lutar/Banach/LiuHuiPi.lean
+@@ -16,11 +16,16 @@ Citations:
+ - Cullen, C. (1996). *Astronomy and Mathematics in Ancient China.* CUP.
+ - Martzloff, J.-C. (1997). *A History of Chinese Mathematics.* Springer.
+ 
+-Status: skeleton; monotone-bounded convergence is recorded with a tagged
+-`sorry` deferring to the monotone-convergence theorem in Mathlib.
++Status: convergence is proved (`liu_hui_pi_converges`), with the limit
++identified as `π` (`liuHuiPi_tendsto_pi`), via the closed form
++`liuHuiPi k = (6 · 2^k) · sin(π / (6 · 2^k))` and the continuity of
++`Real.sinc` at `0`. The monotone-bounded route sketched above is the
++classical one and is not what the formal proof uses.
+ -/
+ import Mathlib.Analysis.SpecialFunctions.Pow.Real
+ import Mathlib.Data.Real.Sqrt
++import Mathlib.Analysis.SpecialFunctions.Trigonometric.Sinc
++import Mathlib.Analysis.SpecificLimits.Basic
+ 
+ /- **Namespace note (PhD audit 2026-05-29):** This file lives under `Lutar.Banach` because
+    Liu Hui's polygon-doubling recurrence `s_{2k}² = 2 - √(4 - s_k²)` is a *contractive iteration*
+@@ -77,26 +82,108 @@ theorem sideSquared_bounds : ∀ n, 0 ≤ sideSquared n ∧ sideSquared n ≤ 4
+       linarith
+     refine ⟨by linarith, by linarith⟩
+ 
+-/-- **Liu Hui π convergence (axiomatised pending the v18 half-angle proof).**
++/-- Closed form of the squared side: `sideSquared k = 4 · sin²(π / (6 · 2^k))`.
+ 
+-    The sequence `liuHuiPi` is monotone increasing and bounded above by `π`,
+-    hence convergent by monotone-bounded convergence (Mathlib4
+-    `tendsto_atTop_of_monotone_of_bounded`). The classical limit is `π`.
+-
+-    Status: AXIOM-TAGGED, honest §XVII obligation deferred to v18.
+-    Justification: the proof requires the half-angle identity
+-      `sin(θ/2) = √((1 - cos θ)/2)`
+-    plus a Cauchy-criterion argument linking sideSquared to `4 sin²(π/n_k)`;
+-    estimated 40h Lean sprint.
++    Induction on `k`. The base case is `sin(π/6) = 1/2`; the step is the
++    half-angle identity `2 - 2 cos θ = 4 sin²(θ/2)`, using `cos θ ≥ 0` on
++    `[0, π/2]` to evaluate `√(4 - 4 sin² θ) = 2 cos θ`. -/
++theorem sideSquared_eq_four_mul_sin_sq (k : ℕ) :
++    sideSquared k = 4 * Real.sin (π / (6 * 2 ^ k)) ^ 2 := by
++  induction k with
++  | zero =>
++    have h : π / (6 * 2 ^ 0) = π / 6 := by norm_num
++    rw [h, Real.sin_pi_div_six]
++    unfold sideSquared
++    norm_num
++  | succ n ih =>
++    have hpow : (0 : ℝ) < 6 * 2 ^ n := by positivity
++    have hone : (1 : ℝ) ≤ 2 ^ n := one_le_pow₀ (by norm_num)
++    have hθ0 : 0 ≤ π / (6 * 2 ^ n) := by positivity
++    have hθle : π / (6 * 2 ^ n) ≤ π / 2 := by
++      rw [div_le_div_iff₀ hpow two_pos]
++      nlinarith [Real.pi_pos]
++    have hcos : 0 ≤ Real.cos (π / (6 * 2 ^ n)) :=
++      Real.cos_nonneg_of_mem_Icc ⟨by linarith [Real.pi_pos], hθle⟩
++    have hhalf : π / (6 * 2 ^ (n + 1)) = π / (6 * 2 ^ n) / 2 := by
++      rw [pow_succ]; ring
++    have hsq : 4 - 4 * Real.sin (π / (6 * 2 ^ n)) ^ 2
++        = (2 * Real.cos (π / (6 * 2 ^ n))) ^ 2 := by
++      linear_combination (-4) * Real.sin_sq_add_cos_sq (π / (6 * 2 ^ n))
++    have hdbl : 2 * (π / (6 * 2 ^ n) / 2) = π / (6 * 2 ^ n) := by ring
++    show 2 - Real.sqrt (4 - sideSquared n) = _
++    rw [ih, hsq, Real.sqrt_sq (by positivity), hhalf, Real.sin_sq_eq_half_sub, hdbl]
++    ring
++
++/-- Closed form of the estimate: `liuHuiPi k = n_k · sin(π / n_k)` with
++    `n_k = 6 · 2^k` (half the perimeter of the inscribed regular `n_k`-gon). -/
++theorem liuHuiPi_eq_mul_sin (k : ℕ) :
++    liuHuiPi k = (6 * 2 ^ k) * Real.sin (π / (6 * 2 ^ k)) := by
++  have hpow : (0 : ℝ) < 6 * 2 ^ k := by positivity
++  have hone : (1 : ℝ) ≤ 2 ^ k := one_le_pow₀ (by norm_num)
++  have hθ0 : 0 ≤ π / (6 * 2 ^ k) := by positivity
++  have hθle : π / (6 * 2 ^ k) ≤ π :=
++    div_le_self Real.pi_pos.le (by linarith)
++  have hsin : 0 ≤ Real.sin (π / (6 * 2 ^ k)) :=
++    Real.sin_nonneg_of_nonneg_of_le_pi hθ0 hθle
++  have h4 : 4 * Real.sin (π / (6 * 2 ^ k)) ^ 2 = (2 * Real.sin (π / (6 * 2 ^ k))) ^ 2 := by
++    ring
++  unfold liuHuiPi sideCount
++  rw [sideSquared_eq_four_mul_sin_sq, h4, Real.sqrt_sq (by positivity)]
++  push_cast
++  ring
++
++/-- `liuHuiPi k = π · sinc(π / (6 · 2^k))`, the form in which the limit is read off. -/
++theorem liuHuiPi_eq_pi_mul_sinc (k : ℕ) :
++    liuHuiPi k = π * Real.sinc (π / (6 * 2 ^ k)) := by
++  have hne : π / (6 * 2 ^ k) ≠ 0 := by positivity
++  rw [liuHuiPi_eq_mul_sin, Real.sinc_of_ne_zero hne]
++  field_simp
++
++/-- **Liu Hui's polygon-doubling estimates converge to `π`.**
++
++    `π / (6 · 2^k) → 0`, `Real.sinc` is continuous with `sinc 0 = 1`, and
++    `liuHuiPi k = π · sinc(π / (6 · 2^k))`. -/
++theorem liuHuiPi_tendsto_pi : Filter.Tendsto liuHuiPi Filter.atTop (nhds π) := by
++  have hpow : Filter.Tendsto (fun k : ℕ => (6 : ℝ) * 2 ^ k) Filter.atTop Filter.atTop :=
++    (tendsto_pow_atTop_atTop_of_one_lt (by norm_num : (1 : ℝ) < 2)).const_mul_atTop
++      (by norm_num)
++  have hθ : Filter.Tendsto (fun k : ℕ => π / (6 * 2 ^ k)) Filter.atTop (nhds 0) :=
++    tendsto_const_nhds.div_atTop hpow
++  have hsinc : Filter.Tendsto (fun k : ℕ => Real.sinc (π / (6 * 2 ^ k)))
++      Filter.atTop (nhds 1) := by
++    have h := (Real.continuous_sinc.tendsto 0).comp hθ
++    rw [Real.sinc_zero] at h
++    exact h
++  have hmul := hsinc.const_mul π
++  rw [mul_one] at hmul
++  exact hmul.congr (fun k => (liuHuiPi_eq_pi_mul_sinc k).symm)
++
++/-- **Liu Hui π convergence (proved; the limit is `π`).**
++
++    The sequence `liuHuiPi` converges. The witness is `L = π`, taken from
++    `liuHuiPi_tendsto_pi`: the half-angle identity, in the squared form
++      `sin²(θ/2) = (1 - cos θ)/2`,
++    links `sideSquared` to `4 sin²(π/n_k)` (`sideSquared_eq_four_mul_sin_sq`),
++    so `liuHuiPi k = n_k · sin(π/n_k)` (`liuHuiPi_eq_mul_sin`), which tends to
++    `π` because `sin x / x → 1` as `x → 0` (Mathlib `Real.continuous_sinc`).
++
++    Classically the sequence is also monotone increasing and bounded above by
++    `π`; that monotonicity is not formalised here and is not used by the proof.
++
++    Status: THEOREM. Formerly an axiom-tagged §XVII obligation (§XVII.RC1,
++    v18 sprint backlog); now discharged.
+     Liu Hui's original argument (*Jiu Zhang Suanshu* commentary, c. 263 CE)
+-    is geometric, not within the scope of v17.
++    is geometric; the proof here is a modern analytic one for the same limit.
+ 
+     Citation: Martzloff, J.-C. (1997). *A History of Chinese Mathematics.*
+     Springer, §3.3. Cullen, C. (1996). *Astronomy and Mathematics in
+-    Ancient China.* CUP, §2.4.
+-
+-    Proof obligation reference: §XVII.RC1 (v18 sprint backlog). -/
+-axiom liu_hui_pi_converges :
+-    ∃ L : ℝ, ∀ ε > 0, ∃ N : ℕ, ∀ k ≥ N, |liuHuiPi k - L| < ε
++    Ancient China.* CUP, §2.4. -/
++theorem liu_hui_pi_converges :
++    ∃ L : ℝ, ∀ ε > 0, ∃ N : ℕ, ∀ k ≥ N, |liuHuiPi k - L| < ε := by
++  refine ⟨π, fun ε hε => ?_⟩
++  obtain ⟨N, hN⟩ := Metric.tendsto_atTop.mp liuHuiPi_tendsto_pi ε hε
++  exact ⟨N, fun k hk => by
++    have h := hN k hk
++    rwa [Real.dist_eq] at h⟩
+ 
+ end Lutar.Banach.LiuHui
+diff --git a/Lutar/CodingTheory/ReedSolomonSingleton.lean b/Lutar/CodingTheory/ReedSolomonSingleton.lean
+index 57ec9e6..9851ec6 100644
+--- a/Lutar/CodingTheory/ReedSolomonSingleton.lean
++++ b/Lutar/CodingTheory/ReedSolomonSingleton.lean
+@@ -40,6 +40,7 @@
+ -- statement (pure integer arithmetic) are proven here without sorry.
+ 
+ import Mathlib.Algebra.Polynomial.Basic
++import Mathlib.Algebra.Polynomial.Roots
+ import Mathlib.Algebra.BigOperators.Group.Finset.Basic
+ import Mathlib.Algebra.BigOperators.Group.Finset.Defs
+ import Mathlib.Algebra.BigOperators.Group.Finset.Pi
+@@ -122,11 +123,8 @@ theorem poly_uniqueness_at_k_points
+   -- The polynomial p - q has degree < k and vanishes at k distinct points.
+   -- By the degree bound (a degree-d polynomial has at most d roots),
+   -- p - q must be the zero polynomial.
+-  apply Polynomial.funext
+-  intro x
+-  -- p and q agree on the k evaluation points; if p ≠ q, then (p - q) has degree < k
+-  -- but at least k roots, a contradiction.
+-  -- Full proof uses `Polynomial.eq_zero_of_degree_lt_of_eval_zero`:
++  -- (`Polynomial.funext` needs an infinite ring, so we argue on `p - q` directly.)
++  -- Full proof uses `Polynomial.eq_zero_of_natDegree_lt_card_of_eval_eq_zero'`:
+   have hdiff : (p - q).natDegree < k := by
+     calc (p - q).natDegree
+         ≤ max p.natDegree q.natDegree := Polynomial.natDegree_sub_le p q
+@@ -135,19 +133,19 @@ theorem poly_uniqueness_at_k_points
+     intro i
+     simp [Polynomial.eval_sub, hpq_vals i]
+   -- Now: p - q has < k degree and ≥ k roots (pts is injective) → p - q = 0.
+-  -- Use Polynomial.eq_zero_of_degree_lt_of_eval_finset_zero (or similar):
+   rw [← sub_eq_zero]
+   have : Finset.card (Finset.image pts Finset.univ) = k := by
+     rw [Finset.card_image_of_injective _ hpts]
+     simp
+   have hle : k ≤ (Finset.image pts Finset.univ).card := by
+     omega
+-  exact Polynomial.eq_zero_of_natDegree_lt_of_eval_finset_eq_zero
+-    (p - q) (Finset.image pts Finset.univ) (by linarith [hdiff]) hle
++  exact Polynomial.eq_zero_of_natDegree_lt_card_of_eval_eq_zero'
++    (p - q) (Finset.image pts Finset.univ)
+     (by intro x hx
+         obtain ⟨i, _, hxi⟩ := Finset.mem_image.mp hx
+         rw [← hxi]
+         exact hroots i)
++    (lt_of_lt_of_le hdiff hle)
+ 
+ /-!
+ ## RS code MDS property — sorry₁ for achievability
+diff --git a/Lutar/DP/RDPComposition.lean b/Lutar/DP/RDPComposition.lean
+index 8d8ae85..b32a476 100644
+--- a/Lutar/DP/RDPComposition.lean
++++ b/Lutar/DP/RDPComposition.lean
+@@ -131,7 +131,7 @@ theorem rdpToDPEpsilon_nonneg (p : RDPParams) (δ : ℝ) (hδ : 0 < δ) (hδ1 :
+   apply add_nonneg p.hε
+   apply div_nonneg
+   · apply Real.log_nonneg
+-    rw [div_le_iff₀ hδ, one_mul]
++    rw [le_div_iff₀ hδ, one_mul]
+     linarith [hδ1]
+   · linarith [p.hα]
+ 
+@@ -178,10 +178,22 @@ noncomputable def rdpAccountingDPEpsilon (inp : RDPAccountingInput) : ℝ :=
+ def rdpBudgetValid (inp : RDPAccountingInput) : Prop :=
+   rdpAccountingDPEpsilon inp ≤ inp.budget_threshold
+ 
++/-- Appending a non-negative step keeps every step non-negative (the proof obligation
++    of the dependent field `h_steps_nonneg` for the extended step list). -/
++theorem steps_nonneg_append (l : List ℝ) (h : ∀ ε ∈ l, 0 ≤ ε) (x : ℝ) (hx : 0 ≤ x) :
++    ∀ ε ∈ l ++ [x], 0 ≤ ε := by
++  intro ε hmem
++  rcases List.mem_append.mp hmem with h' | h'
++  · exact h ε h'
++  · rw [List.mem_singleton.mp h']
++    exact hx
++
+ /-- Monotone budget usage: adding a step with positive ε increases total cost. -/
+ theorem rdpBudgetMonotone (inp : RDPAccountingInput) (ε_new : ℝ) (hε : 0 ≤ ε_new) :
+     rdpAccountingEpsilonTotal inp ≤
+-    rdpAccountingEpsilonTotal { inp with epsilon_steps := inp.epsilon_steps ++ [ε_new] } := by
++    rdpAccountingEpsilonTotal { inp with
++      epsilon_steps := inp.epsilon_steps ++ [ε_new]
++      h_steps_nonneg := steps_nonneg_append inp.epsilon_steps inp.h_steps_nonneg ε_new hε } := by
+   simp [rdpAccountingEpsilonTotal, List.sum_append]
+   linarith
+ 
+diff --git a/Lutar/Innovations/round10/PhysicsEntropyBounds.lean b/Lutar/Innovations/round10/PhysicsEntropyBounds.lean
+index 79db7e3..4dffe6e 100644
+--- a/Lutar/Innovations/round10/PhysicsEntropyBounds.lean
++++ b/Lutar/Innovations/round10/PhysicsEntropyBounds.lean
+@@ -106,7 +106,7 @@ theorem bekensteinCeiling_mono_E {R E₁ E₂ : ℝ} (hR : 0 ≤ R) (h : E₁ 
+     bekensteinCeiling K R E₁ ≤ bekensteinCeiling K R E₂ := by
+   unfold bekensteinCeiling
+   have hden : 0 < K.hbar * K.c := mul_pos K.hbar_pos K.c_pos
+-  rw [div_le_div_right hden]
++  rw [div_le_div_iff_of_pos_right hden]
+   have hcoef : 0 ≤ 2 * Real.pi * K.kB * R := by
+     have hpi : (0:ℝ) ≤ Real.pi := Real.pi_pos.le
+     have hkB : 0 ≤ K.kB := K.kB_pos.le
+@@ -125,7 +125,7 @@ def holographic_bound (S A : ℝ) : Prop := S ≤ holographicCeiling K A
+ theorem holographicCeiling_nonneg {A : ℝ} (hA : 0 ≤ A) :
+     0 ≤ holographicCeiling K A := by
+   unfold holographicCeiling
+-  have hden : 0 < 4 * K.lP ^ 2 := by positivity
++  have hden : 0 < 4 * K.lP ^ 2 := mul_pos (by norm_num) (pow_pos K.lP_pos 2)
+   exact div_nonneg hA hden.le
+ 
+ /-- **Holographic monotonicity in area** — the area-law growth of holographic
+@@ -133,7 +133,7 @@ information. -/
+ theorem holographicCeiling_mono_A {A₁ A₂ : ℝ} (h : A₁ ≤ A₂) :
+     holographicCeiling K A₁ ≤ holographicCeiling K A₂ := by
+   unfold holographicCeiling
+-  have hden : 0 < 4 * K.lP ^ 2 := by positivity
++  have hden : 0 < 4 * K.lP ^ 2 := mul_pos (by norm_num) (pow_pos K.lP_pos 2)
+   exact div_le_div_of_nonneg_right h hden.le
+ 
+ -- ── 3. Bremermann & Margolus–Levitin rate ceilings (sorry-free) ──────────────
+diff --git a/Lutar/Innovations/round10/PhysicsLiouville.lean b/Lutar/Innovations/round10/PhysicsLiouville.lean
+index a2af924..6a66c22 100644
+--- a/Lutar/Innovations/round10/PhysicsLiouville.lean
++++ b/Lutar/Innovations/round10/PhysicsLiouville.lean
+@@ -63,6 +63,7 @@ import Mathlib.Algebra.BigOperators.Group.Finset.Pi
+ import Mathlib.Algebra.BigOperators.Group.Finset.Powerset
+ import Mathlib.Algebra.BigOperators.Group.Finset.Preimage
+ import Mathlib.Algebra.BigOperators.Group.Finset.Sigma
++import Mathlib.Basic.Real.Basic
+ 
+ open BigOperators
+ 
+diff --git a/Lutar/Innovations/round11/FrontierBLSAggregation.lean b/Lutar/Innovations/round11/FrontierBLSAggregation.lean
+index 0d2ab48..1d63d77 100644
+--- a/Lutar/Innovations/round11/FrontierBLSAggregation.lean
++++ b/Lutar/Innovations/round11/FrontierBLSAggregation.lean
+@@ -63,7 +63,7 @@ namespace BLS
+ 
+ open scoped BigOperators
+ 
+-/-- Abstract signature group: an additive commutative group `S` that is a module over the
++/- Abstract signature group: an additive commutative group `S` that is a module over the
+ scalar ring `R` of secret keys.  `skᵢ • h` is organ `i`'s signature on hashed message
+ `h : S`; `•` is the bilinear group action standing in for `[sk] H(m)` in `G₁`. -/
+ variable {R : Type} [CommRing R] {S : Type} [AddCommGroup S] [Module R S]
+diff --git a/Lutar/Innovations/round12/Pachakuti_Lineage_Cohomology.lean b/Lutar/Innovations/round12/Pachakuti_Lineage_Cohomology.lean
+index d9e632a..d6f9e97 100644
+--- a/Lutar/Innovations/round12/Pachakuti_Lineage_Cohomology.lean
++++ b/Lutar/Innovations/round12/Pachakuti_Lineage_Cohomology.lean
+@@ -87,6 +87,11 @@ def zerothCocycles (L : LineageComplex) : Submodule ℤ (L.C 0) :=
+ /-- `H⁰` of the lineage complex. With no degree `−1`, this is exactly `ker d⁰`. -/
+ def H0 (L : LineageComplex) : Type := zerothCocycles L
+ 
++/-- `H0 L` is a plain `def`, so instance search does not see through it: transport the additive
++group structure of the submodule `ker d⁰` explicitly. This supplies the `0` of `H0 L`. -/
++instance instAddCommGroupH0 (L : LineageComplex) : AddCommGroup (H0 L) :=
++  inferInstanceAs (AddCommGroup (zerothCocycles L))
++
+ /-- **Doctrine consistency** (model-level predicate): no inherited obligation persists un-discharged
+ as a non-trivial *global* class. Concretely: every degree-0 cocycle is zero — every globally-coherent
+ obligation has already been discharged or is honestly localized (not a global cocycle). -/
+diff --git a/Lutar/Innovations/round2/MartingaleLambda.lean b/Lutar/Innovations/round2/MartingaleLambda.lean
+index df772ce..c61b4bc 100644
+--- a/Lutar/Innovations/round2/MartingaleLambda.lean
++++ b/Lutar/Innovations/round2/MartingaleLambda.lean
+@@ -12,6 +12,9 @@ Doctrine: v11 LOCKED | Λ = Conjecture 1 (NOT a theorem)
+ This namespace is OUTSIDE the locked kernel (749/14/163).
+ -/
+ 
++variable {Ω : Type*} {m0 : MeasurableSpace Ω} {μ : MeasureTheory.Measure Ω}
++  {ι : Type*} [Preorder ι] [LocallyFiniteOrderBot ι] [Bot ι] [IsEmpty {i : ι // i < ⊥}]
++
+ /-- Model Λ's rolling compliance score as a martingale M_t.
+     Optional Stopping Theorem: E[M_τ] = E[M_0] — halt decisions are unbiased.
+     This provides a formal budget for halt frequency without compliance bias. -/
+@@ -19,13 +22,10 @@ This namespace is OUTSIDE the locked kernel (749/14/163).
+ -- The Optional Stopping Theorem is available in Mathlib.Probability.Martingale.Stopping
+ -- Here we state the type signature for SZL's compliance martingale application
+ 
+-variable {Ω : Type*} {m0 : MeasurableSpace Ω} {μ : MeasureTheory.Measure Ω}
+-  {ι : Type*} [Preorder ι] [LocallyFiniteOrderBot ι] [IsEmpty {i : ι // i < ⊥}]
+-
+ -- Compliance score martingale: E[Λ_{t+1} | F_t] = Λ_t
+ -- Formal statement via Mathlib's martingale definition
+ theorem martingale_lambda_type_valid
+     (Λ : ι → Ω → ℝ) (ℱ : MeasureTheory.Filtration ι m0) :
+-    (MeasureTheory.Martingale Λ ℱ μ) → True := by trivial
++    (MeasureTheory.Martingale Λ ℱ μ) → True := by intro _; trivial
+ 
+ end Lutar.Innovations.Round2
+diff --git a/Lutar/Innovations/round2/PersistenceGate.lean b/Lutar/Innovations/round2/PersistenceGate.lean
+index 19f94d3..b2606d5 100644
+--- a/Lutar/Innovations/round2/PersistenceGate.lean
++++ b/Lutar/Innovations/round2/PersistenceGate.lean
+@@ -12,10 +12,10 @@ Doctrine: v11 LOCKED | Λ = Conjecture 1 (NOT a theorem)
+ This namespace is OUTSIDE the locked kernel (749/14/163).
+ -/
+ 
+-/-- A pod is admissible iff its compliance profile lies in the same connected
+-    component (compliance basin) as the ideal-compliant spec in Reeb graph space. -/
+ variable (PodSpec : Type*) [TopologicalSpace PodSpec]
+ 
++/-- A pod is admissible iff its compliance profile lies in the same connected
++    component (compliance basin) as the ideal-compliant spec in Reeb graph space. -/
+ def ComplianceBasin (ideal : PodSpec) (f : PodSpec → ℝ) : Set PodSpec :=
+   {pod | f pod ≥ f ideal - 0.1}
+ 
+diff --git a/Lutar/Innovations/round2/Provenon.lean b/Lutar/Innovations/round2/Provenon.lean
+index 1d0b531..11bbb35 100644
+--- a/Lutar/Innovations/round2/Provenon.lean
++++ b/Lutar/Innovations/round2/Provenon.lean
+@@ -12,7 +12,7 @@ Doctrine: v11 LOCKED | Λ = Conjecture 1 (NOT a theorem)
+ This namespace is OUTSIDE the locked kernel (749/14/163).
+ -/
+ 
+-/-- Receipts encode as elements of a free algebra k⟨X₁,...,Xₙ⟩; 
++/- Receipts encode as elements of a free algebra k⟨X₁,...,Xₙ⟩; 
+     anti-collision follows from the Schwartz-Zippel lemma for free algebras. -/
+ variable (k : Type*) [Field k] (n : ℕ)
+ 
+diff --git a/Lutar/Innovations/round2/SpectralAdmit.lean b/Lutar/Innovations/round2/SpectralAdmit.lean
+index 4190809..c7ebdc7 100644
+--- a/Lutar/Innovations/round2/SpectralAdmit.lean
++++ b/Lutar/Innovations/round2/SpectralAdmit.lean
+@@ -1,5 +1,5 @@
+ import Mathlib.Tactic
+-import Mathlib.Analysis.Matrix
++import Mathlib.Analysis.Matrix.Normed
+ import Mathlib.LinearAlgebra.Eigenspace.Basic
+ 
+ namespace Lutar.Innovations.Round2
+@@ -22,8 +22,8 @@ theorem spectral_admit_stability_certificate
+     (ε : ℝ) (hε : 0 < ε) :
+     ∃ (τ : ℝ), τ > 0 ∧ τ < 1 / ε := by
+   obtain ⟨gap, hgap_pos, hgap_lt⟩ := h
+-  exact ⟨1 / (gap * ε), by positivity, by
+-    rw [div_lt_div_iff (mul_pos hgap_pos hε) hε]
+-    linarith⟩
++  exact ⟨gap / ε, div_pos hgap_pos hε, by
++    rw [div_lt_div_iff_of_pos_right hε]
++    exact hgap_lt⟩
+ 
+ end Lutar.Innovations.Round2
+diff --git a/Lutar/Innovations/round4/CRTReceiptShard.lean b/Lutar/Innovations/round4/CRTReceiptShard.lean
+index 4bb8424..ff238b1 100644
+--- a/Lutar/Innovations/round4/CRTReceiptShard.lean
++++ b/Lutar/Innovations/round4/CRTReceiptShard.lean
+@@ -9,6 +9,8 @@
+ -- Signed-off-by: Yachay <yachay@szlholdings.ai>
+ -- Co-Authored-By: Perplexity Computer Agent <agent@perplexity.ai>
+ 
++import Mathlib.Data.Nat.ModEq
++
+ namespace Lutar.Innovations.Round4.CRTReceiptShard
+ 
+ /-- CRT: if r and r' agree modulo both coprime moduli, they agree modulo their product. -/
+@@ -17,15 +19,7 @@ theorem crt_unique_reconstruction (r r' m₁ m₂ : ℕ)
+     (h₁ : r % m₁ = r' % m₁)
+     (h₂ : r % m₂ = r' % m₂) :
+     r % (m₁ * m₂) = r' % (m₁ * m₂) := by
+-  have hdvd₁ : m₁ ∣ (r - r' : ℤ).natAbs := by
+-    rw [← Int.natCast_dvd_natCast]
+-    rw [Int.natAbs_of_nonneg (by omega)]
+-    omega
+-  have hdvd₂ : m₂ ∣ (r - r' : ℤ).natAbs := by
+-    rw [← Int.natCast_dvd_natCast]
+-    rw [Int.natAbs_of_nonneg (by omega)]
+-    omega
+-  exact Nat.ModEq.comm (Nat.chineseRemainder hcop (Nat.modEq_comm.mpr (Nat.modEq_iff_dvd'.mpr hdvd₁ (by omega))) (Nat.modEq_comm.mpr (Nat.modEq_iff_dvd'.mpr hdvd₂ (by omega)))).2
++  exact (Nat.modEq_and_modEq_iff_modEq_mul hcop).mp ⟨h₁, h₂⟩
+ 
+ /-- Each shard residue is bounded by its modulus. -/
+ theorem crt_shard_bounds (receipt_id m₁ m₂ : ℕ) (hm1 : 0 < m₁) (hm2 : 0 < m₂) :
+diff --git a/Lutar/Innovations/round4/CopperScrollDAGHeight.lean b/Lutar/Innovations/round4/CopperScrollDAGHeight.lean
+index f1bb9bd..88c97b2 100644
+--- a/Lutar/Innovations/round4/CopperScrollDAGHeight.lean
++++ b/Lutar/Innovations/round4/CopperScrollDAGHeight.lean
+@@ -9,6 +9,8 @@
+ -- Signed-off-by: Yachay <yachay@szlholdings.ai>
+ -- Co-Authored-By: Perplexity Computer Agent <agent@perplexity.ai>
+ 
++import Mathlib.Data.Nat.Notation
++
+ namespace Lutar.Innovations.Round4.CopperScrollDAGHeight
+ 
+ /-- Minimal append-only ledger entry: height and optional predecessor index. -/
+@@ -27,11 +29,12 @@ theorem copper_scroll_height_monotone (e : LedgerEntry) (h : appendOnlyInvariant
+     (hp : e.prevHeight.isSome) :
+     e.prevHeight.get hp < e.height := by
+   unfold appendOnlyInvariant at h
+-  cases heq : e.prevHeight with
+-  | none => simp [heq] at hp
++  obtain ⟨height, prev⟩ := e
++  cases prev with
++  | none => simp at hp
+   | some ph =>
+-    simp [heq] at h
+-    simp [heq, Option.get]
++    simp only at h
++    simp only [Option.get_some]
+     omega
+ 
+ /-- Genesis entry has height 0. -/
+diff --git a/Lutar/Innovations/round4/ELSBonferroniBound.lean b/Lutar/Innovations/round4/ELSBonferroniBound.lean
+index e5db1b5..b5d49fd 100644
+--- a/Lutar/Innovations/round4/ELSBonferroniBound.lean
++++ b/Lutar/Innovations/round4/ELSBonferroniBound.lean
+@@ -11,6 +11,14 @@
+ -- Signed-off-by: Yachay <yachay@szlholdings.ai>
+ -- Co-Authored-By: Perplexity Computer Agent <agent@perplexity.ai>
+ 
++import Mathlib.Data.Rat.Defs
++import Mathlib.Algebra.Order.Field.Rat
++import Mathlib.Algebra.Order.Ring.Rat
++import Mathlib.Data.Rat.Cast.Order
++import Mathlib.Tactic.Positivity
++import Mathlib.Tactic.SplitIfs
++import Mathlib.Tactic.NormNum
++
+ namespace Lutar.Innovations.Round4.ELSBonferroniBound
+ 
+ /-- Expected ELS count: 2 * corpus_size * max_skip / alphabet_size^word_length -/
+@@ -25,8 +33,11 @@ def bonferroniELSBound (C K L sigma W : ℕ) : ℚ :=
+ /-- More patterns searched → higher false-positive risk (monotone in W). -/
+ theorem els_bonferroni_monotone_in_W (C K L sigma W₁ W₂ : ℕ) (h : W₁ ≤ W₂) :
+     bonferroniELSBound C K L sigma W₁ ≤ bonferroniELSBound C K L sigma W₂ := by
++  have hE : (0 : ℚ) ≤ expectedELSCount C K L sigma := by
++    unfold expectedELSCount
++    split_ifs <;> positivity
+   unfold bonferroniELSBound
+-  apply mul_le_mul_of_nonneg_right _ (le_of_lt (by positivity))
++  apply mul_le_mul_of_nonneg_right _ hE
+   exact_mod_cast h
+ 
+ /-- Larger alphabet → lower false-positive rate (monotone in sigma for L ≥ 1). -/
+diff --git a/Lutar/Innovations/round4/EnochEpochAlignment.lean b/Lutar/Innovations/round4/EnochEpochAlignment.lean
+index c3bd44a..99c32a6 100644
+--- a/Lutar/Innovations/round4/EnochEpochAlignment.lean
++++ b/Lutar/Innovations/round4/EnochEpochAlignment.lean
+@@ -9,6 +9,8 @@
+ -- Signed-off-by: Yachay <yachay@szlholdings.ai>
+ -- Co-Authored-By: Perplexity Computer Agent <agent@perplexity.ai>
+ 
++import Mathlib.Data.Nat.Notation
++
+ namespace Lutar.Innovations.Round4.EnochEpochAlignment
+ 
+ /-- 364 = 52 * 7: the Enoch epoch is exactly 52 weeks. -/
+diff --git a/Lutar/Innovations/round4/MasoreticChecksum.lean b/Lutar/Innovations/round4/MasoreticChecksum.lean
+index 947516d..34746ae 100644
+--- a/Lutar/Innovations/round4/MasoreticChecksum.lean
++++ b/Lutar/Innovations/round4/MasoreticChecksum.lean
+@@ -9,6 +9,8 @@
+ -- Signed-off-by: Yachay <yachay@szlholdings.ai>
+ -- Co-Authored-By: Perplexity Computer Agent <agent@perplexity.ai>
+ 
++import Mathlib.Tactic.NormNum
++
+ namespace Lutar.Innovations.Round4.MasoreticChecksum
+ 
+ /-- Reference values for Masoretic validation: total length and midpoint byte. -/
+@@ -19,7 +21,7 @@ structure MasoreticRef where
+ /-- A byte list is Masoretically valid if length matches and midpoint byte matches. -/
+ def masoreticValid (bytes : List UInt8) (ref : MasoreticRef) : Prop :=
+   bytes.length = ref.totalLen ∧
+-  bytes.get? (ref.totalLen / 2) = some ref.midpointByte
++  bytes[ref.totalLen / 2]? = some ref.midpointByte
+ 
+ /-- Masoretic validity is decidable: both conditions are decidable equalities. -/
+ instance masoreticDecidable (bytes : List UInt8) (ref : MasoreticRef) :
+diff --git a/Lutar/Innovations/round4/MayaLCMEpochSync.lean b/Lutar/Innovations/round4/MayaLCMEpochSync.lean
+index 6eebc34..33a8d67 100644
+--- a/Lutar/Innovations/round4/MayaLCMEpochSync.lean
++++ b/Lutar/Innovations/round4/MayaLCMEpochSync.lean
+@@ -10,6 +10,9 @@
+ -- Signed-off-by: Yachay <yachay@szlholdings.ai>
+ -- Co-Authored-By: Perplexity Computer Agent <agent@perplexity.ai>
+ 
++import Mathlib.Algebra.Group.Nat.Defs
++import Mathlib.Algebra.Divisibility.Basic
++
+ namespace Lutar.Innovations.Round4.MayaLCMEpochSync
+ 
+ /-- Maya Calendar Round: lcm(365, 260) = 18980. -/
+diff --git a/Lutar/Innovations/round4/PlimptonReciprocal.lean b/Lutar/Innovations/round4/PlimptonReciprocal.lean
+index c3575dc..52116a3 100644
+--- a/Lutar/Innovations/round4/PlimptonReciprocal.lean
++++ b/Lutar/Innovations/round4/PlimptonReciprocal.lean
+@@ -7,6 +7,8 @@
+ -- Signed-off-by: Yachay <yachay@szlholdings.ai>
+ -- Co-Authored-By: Perplexity Computer Agent <agent@perplexity.ai>
+ 
++import Mathlib.Tactic
++
+ namespace Lutar.Innovations.Round4.PlimptonReciprocal
+ 
+ /-- Every reciprocal pair (p, q) with p * q = 1 generates a Pythagorean identity.
+diff --git a/Lutar/Innovations/round4/SexagesimalReciprocal.lean b/Lutar/Innovations/round4/SexagesimalReciprocal.lean
+index b189663..6aad2fd 100644
+--- a/Lutar/Innovations/round4/SexagesimalReciprocal.lean
++++ b/Lutar/Innovations/round4/SexagesimalReciprocal.lean
+@@ -8,6 +8,10 @@
+ -- Signed-off-by: Yachay <yachay@szlholdings.ai>
+ -- Co-Authored-By: Perplexity Computer Agent <agent@perplexity.ai>
+ 
++import Mathlib.Data.Nat.Prime.Basic
++import Mathlib.Tactic.IntervalCases
++import Mathlib.Tactic.NormNum.Prime
++
+ namespace Lutar.Innovations.Round4.SexagesimalReciprocal
+ 
+ /-- n is 60-regular: every prime factor of n is 2, 3, or 5. -/
+@@ -17,9 +21,9 @@ def is60Regular (n : ℕ) : Prop :=
+ /-- 60 itself is 60-regular. -/
+ theorem sixty_is_60regular : is60Regular 60 := by
+   intro p hp hdvd
+-  have := Nat.Prime.eq_one_or_self_of_dvd hp 60 hdvd
++  have hle : p ≤ 60 := Nat.le_of_dvd (by norm_num) hdvd
+   -- 60 = 2^2 * 3 * 5; primes dividing 60 are exactly {2,3,5}
+-  interval_cases p <;> simp_all [Nat.Prime] <;> omega
++  interval_cases p <;> first | omega | (exact absurd hp (by norm_num))
+ 
+ /-- Product of 60-regular numbers is 60-regular. -/
+ theorem is60Regular_mul (m n : ℕ) (hm : is60Regular m) (hn : is60Regular n) :
+@@ -37,7 +41,7 @@ theorem is60Regular_one : is60Regular 1 := by
+ /-- Concrete instances: 2, 3, 4, 5, 6, 8, 9, 10, 12 are all 60-regular. -/
+ theorem two_is_60regular : is60Regular 2 := by
+   intro p hp hdvd
+-  have := Nat.Prime.eq_one_or_self_of_dvd hp 2 hdvd
+-  interval_cases p <;> simp_all [Nat.Prime]
++  have hle : p ≤ 2 := Nat.le_of_dvd (by norm_num) hdvd
++  interval_cases p <;> first | omega | (exact absurd hp (by norm_num))
+ 
+ end Lutar.Innovations.Round4.SexagesimalReciprocal
+diff --git a/Lutar/Innovations/round4/SulbaSqrtBound.lean b/Lutar/Innovations/round4/SulbaSqrtBound.lean
+index aab087c..57f2aef 100644
+--- a/Lutar/Innovations/round4/SulbaSqrtBound.lean
++++ b/Lutar/Innovations/round4/SulbaSqrtBound.lean
+@@ -10,6 +10,9 @@
+ -- Signed-off-by: Yachay <yachay@szlholdings.ai>
+ -- Co-Authored-By: Perplexity Computer Agent <agent@perplexity.ai>
+ 
++import Mathlib.Data.Rat.Defs
++import Mathlib.Tactic.NormNum
++
+ namespace Lutar.Innovations.Round4.SulbaSqrtBound
+ 
+ /-- The Sulba Sutra approximation to √2. -/
+@@ -17,27 +20,27 @@ def sulbaSqrt2 : ℚ := 577 / 408
+ 
+ /-- The Sulba formula: 1 + 1/3 + 1/12 - 1/408 = 577/408. -/
+ theorem sulba_formula_eq : (1 : ℚ) + 1/3 + 1/(3*4) - 1/(3*4*34) = sulbaSqrt2 := by
+-  decide
++  norm_num [sulbaSqrt2]
+ 
+ /-- The Sulba approximation is positive. -/
+-theorem sulba_positive : 0 < sulbaSqrt2 := by decide
++theorem sulba_positive : 0 < sulbaSqrt2 := by norm_num [sulbaSqrt2]
+ 
+ /-- (577/408)² = 332929/166464 — exact rational computation. -/
+-theorem sulba_square_exact : sulbaSqrt2 ^ 2 = 332929 / 166464 := by decide
++theorem sulba_square_exact : sulbaSqrt2 ^ 2 = 332929 / 166464 := by norm_num [sulbaSqrt2]
+ 
+ /-- The Sulba approximation squared slightly exceeds 2 (it's an overestimate). -/
+-theorem sulba_overestimates_2 : sulbaSqrt2 ^ 2 > 2 := by decide
++theorem sulba_overestimates_2 : sulbaSqrt2 ^ 2 > 2 := by norm_num [sulbaSqrt2]
+ 
+ /-- The error in (577/408)² vs 2 is exactly 1/166464. -/
+-theorem sulba_square_error_exact : sulbaSqrt2 ^ 2 - 2 = 1 / 166464 := by decide
++theorem sulba_square_error_exact : sulbaSqrt2 ^ 2 - 2 = 1 / 166464 := by norm_num [sulbaSqrt2]
+ 
+ /-- The squared error is less than 1/100000 (usable precision bound). -/
+-theorem sulba_square_error_small : sulbaSqrt2 ^ 2 - 2 < 1 / 100000 := by decide
++theorem sulba_square_error_small : sulbaSqrt2 ^ 2 - 2 < 1 / 100000 := by norm_num [sulbaSqrt2]
+ 
+ /-- The Sulba value is less than 3/2. -/
+-theorem sulba_less_than_threehalves : sulbaSqrt2 < 3 / 2 := by decide
++theorem sulba_less_than_threehalves : sulbaSqrt2 < 3 / 2 := by norm_num [sulbaSqrt2]
+ 
+ /-- The Sulba value is greater than 1. -/
+-theorem sulba_greater_than_one : sulbaSqrt2 > 1 := by decide
++theorem sulba_greater_than_one : sulbaSqrt2 > 1 := by norm_num [sulbaSqrt2]
+ 
+ end Lutar.Innovations.Round4.SulbaSqrtBound
+diff --git a/Lutar/Innovations/round4/YBCHeronConvergence.lean b/Lutar/Innovations/round4/YBCHeronConvergence.lean
+index bf4a992..af5970c 100644
+--- a/Lutar/Innovations/round4/YBCHeronConvergence.lean
++++ b/Lutar/Innovations/round4/YBCHeronConvergence.lean
+@@ -9,6 +9,10 @@
+ -- Signed-off-by: Yachay <yachay@szlholdings.ai>
+ -- Co-Authored-By: Perplexity Computer Agent <agent@perplexity.ai>
+ 
++import Mathlib.Basic.Real.Basic
++import Mathlib.Tactic.Positivity
++import Mathlib.Tactic.NormNum
++
+ namespace Lutar.Innovations.Round4.YBCHeronConvergence
+ 
+ /-- Heron's method: one iteration step. Given x > 0, x' = (x + a/x)/2 is positive. -/
+@@ -16,10 +20,10 @@ theorem heron_step_positive (x a : ℝ) (hx : 0 < x) (ha : 0 < a) :
+     0 < (x + a / x) / 2 := by positivity
+ 
+ /-- The Babylonian approximation 577/408 satisfies (577/408)² > 2. -/
+-theorem babylonian_overestimates : (577 : ℚ) / 408 * (577 / 408) > 2 := by decide
++theorem babylonian_overestimates : (577 : ℚ) / 408 * (577 / 408) > 2 := by norm_num
+ 
+ /-- The Babylonian approximation 577/408 satisfies (577/408)² < 2 + 1/100000. -/
+-theorem babylonian_close_to_2 : (577 : ℚ) / 408 * (577 / 408) < 2 + 1 / 100000 := by decide
++theorem babylonian_close_to_2 : (577 : ℚ) / 408 * (577 / 408) < 2 + 1 / 100000 := by norm_num
+ 
+ /-- Heron iterate positivity: starting from any positive x, all iterates are positive. -/
+ theorem heron_iterates_positive (n : ℕ) (x₀ : ℝ) (hx : 0 < x₀) :
+diff --git a/Lutar/Innovations/round5/HermesRGFixedPoint.lean b/Lutar/Innovations/round5/HermesRGFixedPoint.lean
+index 951f4bc..9d1f629 100644
+--- a/Lutar/Innovations/round5/HermesRGFixedPoint.lean
++++ b/Lutar/Innovations/round5/HermesRGFixedPoint.lean
+@@ -5,6 +5,8 @@
+ -- Signed-off-by: Yachay <yachay@szlholdings.ai>
+ -- Co-Authored-By: Perplexity Computer Agent <agent@perplexity.ai>
+ 
++import Mathlib.Basic.Real.Basic
++
+ namespace Lutar.Innovations.Round5
+ 
+ /-- A policy is RG-fixed if its beta function vanishes at its coupling constant.
+diff --git a/Lutar/Innovations/round5/KeplerFleetScale.lean b/Lutar/Innovations/round5/KeplerFleetScale.lean
+index e5e05d6..266f4f2 100644
+--- a/Lutar/Innovations/round5/KeplerFleetScale.lean
++++ b/Lutar/Innovations/round5/KeplerFleetScale.lean
+@@ -6,6 +6,8 @@
+ -- Signed-off-by: Yachay <yachay@szlholdings.ai>
+ -- Co-Authored-By: Perplexity Computer Agent <agent@perplexity.ai>
+ 
++import Mathlib.Analysis.SpecialFunctions.Pow.Real
++
+ namespace Lutar.Innovations.Round5
+ 
+ /-- Kepler-Fleet Scaling CONJECTURE (not theorem):
+diff --git a/Lutar/Innovations/round5/OuroborosKleeneHalt.lean b/Lutar/Innovations/round5/OuroborosKleeneHalt.lean
+index 7a05b92..ccacb2f 100644
+--- a/Lutar/Innovations/round5/OuroborosKleeneHalt.lean
++++ b/Lutar/Innovations/round5/OuroborosKleeneHalt.lean
+@@ -14,8 +14,8 @@ namespace Lutar.Innovations.Round5
+     Mathlib: OrderHom.lfp_eq, OrderHom.lfp_le -/
+ theorem ouroboros_kleene_least_fixed_point
+     {alpha : Type} [CompleteLattice alpha]
+-    (Phi : alpha ->o alpha)
++    (Phi : alpha →o alpha)
+     : exists x : alpha, Phi x = x /\ forall y : alpha, Phi y = y -> x <= y := by
+-  exact ⟨OrderHom.lfp Phi, OrderHom.lfp_eq Phi, fun y hy => OrderHom.lfp_le Phi hy.le⟩
++  exact ⟨OrderHom.lfp Phi, OrderHom.map_lfp Phi, fun y hy => OrderHom.lfp_le Phi hy.le⟩
+ 
+ end Lutar.Innovations.Round5
+diff --git a/Lutar/Innovations/round5/TetractysHMBound.lean b/Lutar/Innovations/round5/TetractysHMBound.lean
+index 946d886..7fed16b 100644
+--- a/Lutar/Innovations/round5/TetractysHMBound.lean
++++ b/Lutar/Innovations/round5/TetractysHMBound.lean
+@@ -16,10 +16,20 @@ open Real Finset
+ theorem tetractys_hm_le_gm_le_am
+     (n : Nat) (hn : 0 < n) (x : Fin n -> Real) (hx : forall i, 0 < x i)
+     : (n : Real) / (Finset.univ.sum (fun i => (x i)^(-(1:Real)))) <=
+-      (Finset.univ.prod (fun i => x i)) ^ ((1 : Real) / n) /      (Finset.univ.prod (fun i => x i)) ^ ((1 : Real) / n) <=
++      (Finset.univ.prod (fun i => x i)) ^ ((1 : Real) / n) /\
++      (Finset.univ.prod (fun i => x i)) ^ ((1 : Real) / n) <=
+       (Finset.univ.sum (fun i => x i)) / n := by
++  have hne : (Finset.univ : Finset (Fin n)).Nonempty :=
++    Finset.univ_nonempty_iff.mpr (Fin.pos_iff_nonempty.mp hn)
++  have hnR : (0 : Real) < n := Nat.cast_pos.mpr hn
+   constructor
+-  . sorry -- HM <= GM: AM-GM applied to reciprocals
+-  . sorry -- GM <= AM: inner_mul_le_norm_mul_iff or NNReal.geom_mean_le_arith_mean
++  . -- HM <= GM: Mathlib `Real.harm_mean_le_geom_mean` with unit weights
++    have h := Real.harm_mean_le_geom_mean (Finset.univ : Finset (Fin n)) hne (fun _ => (1 : Real)) x
++      (fun _ _ => one_pos) (by simpa using hnR) (fun i _ => hx i)
++    simpa [Real.rpow_neg_one, one_div] using h
++  . -- GM <= AM: Mathlib `Real.geom_mean_le_arith_mean` with unit weights
++    have h := Real.geom_mean_le_arith_mean (Finset.univ : Finset (Fin n)) (fun _ => (1 : Real)) x
++      (fun _ _ => zero_le_one) (by simpa using hnR) (fun i _ => (hx i).le)
++    simpa [one_div] using h
+ 
+ end Lutar.Innovations.Round5
+diff --git a/Lutar/Innovations/round6/CauchySchwartzLambda.lean b/Lutar/Innovations/round6/CauchySchwartzLambda.lean
+index b7ef5b5..5e28f05 100644
+--- a/Lutar/Innovations/round6/CauchySchwartzLambda.lean
++++ b/Lutar/Innovations/round6/CauchySchwartzLambda.lean
+@@ -26,8 +26,7 @@ theorem cauchy_schwarz_lambda (n : Nat) (Lambda w : Fin n -> Real) :
+     (Finset.univ.sum (fun i => Lambda i * w i)) ^ 2 <=
+     (Finset.univ.sum (fun i => Lambda i ^ 2)) *
+     (Finset.univ.sum (fun i => w i ^ 2)) := by
+-  have h := Finset.inner_mul_le_norm_sq_mul_norm_sq (𝕜 := Real) Finset.univ Lambda w
+-  simpa [Finset.inner_apply, inner_apply] using h
++  exact Finset.sum_mul_sq_le_sq_mul_sq Finset.univ Lambda w
+ 
+ /-- Audit gate: verdict is valid only if the Cauchy-Schwarz bound is met. -/
+ noncomputable def verdictStrengthGate
+diff --git a/Lutar/Innovations/round6/EulerFleetTopology.lean b/Lutar/Innovations/round6/EulerFleetTopology.lean
+index 0ea3ea3..922919c 100644
+--- a/Lutar/Innovations/round6/EulerFleetTopology.lean
++++ b/Lutar/Innovations/round6/EulerFleetTopology.lean
+@@ -41,7 +41,7 @@ theorem euler_fleet_invariant (g : FleetGraph)
+ def fleetTopologyHealthy (g : FleetGraph) : Bool :=
+   eulerCharacteristic g == 2
+ 
+-/-- Example: 5-node complete fleet K5 minus 2 edges + 7 faces is healthy. -/
++-- Example: 5-node complete fleet K5 minus 2 edges + 7 faces is healthy.
+ #eval fleetTopologyHealthy ⟨5, 10, 7⟩   -- chi = 5 - 10 + 7 = 2, healthy
+ #eval fleetTopologyHealthy ⟨4, 4, 3⟩    -- chi = 4 - 4 + 3 = 3, ALERT
+ 
+diff --git a/Lutar/Innovations/round6/NoetherAudit.lean b/Lutar/Innovations/round6/NoetherAudit.lean
+index 8491fbc..bad0e08 100644
+--- a/Lutar/Innovations/round6/NoetherAudit.lean
++++ b/Lutar/Innovations/round6/NoetherAudit.lean
+@@ -11,6 +11,7 @@
+ 
+ import Mathlib.Algebra.BigOperators.Group.Finset.Basic
+ import Mathlib.Data.Fintype.Basic
++import Mathlib.Basic.Real.Basic
+ 
+ namespace Lutar.Innovations.Round6
+ 
+@@ -42,6 +43,6 @@ theorem noether_audit_conservation (n : Nat) (D : AuditTrace n -> Real)
+     auditCharge n t1 = auditCharge n t2 := by
+   obtain ⟨sigma, hsigma⟩ := hOrbit
+   simp only [auditCharge, hsigma]
+-  rw [Finset.sum_equiv sigma (by simp) (by simp)]
++  exact (Equiv.sum_comp sigma t1.weight).symm
+ 
+ end Lutar.Innovations.Round6
+diff --git a/Lutar/Innovations/round7/CalugareanuFleetInvariant.lean b/Lutar/Innovations/round7/CalugareanuFleetInvariant.lean
+index 7997805..0f8380a 100644
+--- a/Lutar/Innovations/round7/CalugareanuFleetInvariant.lean
++++ b/Lutar/Innovations/round7/CalugareanuFleetInvariant.lean
+@@ -25,7 +25,8 @@ theorem calugareanu (e : RibbonEdge) :
+ /-- Linking number is preserved under twist-writhe exchange (supercoiling) -/
+ theorem lk_exchange_invariant (e : RibbonEdge) :
+     linkingNumber e = linkingNumber ⟨e.twist + 1, e.writhe - 1⟩ := by
+-  unfold linkingNumber; ring
++  show e.twist + e.writhe = (e.twist + 1) + (e.writhe - 1)
++  omega
+ 
+ /-- Fleet of 5 flagships: |V| = 5, linking number of empty fleet = 0 -/
+ def fleetSize : Nat := 5
+diff --git a/Lutar/Innovations/round7/KimuraAgentConvergence.lean b/Lutar/Innovations/round7/KimuraAgentConvergence.lean
+index ab46de1..e6aaf91 100644
+--- a/Lutar/Innovations/round7/KimuraAgentConvergence.lean
++++ b/Lutar/Innovations/round7/KimuraAgentConvergence.lean
+@@ -7,6 +7,12 @@
+ -- Signed-off-by: Yachay <yachay@szlholdings.ai>
+ -- Co-Authored-By: Perplexity Computer Agent <agent@perplexity.ai>
+ 
++import Mathlib.Algebra.Order.Field.Basic
++import Mathlib.Data.Rat.Cast.Order
++import Mathlib.Tactic.Positivity
++import Mathlib.Tactic.NormNum
++import Mathlib.Tactic.Linarith
++
+ namespace Lutar.Innovations.Round7.KimuraAgentConvergence
+ 
+ /-- Neutral fixation probability: 1/(2N) for diploid population of size N -/
+@@ -22,13 +28,16 @@ theorem neutral_fixation_positive (N : Nat) (hN : 0 < N) :
+ theorem larger_pop_lower_fixation (N M : Nat) (hN : 0 < N) (hM : 0 < M) (hNM : N < M) :
+     neutralFixationProb M hM < neutralFixationProb N hN := by
+   unfold neutralFixationProb
+-  apply Rat.div_lt_div_of_lt_left (by norm_num) (by positivity) (by positivity)
+-  norm_cast; omega
++  apply one_div_lt_one_div_of_lt (by positivity)
++  have h : (N : Rat) < (M : Rat) := by exact_mod_cast hNM
++  linarith
+ 
+ /-- Fixation probability is bounded above by 1 -/
+ theorem fixation_bounded (N : Nat) (hN : 0 < N) :
+     neutralFixationProb N hN ≤ 1 := by
+   unfold neutralFixationProb
+-  apply Rat.div_le_one_of_le <;> [norm_cast; omega; positivity]
++  apply div_le_one_of_le₀ _ (by positivity)
++  have h : (1 : Rat) ≤ (N : Rat) := by exact_mod_cast hN
++  linarith
+ 
+ end Lutar.Innovations.Round7.KimuraAgentConvergence
+diff --git a/Lutar/Innovations/round9/CauchyMultMono.lean b/Lutar/Innovations/round9/CauchyMultMono.lean
+index 41c1484..d4f2d1e 100644
+--- a/Lutar/Innovations/round9/CauchyMultMono.lean
++++ b/Lutar/Innovations/round9/CauchyMultMono.lean
+@@ -102,7 +102,7 @@ theorem monotone_additive_linear
+     · push_cast
+       have hgneg : g (-(↑(n + 1) : ℝ)) = -(g ↑(n + 1)) := by
+         have h := hg_add (↑(n + 1) : ℝ) (-(↑(n + 1) : ℝ))
+-        simp at h; linarith [hg0]
++        rw [add_neg_cancel, hg0] at h; linarith
+       rw [show -(↑n + 1 : ℝ) = -(↑(n + 1) : ℝ) by push_cast; ring,
+           hgneg, hg_nat (n + 1)]
+       push_cast; ring
+diff --git a/Lutar/Innovations/round9/MonotoneContinuous.lean b/Lutar/Innovations/round9/MonotoneContinuous.lean
+index 2c469db..757cc9c 100644
+--- a/Lutar/Innovations/round9/MonotoneContinuous.lean
++++ b/Lutar/Innovations/round9/MonotoneContinuous.lean
+@@ -80,7 +80,8 @@ Co-Authored-By: Perplexity Computer Agent <agent@perplexity.ai>
+ import Mathlib.Topology.Order.LeftRightLim
+ import Mathlib.Topology.Algebra.GroupWithZero
+ import Mathlib.Topology.Instances.NNReal.Lemmas
+-import Mathlib.Data.Real.Cardinality
++import Mathlib.Analysis.Real.Cardinality
++import Mathlib.Analysis.Complex.Exponential
+ 
+ namespace Lutar.Innovations.Round9.MonotoneContinuous
+ 
+@@ -128,7 +129,7 @@ theorem monotone_multiplicative_not_continuous_everywhere :
+     · subst hx; simp
+     · have hy : y ≠ 0 := by
+         rintro rfl
+-        exact hx (le_antisymm hxy (zero_le _))
++        exact hx (le_antisymm hxy zero_le)
+       simp [hx, hy]
+   · -- discontinuity at 0
+     intro hcont
+diff --git a/Lutar/Innovations/round9/VCGTruthfulness.lean b/Lutar/Innovations/round9/VCGTruthfulness.lean
+index e363604..e600816 100644
+--- a/Lutar/Innovations/round9/VCGTruthfulness.lean
++++ b/Lutar/Innovations/round9/VCGTruthfulness.lean
+@@ -41,6 +41,8 @@ import Mathlib.Algebra.Order.BigOperators.Group.Finset
+ import Mathlib.Order.Basic
+ import Mathlib.Algebra.Order.Sub.Defs
+ import Mathlib.Data.Real.Basic
++import Mathlib.Tactic.Linarith
++import Mathlib.Tactic.Ring
+ 
+ open BigOperators Finset
+ 
+@@ -48,10 +50,10 @@ namespace Lutar.Innovations.Round9.VCG
+ 
+ -- ── 1. Model ─────────────────────────────────────────────────────────────────
+ 
+-/-- Agent index type. -/
++-- Agent index type.
+ variable {N : Type*} [DecidableEq N] [Fintype N]
+ 
+-/-- Outcome type. Must be finite and inhabited. -/
++-- Outcome type. Must be finite and inhabited.
+ variable {X : Type*} [DecidableEq X] [Fintype X] [Nonempty X]
+ 
+ /-- A valuation profile assigns to each agent a function `X → ℝ`. -/
+diff --git a/Lutar/PACBayes/CapabilityImprovementRate.lean b/Lutar/PACBayes/CapabilityImprovementRate.lean
+index d02b844..f38fb20 100644
+--- a/Lutar/PACBayes/CapabilityImprovementRate.lean
++++ b/Lutar/PACBayes/CapabilityImprovementRate.lean
+@@ -1,3 +1,9 @@
++import Mathlib.Analysis.SpecialFunctions.Log.Basic
++import Mathlib.Analysis.Complex.ExponentialBounds
++import Mathlib.Analysis.SpecialFunctions.Pow.Real
++import Mathlib.MeasureTheory.Measure.ProbabilityMeasure
++import Mathlib.MeasureTheory.Measure.MeasureSpace
++
+ /-!
+ # SZL AGI Capability Improvement Rate — PAC-Bayes Bound
+ 
+@@ -84,10 +90,7 @@ Every RAE-1 receipt includes:
+ ```
+ -/
+ 
+-import Mathlib.Analysis.SpecialFunctions.Log.Basic
+-import Mathlib.Analysis.SpecialFunctions.Pow.Real
+-import Mathlib.MeasureTheory.Measure.ProbabilityMeasure
+-import Mathlib.MeasureTheory.Measure.MeasureSpace
++open MeasureTheory
+ 
+ namespace SZL.AGI.PACBayes
+ 
+@@ -125,7 +128,7 @@ noncomputable def score (b : BenchmarkResult) : ℝ :=
+ def szl_baseline : BenchmarkResult :=
+   { n_problems := 12, n_solved := 1, h_le := by norm_num }
+ 
+-#eval score szl_baseline  -- Expected: 0.0833... (displayed as 1/12 in kernel)
++#check score szl_baseline  -- Expected: 0.0833... (displayed as 1/12 in kernel)
+ 
+ /-- Score of the SZL baseline is 1/12 in ℝ. -/
+ theorem szl_baseline_score : score szl_baseline = 1 / 12 := by
+@@ -170,6 +173,41 @@ noncomputable def szl_concrete_bound : ℝ :=
+ 
+ /-! ## Core Theorems on the Concrete Bound -/
+ 
++/-- Helper: `ln 3 < 1.1`, from `e > 2.7182818283` and `exp 0.1 ≥ 1 + 0.1 + 0.1²/2`. -/
++theorem log_three_lt_aux : Real.log 3 < 1.1 := by
++  rw [Real.log_lt_iff_lt_exp (by norm_num)]
++  have he := Real.exp_one_gt_d9
++  have h01 : (1.105 : ℝ) ≤ Real.exp 0.1 := by
++    have := Real.quadratic_le_exp_of_nonneg (x := 0.1) (by norm_num)
++    norm_num at this ⊢
++    linarith
++  have hsplit : Real.exp 1.1 = Real.exp 1 * Real.exp 0.1 := by
++    rw [← Real.exp_add]
++    norm_num
++  rw [hsplit]
++  nlinarith
++
++/-- Helper: `1 ≤ √12 < 3.5`. -/
++theorem sqrt_twelve_bounds_aux : 1 ≤ Real.sqrt 12 ∧ Real.sqrt 12 < 3.5 := by
++  constructor
++  · exact Real.one_le_sqrt.mpr (by norm_num)
++  · rw [Real.sqrt_lt' (by norm_num)]
++    norm_num
++
++/-- Helper: `ln(2·√12/0.05) < 5`, from `√12 < 3.5` and `e⁵ > 2.718⁵ > 140`. -/
++theorem log_arg_lt_five_aux : Real.log (2 * Real.sqrt 12 / 0.05) < 5 := by
++  obtain ⟨h1, h2⟩ := sqrt_twelve_bounds_aux
++  rw [Real.log_lt_iff_lt_exp (by positivity)]
++  have he := Real.exp_one_gt_d9
++  have h5 : Real.exp 5 = Real.exp 1 ^ 5 := by
++    rw [← Real.exp_nat_mul]
++    norm_num
++  have hp : (2.718 : ℝ) ^ 5 < Real.exp 1 ^ 5 :=
++    pow_lt_pow_left₀ (by linarith) (by norm_num) (by norm_num)
++  rw [h5, div_lt_iff₀ (by norm_num)]
++  norm_num at hp ⊢
++  linarith
++
+ /-- The SZL concrete bound is strictly less than 1.
+ 
+     This is kernel-green via norm_num: the numeric value ≈ 0.4886 < 1.
+@@ -185,32 +223,15 @@ noncomputable def szl_concrete_bound : ℝ :=
+ -/
+ theorem szl_bound_lt_one : szl_concrete_bound < 1 := by
+   unfold szl_concrete_bound pac_bound
+-  apply Real.sqrt_lt_one
+-  · -- positivity: the argument is non-negative
+-    apply div_nonneg
+-    · apply add_nonneg
+-      · exact le_of_lt (Real.log_pos (by norm_num : (1:ℝ) < 3))
+-      · apply Real.log_nonneg
+-        apply le_div_iff₀ (by norm_num : (0:ℝ) < 0.05) |>.mpr
+-        norm_num [Real.sqrt_le_sqrt]
+-        norm_num
+-    · norm_num
+-  · -- the argument is < 1
+-    rw [div_lt_one (by norm_num : (0:ℝ) < 2 * 12)]
+-    -- Need: ln(3) + ln(2·√12/0.05) < 24
+-    -- ln(3) ≈ 1.099, ln(2·√12/0.05) = ln(80·√3) ≈ ln(138.6) ≈ 4.931
+-    -- Sum ≈ 6.030 < 24
+-    have h1 : Real.log 3 < 1.1 := by
+-      rw [show (1.1:ℝ) = Real.log (Real.exp 1.1) from (Real.log_exp 1.1).symm]
+-      apply Real.log_lt_log (by norm_num)
+-      norm_num [Real.exp_lt_exp]
+-    have h2 : Real.log (2 * Real.sqrt 12 / 0.05) < 5 := by
+-      rw [show (5:ℝ) = Real.log (Real.exp 5) from (Real.log_exp 5).symm]
+-      apply Real.log_lt_log
+-      · apply div_pos; apply mul_pos; norm_num; exact Real.sqrt_pos_of_pos (by norm_num)
+-        norm_num
+-      · norm_num [Real.exp_lt_exp, Real.sqrt_lt_sqrt]
+-    linarith
++  rw [Real.sqrt_lt' one_pos, Nat.cast_ofNat, one_pow]
++  -- the argument is < 1
++  rw [div_lt_one (by norm_num : (0:ℝ) < 2 * 12)]
++  -- Need: ln(3) + ln(2·√12/0.05) < 24
++  -- ln(3) ≈ 1.099, ln(2·√12/0.05) = ln(80·√3) ≈ ln(138.6) ≈ 4.931
++  -- Sum ≈ 6.030 < 24
++  have h1 : Real.log 3 < 1.1 := log_three_lt_aux
++  have h2 : Real.log (2 * Real.sqrt 12 / 0.05) < 5 := log_arg_lt_five_aux
++  linarith
+ 
+ /-- The SZL concrete bound is strictly positive.
+ 
+@@ -224,10 +245,9 @@ theorem szl_bound_positive : 0 < szl_concrete_bound := by
+   · apply add_pos_of_pos_of_nonneg
+     · exact Real.log_pos (by norm_num : (1:ℝ) < 3)
+     · apply Real.log_nonneg
+-      rw [le_div_iff₀ (by norm_num : (0:ℝ) < 0.05)]
+-      apply mul_le_mul_of_nonneg_right _ (by norm_num)
+-      apply mul_le_mul_of_nonneg_left _ (by norm_num)
+-      exact Real.one_le_sqrt.mpr (by norm_num)
++      rw [le_div_iff₀ (by norm_num : (0:ℝ) < 0.05), Nat.cast_ofNat]
++      have h12 : 1 ≤ Real.sqrt 12 := Real.one_le_sqrt.mpr (by norm_num)
++      linarith
+   · norm_num
+ 
+ /-- The SZL concrete bound is at most 0.51.
+@@ -248,7 +268,12 @@ theorem szl_bound_le_point51 : szl_concrete_bound ≤ 0.51 := by
+   -- The concrete numeric bound requires native_decide or a dedicated norm_num extension
+   -- For now we use linarith with the sub-1 bound (weaker than 0.51 but correct structure)
+   -- The 0.51 bound is verified numerically: sqrt((1.0986 + 4.9316)/24) = sqrt(0.2513) ≈ 0.5013
+-  norm_num [szl_concrete_bound, pac_bound, Real.sqrt_le_sqrt]
++  unfold szl_concrete_bound pac_bound
++  rw [Real.sqrt_le_left (by norm_num), Nat.cast_ofNat, div_le_iff₀ (by norm_num)]
++  have h1 : Real.log 3 < 1.1 := log_three_lt_aux
++  have h2 : Real.log (2 * Real.sqrt 12 / 0.05) < 5 := log_arg_lt_five_aux
++  norm_num at h1 h2 ⊢
++  linarith
+ 
+ /-! ## Main Theorem: Capability Improvement Rate Bound -/
+ 
+@@ -341,32 +366,18 @@ def falsified (n_claimed_improvement n_problems : ℕ) (kl_claimed δ : ℝ) : P
+ theorem full_putnam_improvement_falsified :
+     falsified 12 12 (Real.log 3) 0.05 := by
+   unfold falsified pac_bound
+-  norm_num
+   -- Need: 1 > sqrt((ln(3) + ln(2·√12/0.05)) / 24)
+   -- Equivalently: 1 > szl_concrete_bound — proven by szl_bound_lt_one
+   -- We re-prove here in unfolded form:
+-  rw [gt_iff_lt, ← Real.sqrt_one]
+-  apply Real.sqrt_lt_sqrt
+-  · apply div_nonneg
+-    · apply add_nonneg
+-      · exact le_of_lt (Real.log_pos (by norm_num : (1:ℝ) < 3))
+-      · apply Real.log_nonneg
+-        apply le_div_iff₀ (by norm_num : (0:ℝ) < 0.05) |>.mpr
+-        norm_num [Real.sqrt_le_sqrt]
+-        norm_num
+-    · norm_num
+-  · -- (ln(3) + ln(2√12/0.05)) / 24 < 1
+-    rw [div_lt_one (by norm_num : (0:ℝ) < 24)]
+-    have h1 : Real.log 3 < 1.1 := by
+-      rw [show (1.1:ℝ) = Real.log (Real.exp 1.1) from (Real.log_exp 1.1).symm]
+-      exact Real.log_lt_log (by norm_num) (by norm_num [Real.exp_lt_exp])
+-    have h2 : Real.log (2 * Real.sqrt 12 / 0.05) < 6 := by
+-      apply Real.log_lt_iff_lt_exp.mpr
+-      · apply div_pos; apply mul_pos; norm_num
+-        exact Real.sqrt_pos_of_pos (by norm_num)
+-        norm_num
+-      · norm_num [Real.exp_lt_exp]
++  rw [gt_iff_lt, Nat.cast_ofNat, div_self (by norm_num : (12:ℝ) ≠ 0), Real.sqrt_lt' one_pos,
++    one_pow]
++  -- (ln(3) + ln(2√12/0.05)) / 24 < 1
++  rw [div_lt_one (by norm_num : (0:ℝ) < 2 * 12)]
++  have h1 : Real.log 3 < 1.1 := log_three_lt_aux
++  have h2 : Real.log (2 * Real.sqrt 12 / 0.05) < 6 := by
++    have := log_arg_lt_five_aux
+     linarith
++  linarith
+ 
+ /-! ## KL Divergence Definition -/
+ 
+@@ -379,7 +390,7 @@ theorem full_putnam_improvement_falsified :
+     estimate is KL ≤ ln(3) ≈ 1.099 nats.
+ -/
+ noncomputable def kl_div
+-    {α : Type*} [Fintype α] [DecidableEq α]
++    {α : Type*} [Fintype α] [DecidableEq α] [MeasurableSpace α]
+     (μ ν : ProbabilityMeasure α) : ℝ :=
+   ∑ x : α, (μ.toMeasure {x}).toReal *
+     Real.log ((μ.toMeasure {x}).toReal / (ν.toMeasure {x}).toReal)
+diff --git a/Lutar/PACBayes/MadhavaBound.lean b/Lutar/PACBayes/MadhavaBound.lean
+index 2d2ab21..62a787e 100644
+--- a/Lutar/PACBayes/MadhavaBound.lean
++++ b/Lutar/PACBayes/MadhavaBound.lean
+@@ -37,6 +37,8 @@ import Mathlib.Algebra.BigOperators.Group.Finset.Sigma
+ import Mathlib.Tactic.Linarith
+ import Mathlib.Tactic.NormNum
+ import Mathlib.Analysis.SpecificLimits.Normed
++import Mathlib.Analysis.SpecialFunctions.Complex.Arctan
++import Mathlib.Analysis.Real.Pi.Leibniz
+ 
+ namespace Lutar.PACBayes
+ 
+@@ -153,6 +155,43 @@ theorem madhava_alt_series_bound
+       rw [abs_le]
+       constructor <;> linarith [h_nn (2 * k + 1)]
+ 
++/-- Convergence of the Mādhava series to `Real.arctan x` on `0 ≤ x ≤ 1`:
++    the open-disc power series (`Real.hasSum_arctan`) for `x < 1`, and the
++    Leibniz series (`Real.tendsto_sum_pi_div_four`) at the endpoint `x = 1`. -/
++theorem madhava_tendsto_arctan_of_nonneg (x : ℝ) (h0 : 0 ≤ x) (h1 : x ≤ 1) :
++    Filter.Tendsto
++      (fun M => ∑ n ∈ range M, (-1 : ℝ)^n * (x^(2*n+1) / (2*n+1)))
++      Filter.atTop (nhds (Real.arctan x)) := by
++  rcases h1.lt_or_eq with hlt | rfl
++  · have hnorm : ‖x‖ < 1 := by
++      rw [Real.norm_eq_abs, abs_lt]
++      constructor <;> linarith
++    have h := (Real.hasSum_arctan hnorm).tendsto_sum_nat
++    refine h.congr fun M => ?_
++    refine Finset.sum_congr rfl fun n _ => ?_
++    push_cast
++    ring
++  · rw [Real.arctan_one]
++    refine Real.tendsto_sum_pi_div_four.congr fun M => ?_
++    refine Finset.sum_congr rfl fun n _ => ?_
++    rw [one_pow, mul_one_div]
++
++/-- The Mādhava partial sum is odd in `x` (every exponent `2n+1` is odd). -/
++theorem madhavaArctanPartial_neg (x : ℝ) (N : ℕ) :
++    madhavaArctanPartial (-x) N = -madhavaArctanPartial x N := by
++  unfold madhavaArctanPartial
++  rw [← Finset.sum_neg_distrib]
++  refine Finset.sum_congr rfl fun n _ => ?_
++  have hodd : (-x)^(2*n+1) = -x^(2*n+1) := Odd.neg_pow ⟨n, rfl⟩ x
++  rw [hodd]
++  ring
++
++/-- The remainder bound depends on `|x|` only. -/
++theorem madhavaRemainderBound_neg (x : ℝ) (N : ℕ) :
++    madhavaRemainderBound (-x) N = madhavaRemainderBound x N := by
++  unfold madhavaRemainderBound
++  rw [abs_neg]
++
+ /-- **R4-I1 specialisation.** For `|x| ≤ 1`, the Mādhava partial sum
+     approximates `Real.arctan x` with error bounded by the next-term
+     magnitude. Follows directly from `madhava_alt_series_bound` applied
+@@ -161,15 +200,47 @@ theorem madhava_arctan_remainder
+     (x : ℝ) (hx : |x| ≤ 1) (N : ℕ) :
+     |madhavaArctanPartial x N - Real.arctan x|
+       ≤ madhavaRemainderBound x N := by
+-  -- Discharge route:
+-  --   1. Define a n := |x|^(2n+1) / (2n+1); these terms are nonneg
+-  --      and (for |x| ≤ 1) monotone decreasing — proved via the
+-  --      same monotonicity argument as `madhavaRemainderBound_anti`.
+-  --   2. The partial sums `Σ (-1)^n · x^(2n+1) / (2n+1)` converge to
+-  --      `Real.arctan x` for |x| ≤ 1 — this is the classical Mādhava
+-  --      result (Mathlib name pending: `Real.tendsto_madhava_arctan`
+-  --      or available via `Real.arctan_series`).
+-  --   3. Apply `madhava_alt_series_bound` and discharge.
+-  sorry
++  -- Step 1: the bound on `0 ≤ y ≤ 1`, from `madhava_alt_series_bound` with
++  -- `a n = y^(2n+1) / (2n+1)` and the limit supplied by
++  -- `madhava_tendsto_arctan_of_nonneg`.
++  have key : ∀ y : ℝ, 0 ≤ y → y ≤ 1 →
++      |madhavaArctanPartial y N - Real.arctan y| ≤ madhavaRemainderBound y N := by
++    intro y h0 h1
++    have h_nn : ∀ n : ℕ, 0 ≤ y^(2*n+1) / (2*(n:ℝ)+1) := fun n =>
++      div_nonneg (pow_nonneg h0 _) (by positivity)
++    have h_dec : ∀ n : ℕ,
++        y^(2*(n+1)+1) / (2*((n+1 : ℕ):ℝ)+1) ≤ y^(2*n+1) / (2*(n:ℝ)+1) := by
++      intro n
++      have hnum : y^(2*(n+1)+1) ≤ y^(2*n+1) :=
++        pow_le_pow_of_le_one h0 h1 (by omega)
++      have hden1 : (0 : ℝ) < 2 * (n : ℝ) + 1 := by positivity
++      have hden2 : (0 : ℝ) < 2 * ((n + 1 : ℕ) : ℝ) + 1 := by positivity
++      have hden_le : 2 * (n : ℝ) + 1 ≤ 2 * ((n + 1 : ℕ) : ℝ) + 1 := by
++        push_cast; linarith
++      calc y^(2*(n+1)+1) / (2*((n+1 : ℕ):ℝ)+1)
++          ≤ y^(2*n+1) / (2*((n+1 : ℕ):ℝ)+1) :=
++            (div_le_div_iff_of_pos_right hden2).mpr hnum
++        _ ≤ y^(2*n+1) / (2*(n:ℝ)+1) :=
++            div_le_div_of_nonneg_left (pow_nonneg h0 _) hden1 hden_le
++    have h := madhava_alt_series_bound (fun n : ℕ => y^(2*n+1) / (2*(n:ℝ)+1))
++      (Real.arctan y) N h_nn h_dec (madhava_tendsto_arctan_of_nonneg y h0 h1)
++    have hsum : madhavaArctanPartial y N
++        = ∑ n ∈ range N, (-1 : ℝ)^n * (y^(2*n+1) / (2*(n:ℝ)+1)) := by
++      unfold madhavaArctanPartial
++      refine Finset.sum_congr rfl fun n _ => ?_
++      rw [mul_div_assoc]
++    have hbound : madhavaRemainderBound y N = y^(2*N+1) / (2*(N:ℝ)+1) := by
++      unfold madhavaRemainderBound
++      rw [abs_of_nonneg h0]
++    rw [hsum, hbound]
++    exact h
++  -- Step 2: reduce `x < 0` to `-x` by oddness of both sides.
++  rcases le_total 0 x with h0 | h0
++  · exact key x h0 (by rwa [abs_of_nonneg h0] at hx)
++  · have h := key (-x) (by linarith) (by rwa [abs_of_nonpos h0] at hx)
++    rw [madhavaArctanPartial_neg, Real.arctan_neg, madhavaRemainderBound_neg] at h
++    have e : -madhavaArctanPartial x N - -Real.arctan x
++        = -(madhavaArctanPartial x N - Real.arctan x) := by ring
++    rwa [e, abs_neg] at h
+ 
+ end Lutar.PACBayes
+diff --git a/Lutar/PACBayes/PACBayes.lean b/Lutar/PACBayes/PACBayes.lean
+index af2a9cc..056666e 100644
+--- a/Lutar/PACBayes/PACBayes.lean
++++ b/Lutar/PACBayes/PACBayes.lean
+@@ -230,6 +230,7 @@ theorem chernoff_bad_event_le_delta {n : ℕ} (hn : 0 < n)
+         _ = |t| * |expectedRisk - empiricalRisk S| := abs_mul t _
+         _ ≤ |t| * 1 := by
+               exact mul_le_mul_of_nonneg_left (h_bounded S) (abs_nonneg t)
++        _ = |t| := mul_one _
+   have hchernoff :
+       (μ {S | ε ≤ expectedRisk - empiricalRisk S}).toReal ≤
+       Real.exp (-t * ε) * mgf (fun S => expectedRisk - empiricalRisk S) μ t :=
+@@ -260,26 +261,28 @@ theorem chernoff_bad_event_le_delta {n : ℕ} (hn : 0 < n)
+       rw [hε_eq]; exact Real.sq_sqrt (le_of_lt hA_pos)
+     -- Step 2: Algebraic simplification: -t·ε + t²/(8n) = -2n·ε²
+     have hexp_arith : -t * ε + t ^ 2 / (8 * (n : ℝ)) = -2 * (n : ℝ) * ε ^ 2 := by
+-      simp only [t]; ring
++      have hn_ne : (n : ℝ) ≠ 0 := ne_of_gt hn_pos
++      simp only [t]; field_simp; ring
+     -- Step 3: -2n·ε² = -(kl + log(2√n/δ))
+     have hexp_sub : -2 * (n : ℝ) * ε ^ 2 = -(kl + Real.log (2 * Real.sqrt (n : ℝ) / δ)) := by
+       rw [hε2, hA_def]
+       have hn_ne : (n : ℝ) ≠ 0 := ne_of_gt hn_pos
+-      field_simp; ring
++      field_simp
+     rw [hexp_arith, hexp_sub]
+     -- Step 4: exp(-(kl + log(2√n/δ))) = exp(-kl) · (2√n/δ)⁻¹
+     have h2sqrt_pos : 0 < 2 * Real.sqrt (n : ℝ) / δ :=
+       div_pos (mul_pos (by norm_num) (Real.sqrt_pos.mpr hn_pos)) hδ_pos
+     rw [show -(kl + Real.log (2 * Real.sqrt (n : ℝ) / δ))
+           = (-kl) + (-Real.log (2 * Real.sqrt (n : ℝ) / δ)) from by ring]
+-    rw [Real.exp_add, Real.exp_neg, Real.exp_log h2sqrt_pos]
++    rw [Real.exp_add, Real.exp_neg (Real.log _), Real.exp_log h2sqrt_pos]
+     -- Step 5: exp(-kl) · (2√n/δ)⁻¹ ≤ δ
+     -- Bound exp(-kl) ≤ 1 (since kl ≥ 0 → -kl ≤ 0)
+     have hexp_kl : Real.exp (-kl) ≤ 1 := Real.exp_le_one_iff.mpr (by linarith)
+     -- (2√n/δ)⁻¹ = δ/(2√n) ≤ δ (since 1 ≤ 2√n)
+     have h2sqrtn_ge_one : 1 ≤ 2 * Real.sqrt (n : ℝ) := by
+-      apply le_mul_of_one_le_right (by norm_num)
+-      exact Real.one_le_sqrt.mpr (by exact_mod_cast hn)
++      have h1 : (1 : ℝ) ≤ Real.sqrt (n : ℝ) :=
++        Real.one_le_sqrt.mpr (by exact_mod_cast hn)
++      linarith
+     have hinv_bound : (2 * Real.sqrt (n : ℝ) / δ)⁻¹ ≤ δ := by
+       rw [inv_div]  -- (a/b)⁻¹ = b/a  (Mathlib.Algebra.Group.Basic)
+       exact div_le_self (le_of_lt hδ_pos) h2sqrtn_ge_one
+@@ -323,7 +326,7 @@ theorem th13_pacBayes_probabilistic_wrapper {n : ℕ} (hn : 0 < n)
+   rw [MeasureTheory.measure_compl hmeas_bad (measure_ne_top μ _), measure_univ]
+   rw [ENNReal.ofReal_le_iff_le_toReal (ENNReal.sub_ne_top ENNReal.one_ne_top)]
+   rw [ENNReal.toReal_sub_of_le prob_le_one ENNReal.one_ne_top]
+-  simp only [ENNReal.one_toReal]
++  simp only [ENNReal.toReal_one]
+   linarith
+ 
+ /-! ## v16 Innovations: New corollary theorems (zero sorry, zero new axioms) -/
+diff --git a/Lutar/Puriq/Formulas/PuriqFormulaLean.lean b/Lutar/Puriq/Formulas/PuriqFormulaLean.lean
+index f9c19f7..ab507a6 100644
+--- a/Lutar/Puriq/Formulas/PuriqFormulaLean.lean
++++ b/Lutar/Puriq/Formulas/PuriqFormulaLean.lean
+@@ -452,9 +452,7 @@ def readKey (k : Nat) : Store → Option String
+ theorem f6_lmdb_durability (s : Store) (k : Nat) (v : String) :
+     readKey k (recover (persistCommitted s k v)) = some v := by
+   unfold recover persistCommitted
+-  simp only [List.filter_cons]
+-  simp only [readKey]
+-  simp
++  simp [List.filter_cons, readKey]
+ 
+ /-- F6b — crash-before-commit loses uncommitted writes: recovering after a
+     pending write equals recovering the prior store (the pending entry is gone). -/
+diff --git a/Lutar/Putnam/P_A1.lean b/Lutar/Putnam/P_A1.lean
+index 1834b56..83db247 100644
+--- a/Lutar/Putnam/P_A1.lean
++++ b/Lutar/Putnam/P_A1.lean
+@@ -62,9 +62,8 @@ lemma gcd_step_divides_diff (m n : ℕ) :
+     convert h using 1; ring
+   -- Step 3: IsCoprime (g:ℤ) 2
+   have hcop : IsCoprime (g : ℤ) 2 := by
+-    rw [Int.coprime_iff_nat_coprime]
+     have : Odd g := Nat.odd_iff.mpr (by omega)
+-    exact this.coprime_two_right
++    exact_mod_cast Nat.isCoprime_iff_coprime.mpr this.coprime_two_right
+   -- Step 4: g | (m−n) in ℤ
+   have hdivmn : (g : ℤ) ∣ ((m : ℤ) - n) := hcop.dvd_of_dvd_mul_left hdiff
+   -- Step 5: cast to ℕ
+@@ -72,8 +71,9 @@ lemma gcd_step_divides_diff (m n : ℕ) :
+   · rw [← Int.natCast_dvd_natCast, Nat.cast_sub hge]; exact hdivmn
+   · push_neg at hge
+     rw [← Int.natCast_dvd_natCast, Nat.cast_sub (Nat.le_of_lt hge)]
+-    have : (g : ℤ) ∣ (n : ℤ) - m := by linarith [dvd_neg.mpr hdivmn,
+-      show (g : ℤ) ∣ -((m : ℤ) - n) from dvd_neg.mpr hdivmn]
++    have : (g : ℤ) ∣ (n : ℤ) - m := by
++      have hneg : (n : ℤ) - m = -((m : ℤ) - n) := by ring
++      rw [hneg]; exact dvd_neg.mpr hdivmn
+     exact this
+ 
+ /-!
+diff --git a/Lutar/Putnam/P_A3.lean b/Lutar/Putnam/P_A3.lean
+index 5f2f785..28f5b7b 100644
+--- a/Lutar/Putnam/P_A3.lean
++++ b/Lutar/Putnam/P_A3.lean
+@@ -59,7 +59,7 @@ lemma card_positions (n : ℕ) : Fintype.card (Fin n → Fin 3) = 3 ^ n := by
+ lemma three_pow_odd (n : ℕ) : ¬ 2 ∣ 3 ^ n := by
+   intro h
+   have : ¬ 2 ∣ (3 : ℕ) := by norm_num
+-  exact absurd (Nat.dvd_pow_self_iff.mp (Nat.dvd_trans h (dvd_refl _))) (by norm_num)
++  exact absurd (Nat.prime_two.dvd_of_dvd_pow h) this
+ 
+ -- Better: use Nat.Odd.pow
+ lemma three_pow_odd' (n : ℕ) : Odd (3 ^ n) := by
+diff --git a/Lutar/Putnam/P_A4.lean b/Lutar/Putnam/P_A4.lean
+index 01cb894..14bfb63 100644
+--- a/Lutar/Putnam/P_A4.lean
++++ b/Lutar/Putnam/P_A4.lean
+@@ -57,7 +57,7 @@ lemma k_eq_one_impossible :
+     simp [Matrix.mul_apply]
+     ring
+   -- Take i=0, j=2 (distance 2, not in {0,1,2024})
+-  have h02 : (0 : Fin 2025).val.dist 2 = 2 := by decide
++  have h02 : (0 : Fin 2025).val.dist (2 : Fin 2025).val = 2 := by decide
+   have hiff := hA 0 2
+   rw [h02] at hiff
+   -- The pair (0, 2) commutes (all 1×1 matrices do) but its distance is 2,
+@@ -102,7 +102,7 @@ lemma commutativity_graph_is_cycle :
+   · intro h
+     simp [Set.mem_insert_iff] at h
+     rcases h with h | h | h
+-    · left; exact Fin.ext (Nat.dist_eq_zero.mp h)
++    · left; exact Fin.ext (Nat.eq_of_dist_eq_zero h)
+     · right; left; exact h
+     · right; right; exact h
+   · intro h
+diff --git a/Lutar/Putnam/P_A5.lean b/Lutar/Putnam/P_A5.lean
+index 36df15f..b795bd7 100644
+--- a/Lutar/Putnam/P_A5.lean
++++ b/Lutar/Putnam/P_A5.lean
+@@ -37,6 +37,12 @@ def satisfies_sign_seq {n : ℕ} (σ : Equiv.Perm (Fin n))
+   ∀ i : Fin (n-1),
+     s i * ((σ ⟨i.val + 1, by omega⟩).val - (σ ⟨i.val, by omega⟩).val : ℤ) > 0
+ 
++-- Needed so that the subtype below has a `Fintype` instance (statement of `f` unchanged).
++instance satisfies_sign_seq_decidable {n : ℕ} (σ : Equiv.Perm (Fin n))
++    (s : Fin (n-1) → ℤ) : Decidable (satisfies_sign_seq σ s) := by
++  unfold satisfies_sign_seq
++  infer_instance
++
+ -- Count function f(s)
+ noncomputable def f {n : ℕ} (hn : 2 ≤ n) (s : Fin (n-1) → ℤ) : ℕ :=
+   Fintype.card {σ : Equiv.Perm (Fin n) // satisfies_sign_seq σ s}
+diff --git a/Lutar/Putnam/P_A6.lean b/Lutar/Putnam/P_A6.lean
+index 570509f..1a39998 100644
+--- a/Lutar/Putnam/P_A6.lean
++++ b/Lutar/Putnam/P_A6.lean
+@@ -56,14 +56,12 @@ lemma b_parity (n : ℕ) : b n % 2 = n % 2 := by
+ -- b_{2k} is even, b_{2k+1} is odd
+ lemma b_even_index (k : ℕ) : 2 ∣ b (2 * k) := by
+   have h := b_parity (2 * k)
+-  simp only [Nat.mul_mod_right] at h
+   exact Int.dvd_of_emod_eq_zero (by omega)
+ 
+ lemma b_odd_index (k : ℕ) : ¬ 2 ∣ b (2 * k + 1) := by
+   have h := b_parity (2 * k + 1)
+-  simp only [Nat.add_mod, Nat.mul_mod_right, Nat.zero_add, Nat.mod_self] at h
+   intro hdvd
+-  have := Int.emod_eq_zero_of_dvd.mpr hdvd
++  have := Int.emod_eq_zero_of_dvd hdvd
+   omega
+ 
+ -- The quantity of interest: b_{2^{k+1}} - 2·b_{2^k}
+@@ -84,9 +82,12 @@ lemma d_pow_one_val : (16 : ℤ) ∣ d_pow 1 ∧ ¬ (32 : ℤ) ∣ d_pow 1 := by
+ 
+ -- Helper: b_n ≡ n (mod 2) gives us b_{2^k} is even for k ≥ 1
+ lemma b_pow2_even (k : ℕ) (hk : 1 ≤ k) : (2 : ℤ) ∣ b (2^k) := by
+-  apply b_even_index (2^(k-1))
+-  congr 1
+-  omega
++  have hpow : 2 ^ k = 2 * 2 ^ (k - 1) := by
++    rw [← pow_succ']
++    congr 1
++    omega
++  rw [hpow]
++  exact b_even_index (2 ^ (k - 1))
+ 
+ -- The d recurrence (wrong linear indexing): kept for reference
+ -- d(k+1) = b_{2k+3} - 2b_{2k+2}
+@@ -95,7 +96,6 @@ lemma d_recurrence_linear (k : ℕ) :
+     2 * b (2*k+2) ^ 2 + b (2*k+2) + 1 -
+     2 * (2 * b (2*k+1) ^ 2 + b (2*k+1) + 1) := by
+   simp only [b_succ]
+-  ring
+ 
+ -- Base case: d(0) in linear indexing = b₁ - 2b₀ = 1 - 0 = 1
+ lemma d_linear_zero : b 1 - 2 * b 0 = 1 := by simp
+diff --git a/Lutar/Putnam/P_B3.lean b/Lutar/Putnam/P_B3.lean
+index bd4ee1f..b75e424 100644
+--- a/Lutar/Putnam/P_B3.lean
++++ b/Lutar/Putnam/P_B3.lean
+@@ -82,7 +82,10 @@ lemma divisors_of_2010_in_S (S : Set ℕ) (hS : ClosedUnderDivisors2025' S)
+     (h1 : 1 ∈ S) : ∀ d : ℕ, d ∣ 2010 → 0 < d → d ∈ S := by
+   intro d hd hpos
+   apply hS 1 h1
+-  · exact_mod_cast hd.mul_left 1
++  · have h : (d : ℤ) ∣ (2010 : ℤ) := by exact_mod_cast hd
++    have e : (2025 * ((1 : ℕ) : ℤ) - 15 ^ 1 : ℤ) = 2010 := by norm_num
++    rw [e]
++    exact h
+   · exact hpos
+ 
+ -- In particular, 1 ∈ S (trivially: 1 | 2010)
+diff --git a/Lutar/Putnam/P_B6.lean b/Lutar/Putnam/P_B6.lean
+index 65900b5..03fad58 100644
+--- a/Lutar/Putnam/P_B6.lean
++++ b/Lutar/Putnam/P_B6.lean
+@@ -45,7 +45,7 @@ creating a contradiction with g: ℕ → ℕ being a well-defined function.
+ -/
+ 
+ -- The answer
+-def r_opt : ℝ := 1/2
++noncomputable def r_opt : ℝ := 1/2
+ 
+ -- Main statement: r = 1/2 is the supremum
+ theorem putnam_B6_correct :
+diff --git a/Lutar/Thesis/TH_V18_04_EgyptianWeightSum.lean b/Lutar/Thesis/TH_V18_04_EgyptianWeightSum.lean
+index fcdaa87..a84dd8d 100644
+--- a/Lutar/Thesis/TH_V18_04_EgyptianWeightSum.lean
++++ b/Lutar/Thesis/TH_V18_04_EgyptianWeightSum.lean
+@@ -20,6 +20,7 @@ import Mathlib.Tactic.FieldSimp
+ import Mathlib.Data.Rat.Defs
+ import Mathlib.Data.Rat.Lemmas
+ import Mathlib.Algebra.Field.Rat
++import Mathlib.Algebra.Order.Field.Basic
+ 
+ namespace Lutar.Thesis.Egyptian
+ 
+diff --git a/Lutar/Thesis/TH_V18_15_MultiAgentFairness.lean b/Lutar/Thesis/TH_V18_15_MultiAgentFairness.lean
+index 16e879a..c176a80 100644
+--- a/Lutar/Thesis/TH_V18_15_MultiAgentFairness.lean
++++ b/Lutar/Thesis/TH_V18_15_MultiAgentFairness.lean
+@@ -53,7 +53,7 @@ theorem th_v18_15b_list_termination (agents : List Agent) (fuel : Nat)
+ /-- **TH-V18-15c**: The empty list of agents trivially terminates. -/
+ theorem th_v18_15c_nil_terminates (fuel : Nat) :
+     ∀ a ∈ ([] : List Agent), AgentTerminates a fuel :=
+-  fun _ habs => absurd habs (List.not_mem_nil _)
++  fun _ habs => absurd habs List.not_mem_nil
+ 
+ /-- **TH-V18-15d**: Adding one bounded agent to a bounded system preserves boundedness.
+     Proof: cases on List membership (head vs tail). -/
+-- 
+2.43.0
+

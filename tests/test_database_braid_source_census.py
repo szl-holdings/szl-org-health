@@ -21,7 +21,7 @@ from unittest import TestCase, main as unittest_main, mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tools.database_catalog_admission import InputError  # noqa: E402
-from tools.database_braid_common import canonical, digest, git_blob_sha1  # noqa: E402
+from tools.database_braid_common import canonical, digest, git_blob_sha1, strict_json  # noqa: E402
 from tools import database_braid_source_census as census_tool  # noqa: E402
 from tools.database_braid_source_census import (  # noqa: E402
     FAMILY_MAP_SCHEMA, IDENTITIES, LFS_MAGIC, SCHEMA, UNCLASSIFIED, _FALSE_FLAGS, checkout_identity,
@@ -285,10 +285,17 @@ class CordKeyAndSorryTests(TestCase):
             b"-- sorry\n": 0, b"/- sorry -/": 0, b"/- a /- sorry -/ sorry -/ x": 0,
             b"/- a /- b -/ still comment sorry -/ sorry": 1, b"sorryAx": 0, b"x_sorry": 0,
             b"Foo.sorry": 0, b"sorry'": 0, b"sorry!": 0, b"\xff sorry \xfe": 1, LEAN_TEXT: 2,
+            # Lean reads a block comment as whitespace, so it never hides a token next to it.
+            b"theorem t : True := by/- c -/sorry": 1, b"exact/- why -/sorry": 1,
+            b"by/- a /- b -/ c -/sorry/- d -/": 1,
         }
         for raw, expected in cases.items():
             with self.subTest(raw=raw):
                 self.assertEqual(lean_text_sorry_tokens(raw), expected)
+
+    def test_a_path_with_no_utf8_form_is_a_typed_refusal(self):
+        with self.assertRaisesRegex(InputError, "CENSUS_PATH_NOT_UTF"):
+            cord_key(ALPHA, "Lutar/X\ud800.lean")
 
 
 class ListTreeAndBlobTests(_Repos):
@@ -598,6 +605,30 @@ class ValidateCensusTamperTests(_Repos):
             with self.subTest(field=field, bad=bad):
                 lean = next(i for i, c in enumerate(self.report["cords"]) if c["is_lean"])
                 self.refuses(lambda v: v["cords"][lean].update({field: bad}), "CENSUS_CORD_FIELDS_INVALID")
+        # A one-repository census counts 1 of 1, where True == 1 would otherwise pass.
+        self.assertEqual((self.complete["repositories_required"], self.complete["repositories_observed"]),
+                         (1, 1))
+        for change in ({"repositories_required": True}, {"repositories_observed": True},
+                       {"repositories_required": True, "repositories_observed": True},
+                       {"repositories_required": 1.0}, {"repositories_observed": "1"}):
+            with self.subTest(change=change):
+                self.refuses(lambda v: v.update(change), "CENSUS_STATE_INVALID", base=self.complete,
+                             policy=self.complete_section)
+
+    def test_a_cord_path_with_no_utf8_form_is_a_typed_refusal(self):
+        def surrogate(value):
+            cord = cord_of(value, "src/b.py")
+            cord["path"] = "src/b\ud800.py"
+            value["cords"].sort(key=lambda c: c["key"])
+        forged = deepcopy(self.report)
+        surrogate(forged)
+        # Read back through the strict loader, as a census file with a \ud800 escape would be.
+        with self.assertRaisesRegex(InputError, "CENSUS_PATH_NOT_UTF"):
+            validate_census(strict_json(canonical(forged), max_bytes=1 << 24), self.section)
+
+        def surrogate_unavailable(value):
+            value["unavailable_cords"][0]["path"] += "\ud800"
+        self.refuses(surrogate_unavailable, "CENSUS_PATH_NOT_UTF")
 
     def test_false_flags_must_stay_false(self):
         for flag in _FALSE_FLAGS:
@@ -709,14 +740,21 @@ class CliTests(_Repos):
             code = main([str(a) for a in argv])
         return code, json.loads(buffer.getvalue().strip().splitlines()[-1])
 
+    def clone_with_origin(self, url):
+        repo = make_repo(self.out, "clone-" + url.rsplit("/", 1)[-1], {"one.txt": b"one\n"})
+        git(repo, "remote", "add", "origin", url, home=self.out)
+        return repo
+
     def test_complete_run_exit_zero_and_never_overwrites(self):
         census = section(beta_policy())
         policy = self.write_policy(census)
         output = self.out / "census.json"
-        argv = ["--policy", policy, "--checkout", f"{BETA}={self.beta}", "--output", output]
+        repo = self.clone_with_origin("https://github.com/szl-holdings/beta.git")
+        argv = ["--policy", policy, "--checkout", f"{BETA}={repo}", "--output", output]
         code, summary = self.run_main(argv)
         self.assertEqual(code, 0)
-        self.assertEqual((summary["state"], summary["provider_writes"]), ("COMPLETE", False))
+        self.assertEqual((summary["state"], summary["checkout_identity_unverified"],
+                          summary["provider_writes"]), ("COMPLETE", [], False))
         written = output.read_bytes()
         report = json.loads(written)
         validate_census(report, census)
@@ -726,6 +764,23 @@ class CliTests(_Repos):
         self.assertEqual(code, 3)
         self.assertEqual((summary["state"], summary["code"]), ("UNAVAILABLE", "OUTPUT_PATH_DENIED"))
         self.assertEqual(output.read_bytes(), written)
+
+    def test_a_complete_census_of_unverified_checkouts_is_exit_two(self):
+        # A full file inventory of a checkout that is not shown to be the named repository is
+        # not a clean result: the CLI says which rows are unverified and does not exit 0.
+        policy = self.write_policy(section(beta_policy()))
+        cases = ((self.beta, "NO_ORIGIN"),
+                 (self.clone_with_origin("https://github.com/szl-holdings/hatun-mcp.git"),
+                  "ORIGIN_DIFFERS"))
+        for index, (repo, identity) in enumerate(cases):
+            output = self.out / f"unverified-{index}.json"
+            with self.subTest(identity=identity):
+                code, summary = self.run_main(["--policy", policy, "--checkout", f"{BETA}={repo}",
+                                               "--output", output])
+                self.assertEqual((code, summary["state"], summary["checkout_identity_unverified"]),
+                                 (2, "COMPLETE", [BETA]))
+                report = json.loads(output.read_bytes())
+                self.assertEqual(row_of(report, BETA)["checkout_identity"], identity)
 
     def test_partial_run_exit_two_with_family_map(self):
         census = section(alpha_policy(), gamma_policy())
@@ -882,6 +937,32 @@ class BlobReadingTests(_Repos):
         for batch in seen:
             self.assertTrue(len(batch) == 1 or sum(sizes[s] for s in batch) <= 40, batch)
 
+    def test_each_batch_is_released_before_the_next_is_read(self):
+        shas = sorted({git_blob_sha1(raw) for raw in ALPHA_FILES.values()})
+        whole = read_blobs(self.alpha, shas, max_bytes=CAP)
+        events = []
+        real = census_tool._git
+
+        class Output(bytes):
+            def __del__(self):
+                events.append("released")
+
+        def spy(directory, *args, stdin=None, ok_codes=(0,)):
+            raw = real(directory, *args, stdin=stdin, ok_codes=ok_codes)
+            if args[:2] != ("cat-file", "--batch"):
+                return raw
+            events.append("read")
+            return Output(raw)
+        with mock.patch.object(census_tool, "MAX_BATCH_BYTES", 40), \
+                mock.patch.object(census_tool, "_git", spy):
+            batched = read_blobs(self.alpha, shas, max_bytes=CAP)
+        self.assertEqual(batched, whole)
+        self.assertTrue(all(type(body) is bytes for body in batched.values() if body is not None))
+        # Never two batches of git output alive at once.
+        reads = events.count("read")
+        self.assertGreater(reads, 2)
+        self.assertEqual(events, ["read", "released"] * reads)
+
     def test_blob_ids_are_checked_before_git_sees_them(self):
         for bad in ("HEAD:README.md", "2" * 39, "2" * 64, "Z" * 40, "2" * 40 + "\nHEAD", 7):
             with self.subTest(bad=bad):
@@ -1026,6 +1107,24 @@ class CensusForgeryTests(_Repos):
         for path in ("build/out.lean", "README.md", "vendor/sub"):
             with self.subTest(path=path):
                 self.refused_offline(self.forged(relocate(path)), "CENSUS_CORD_FIELDS_INVALID")
+
+        def beta_path(path, *, unavailable=False):
+            def mutate(value):
+                if unavailable:
+                    value["unavailable_cords"].append({"key": cord_key(BETA, path), "repository": BETA,
+                                                       "path": path, "reason": "BLOB_OVER_SIZE_CAP"})
+                    value["unavailable_cords"].sort(key=lambda c: c["key"])
+                    return
+                cord = next(c for c in value["cords"] if c["repository"] == BETA)
+                cord.update(path=path, key=cord_key(BETA, path))
+                value["cords"].sort(key=lambda c: c["key"])
+            return mutate
+        # Beta includes "*", which fnmatch lets match any text; git never lists these paths.
+        for path in ("../../etc/passwd", "/abs/x.txt", "a//b", "./x", "x/.", ".git/config", ""):
+            for unavailable in (False, True):
+                with self.subTest(path=path, unavailable=unavailable):
+                    self.refused_offline(self.forged(beta_path(path, unavailable=unavailable)),
+                                         "CENSUS_CORD_FIELDS_INVALID")
         self.refused_offline(self.forged(lambda v: v["cords"][0].update(repository=[ALPHA])),
                              "CENSUS_CORD_FIELDS_INVALID")
 
@@ -1179,6 +1278,38 @@ class CliVerifyTests(_Repos):
         other.write_text(json.dumps({"census": section(alpha_policy(), beta_policy())}, indent=1))
         code, summary = self.run_main(["--policy", other, *self.checkouts, "--verify", census])
         self.assertEqual((code, summary["code"]), (3, "CENSUS_INPUTS_DIFFER"))
+
+    def test_verify_without_a_checkout_for_every_observed_row_is_never_equal(self):
+        census = self.out / "census.json"
+        self.run_main(["--policy", self.policy, *self.checkouts, "--output", census])
+        forged = json.loads(census.read_bytes())
+        CensusForgeryTests.drop_file(forged, "src/b.py")
+        forged_path = self.out / "forged.json"
+        forged_path.write_text(json.dumps(forged))
+        # The forged census is refused once its row is re-derived, and never vouched for before.
+        for checkouts, rederived, skipped in (([], 0, [ALPHA, BETA]),
+                                              (["--checkout", f"{BETA}={self.beta}"], 1, [ALPHA])):
+            for target in (census, forged_path):
+                with self.subTest(target=target.name, rederived=rederived):
+                    code, summary = self.run_main(["--policy", self.policy, *checkouts,
+                                                   "--verify", target])
+                    self.assertEqual((code, summary["state"], summary["repositories_rederived"],
+                                      summary["repositories_not_rederived"]),
+                                     (2, "REDERIVATION_INCOMPLETE", rederived, skipped))
+        code, summary = self.run_main(["--policy", self.policy, *self.checkouts, "--verify", census])
+        self.assertEqual((code, summary["state"], summary["repositories_not_rederived"]),
+                         (0, "REDERIVED_EQUAL", []))
+
+    def test_a_census_with_no_observed_row_is_never_rederived_equal(self):
+        nothing = self.out / "nothing.json"
+        code, _ = self.run_main(["--policy", self.policy, "--output", nothing])
+        self.assertEqual(code, 2)
+        code, summary = self.run_main(["--policy", self.policy, "--verify", nothing])
+        self.assertEqual((code, summary["state"], summary["repositories_rederived"],
+                          summary["repositories_not_rederived"]), (2, "REDERIVATION_INCOMPLETE", 0, []))
+        # With checkouts, a row recorded as unavailable that could have been observed is refused.
+        code, summary = self.run_main(["--policy", self.policy, *self.checkouts, "--verify", nothing])
+        self.assertEqual((code, summary["code"]), (3, "CENSUS_REDERIVATION_ROW_NOT_OBSERVED"))
 
 
 class ContractFormatTests(TestCase):

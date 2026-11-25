@@ -8,8 +8,11 @@ one-change-at-a-time validate_wrap tamper matrix in which the receipt digest is 
 from the payload bytes, the older-pins mode, real child runs of a stdlib stand-in adapter
 from a fresh export under stand-in interpreters (venvs of this Python whose site-packages
 hold a stand-in ``szl_receipt`` library, an older one, or none), and the create-exclusive
-CLI. Every repository, adapter, library, report and output is made up here inside
-temporary directories; nothing touches a network, a signing key, a live Lake or this
+CLI. Some stand-ins are tampered on purpose: a pack or replace ref planted in the
+checkout's ``.git``, an interpreter or ``.pth`` line that reaches into the checkout, an
+envelope whose note or organ claims more, a body with an added field or a rewritten
+honesty block. Every repository, adapter, library, report and output is made up here
+inside temporary directories; nothing touches a network, a signing key, a live Lake or this
 checkout's git state.
 """
 import base64
@@ -29,6 +32,7 @@ import sys
 import tempfile
 import time
 from unittest import TestCase, main as unittest_main, mock
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -36,10 +40,13 @@ from tools.database_catalog_admission import InputError  # noqa: E402
 from tools.database_braid_common import (  # noqa: E402
     NETNS_EMPTY, NETNS_NOT_REQUESTED, NETNS_UNAVAILABLE, network_namespace_state,
 )
+from tools.database_braid_source_census import export_tree, list_tree  # noqa: E402
 from tools import database_braid_lake_receipt as lake  # noqa: E402
 from tools.database_braid_lake_receipt import (  # noqa: E402
-    BODY_SCHEMA, INTERPRETER_FLAGS, RECEIPT_PAYLOAD_TYPE, SCHEMA, adapter_identity, assemble,
-    child_limits, main, open_envelope, run_child, validate_policy, validate_wrap, wrap_report,
+    BODY_SCHEMA, INTERPRETER_FLAGS, PROCESS_TREES, RECEIPT_PAYLOAD_TYPE, SCHEMA, UNSIGNED_NOTE,
+    adapter_identity, assemble, child_limits, commit_tree, expected_body, export_matches,
+    interpreter_layout, main, open_envelope, pid_namespace_prefix, run_child, tree_object_id,
+    validate_policy, validate_wrap, verified_listing, wrap_report,
 )
 
 LAKE = json.loads(
@@ -55,6 +62,18 @@ FALSE_FLAGS = ("signature_present", "signer_identity_established", "appended_to_
                "private_key_handled", "production_authorized")
 ENVELOPE_FIELDS = ("payloadType", "payload", "signature", "signed", "organ", "keyid", "digest",
                    "algo", "note")
+# The fixed text szl_lake_receipt.build_lake_receipt_body writes at szl-lake 7e19e7f.
+ADAPTER_REASON = ("szl-lake stores and anchors receipts; it measures no joules -> reported "
+                  "UNAVAILABLE, never fabricated.")
+ADAPTER_HONESTY = {
+    "asserts": "integrity/append-only provenance, NOT correctness",
+    "receipt_is": "evidence trail binding this lake object (subject+input+stored-object+policy"
+                  "+energy), NOT a proof the anchored content is correct",
+    "chain": "the Khipu SHA3-256 hash-chain is Conjecture 2 (advisory BFT), never a proven "
+             "theorem",
+}
+INTERPRETER = {"python": "3.12.3", "prefix": "/opt/braid-venv", "base_prefix": "/usr",
+               "outside_checkout": True}
 
 
 def canon(value):
@@ -66,7 +85,8 @@ def body(*, subject=TURN, input_digest=INPUT, stored=STORED, policy_id=None, org
             "subject": subject, "input_digest": "sha256:" + input_digest,
             "stored_object_digest": "sha256:" + stored,
             "policy": {"id": policy_id or LAKE["policy_id"]},
-            "energy": {"status": "UNAVAILABLE", "joules": None, "reason": "stand-in: no meter"}}
+            "energy": {"status": "UNAVAILABLE", "joules": None, "reason": ADAPTER_REASON},
+            "honesty": dict(ADAPTER_HONESTY)}
 
 
 def envelope(value, *, raw=None):
@@ -94,9 +114,10 @@ def child_unavailable():
 
 def observed(**changes):
     value = {"network_namespace": NETNS_UNAVAILABLE, "export_files": 3,
-             "export_skipped_entries": 0, "isolated_mode": True,
-             "bytecode_writes_disabled": True, "pycache_prefix_fresh_and_unused": True,
-             "adapter_loaded_from_export": True}
+             "export_skipped_entries": 0, "export_rehashed_to_commit": True,
+             "interpreter": dict(INTERPRETER), "process_tree": "PROCESS_GROUP_ONLY",
+             "isolated_mode": True, "bytecode_writes_disabled": True,
+             "pycache_prefix_fresh_and_unused": True, "adapter_loaded_from_export": True}
     value.update(changes)
     return value
 
@@ -194,6 +215,7 @@ import sys
 
 MODE = "@MODE@"
 MARK = "@MARK@"
+TEXT = @TEXT@
 if MODE == "noise":
     print("import-time noise")
 if MODE == "list":
@@ -210,6 +232,7 @@ if MODE == "probe":
     import resource
     facts = {"isolated": sys.flags.isolated, "dont_write_bytecode": sys.flags.dont_write_bytecode,
              "pycache_prefix": sys.pycache_prefix, "path": list(sys.path), "cwd": os.getcwd(),
+             "pid": os.getpid(),
              "file": os.path.realpath(__file__), "argv": list(sys.argv), "env": dict(os.environ),
              "limits": {name: list(resource.getrlimit(getattr(resource, name)))
                         for name in ("RLIMIT_CPU", "RLIMIT_AS", "RLIMIT_FSIZE", "RLIMIT_CORE")}}
@@ -243,11 +266,17 @@ def _library():
 
 
 def _body(*, anchor_id, input_digest, stored_object_digest, policy_id, organ):
-    return {"schema": "szl.pcgi.receipt/szl-lake-anchor/v1", "kind": "szl-lake-anchor",
-            "organ": organ, "subject": anchor_id, "input_digest": "sha256:" + input_digest,
-            "stored_object_digest": "sha256:" + stored_object_digest,
-            "policy": {"id": policy_id},
-            "energy": {"status": "UNAVAILABLE", "joules": None, "reason": "stand-in: no meter"}}
+    value = {"schema": "szl.pcgi.receipt/szl-lake-anchor/v1", "kind": "szl-lake-anchor",
+             "organ": organ, "subject": anchor_id, "input_digest": "sha256:" + input_digest,
+             "stored_object_digest": "sha256:" + stored_object_digest,
+             "policy": {"id": policy_id},
+             "energy": {"status": "UNAVAILABLE", "joules": None, "reason": TEXT["reason"]},
+             "honesty": dict(TEXT["honesty"])}
+    if MODE == "extra_field":
+        value["authority"] = "ALLOW"
+    if MODE == "honesty":
+        value["honesty"] = {"asserts": "correctness PROVEN"}
+    return value
 
 
 def _spaced(fields):
@@ -282,6 +311,10 @@ def emit_lake_receipt(*, private_key_pem=None, **fields):
         envelope["digest"] = "1" * 64
     if MODE == "payload_type":
         envelope["payloadType"] = "application/json"
+    if MODE == "note":
+        envelope["note"] = "SIGNED by the estate signer; production authorized"
+    if MODE == "organ":
+        envelope["organ"] = "a11oy"
     if MODE == "noncanonical":
         raw = _spaced(fields)
         envelope.update(payload=base64.b64encode(raw).decode("ascii"),
@@ -295,7 +328,8 @@ def verify_lake_receipt(envelope):
 
 
 def adapter(mode="ok", mark="COMMITTED"):
-    return STAND_IN.replace("@MODE@", mode).replace("@MARK@", mark)
+    text = repr({"reason": ADAPTER_REASON, "honesty": ADAPTER_HONESTY})
+    return STAND_IN.replace("@MODE@", mode).replace("@MARK@", mark).replace("@TEXT@", text)
 
 
 def make_lake(base, name, *, mode="ok", commit=True, extra=None):
@@ -328,6 +362,59 @@ def make_python(base, name, files=None):
     return str(target / "bin" / "python")
 
 
+def git_input(repo, *args, home, stdin):
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
+           "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+           "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}
+    return subprocess.run(["git", *args], cwd=str(repo), env=env, input=stdin,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout
+
+
+def reachable_objects(repo, *, home, swap):
+    """``(object id, type, body)`` for everything HEAD reaches, with ``swap`` bodies replaced."""
+    found = []
+    for line in git(repo, "rev-list", "--objects", "HEAD", home=home).decode().splitlines():
+        oid = line.split(" ", 1)[0]
+        kind = git(repo, "cat-file", "-t", oid, home=home).decode().strip()
+        found.append((oid, kind, swap.get(oid) or git(repo, "cat-file", kind, oid, home=home)))
+    return found
+
+
+def plant_pack(repo, objects):
+    """Write a pack of ``(object id, type, body)`` into ``repo``'s .git, newer than any other.
+
+    Git searches its most recently used pack first and starts with the newest one, so when
+    every object a listing touches is in the planted pack, an object stored there under
+    another object's id is what ``git ls-tree -r`` lists, without re-hashing its content.
+    """
+    kinds = {"commit": 1, "tree": 2, "blob": 3}
+    data, entries = b"PACK" + struct.pack(">II", 2, len(objects)), []
+    for oid, kind, raw in objects:
+        size, head = len(raw), bytearray()
+        first = (kinds[kind] << 4) | (size & 15)
+        size >>= 4
+        while size:
+            head.append(first | 0x80)
+            first, size = size & 0x7F, size >> 7
+        head.append(first)
+        packed = bytes(head) + zlib.compress(raw)
+        entries.append((bytes.fromhex(oid), len(data), zlib.crc32(packed) & 0xFFFFFFFF))
+        data += packed
+    data += hashlib.sha1(data, usedforsecurity=False).digest()
+    entries.sort()
+    index = b"\xfftOc" + struct.pack(">I", 2)
+    index += b"".join(struct.pack(">I", sum(e[0][0] <= i for e in entries)) for i in range(256))
+    index += b"".join(e[0] for e in entries) + b"".join(struct.pack(">I", e[2]) for e in entries)
+    index += b"".join(struct.pack(">I", e[1]) for e in entries) + data[-20:]
+    index += hashlib.sha1(index, usedforsecurity=False).digest()
+    name = "pack-" + hashlib.sha1(data[:-20], usedforsecurity=False).hexdigest()
+    folder = Path(repo) / ".git" / "objects" / "pack"
+    (folder / (name + ".pack")).write_bytes(data)
+    (folder / (name + ".idx")).write_bytes(index)
+    later = time.time() + 10 ** 6
+    os.utime(folder / (name + ".pack"), (later, later))
+
+
 def unhardened(checkout, statement):
     """What an import straight from the checkout gives, the way the v1 child imported."""
     code = "import sys; sys.path.insert(0, %r); %s" % (str(checkout), statement)
@@ -351,12 +438,19 @@ class Base(TestCase):
         self.assertNotIn("body_digest_rederived", wrap)
         self.assertNotIn("digest_matches", wrap)
         self.assertEqual(wrap["source_tree"], "FRESH_EXPORT_OF_COMMIT")
+        self.assertIs(wrap["export_rehashed_to_commit"], True)
+        self.assertIs(wrap["interpreter"]["outside_checkout"], True)
+        self.assertIn(wrap["child"]["process_tree"], PROCESS_TREES)
+        if wrap["child"]["process_tree"] == "OWN_PID_NAMESPACE":
+            self.assertEqual(wrap["network_namespace"], NETNS_EMPTY)
         self.assertIn(wrap["network_namespace"], (NETNS_EMPTY, NETNS_UNAVAILABLE))
         self.assertIs(wrap["direct_network_egress_blocked"],
                       wrap["network_namespace"] == NETNS_EMPTY)
         if wrap["envelope"] is not None:
             self.assertIs(wrap["envelope"]["signed"], False)
             self.assertEqual((wrap["envelope"]["signature"], wrap["envelope"]["keyid"]), ("", ""))
+            self.assertEqual(wrap["envelope"]["note"], "UNSIGNED-honest: no cosign key present")
+            self.assertEqual(wrap["envelope"]["organ"], wrap["organ"])
 
 
 class ValidatePolicyTests(Base):
@@ -468,10 +562,13 @@ class AssembleTests(Base):
         self.assertEqual(SCHEMA, "szl.database-braid-lake-wrap/v2")
         self.assertIs(wrap["digest_rehashed_by_parent"], True)
         self.assertIs(wrap["payload_is_canonical_json_of_body"], True)
+        self.assertIs(wrap["body_matches_expected_anchor_body"], True)
         self.assertIs(wrap["adapter_rederivation_matches"], True)
         self.assertEqual(wrap["digest_rederived_by_adapter_same_process"],
                          wrap["envelope"]["digest"])
         self.assertEqual(wrap["envelope"]["digest"], hashlib.sha256(canon(body())).hexdigest())
+        self.assertIs(wrap["export_rehashed_to_commit"], True)
+        self.assertEqual(wrap["interpreter"], INTERPRETER)
         self.assertEqual(wrap["receipt_library"], {
             "distribution": "szl-receipt-dsse", "version_required": "0.3.1",
             "version_observed": "0.3.1", "module_origin": "INTERPRETER_PATH"})
@@ -484,10 +581,62 @@ class AssembleTests(Base):
         self.assertEqual(wrap["child"], {
             "flags": list(INTERPRETER_FLAGS), "isolated_mode": True,
             "bytecode_writes_disabled": True, "pycache_prefix_fresh_and_unused": True,
-            "adapter_loaded_from_export": True, "limits": child_limits()})
+            "adapter_loaded_from_export": True, "process_tree": "PROCESS_GROUP_ONLY",
+            "limits": child_limits()})
         self.assertEqual(wrap["envelope"]["algo"], "UNSIGNED")
         self.assert_no_authority(wrap)
         self.assertIs(validate_wrap(wrap, LAKE), True)
+
+    def test_expected_body_is_the_pinned_adapter_text(self):
+        made = expected_body(subject=TURN, input_digest=INPUT, stored_object_digest=STORED,
+                             policy_id=LAKE["policy_id"], organ=LAKE["organ"])
+        self.assertEqual(made, body())
+        self.assertEqual(canon(made), lake.canonical(made))
+        self.assertEqual(UNSIGNED_NOTE, "UNSIGNED-honest: no cosign key present")
+        made["honesty"]["asserts"] = "edited"
+        self.assertEqual(lake.ADAPTER_HONESTY, ADAPTER_HONESTY)
+
+    def test_body_with_anything_beyond_the_adapter_body_holds(self):
+        def honesty(value):
+            value["honesty"] = {"asserts": "correctness PROVEN"}
+
+        def reworded(value):
+            value["honesty"]["receipt_is"] = "a proof the anchored content is correct"
+
+        cases = {
+            "authority": lambda v: v.update(authority="ALLOW"),
+            "honesty_rewritten": honesty, "honesty_reworded": reworded,
+            "honesty_missing": lambda v: v.pop("honesty"),
+            "honesty_extra": lambda v: v["honesty"].update(signed="estate signer"),
+            "energy_reason": lambda v: v["energy"].update(reason="0 J measured"),
+            "energy_extra": lambda v: v["energy"].update(meter="governed-inference-meter"),
+        }
+        for name, mutate in cases.items():
+            value = body()
+            mutate(value)
+            with self.subTest(name):
+                wrap = wrap_of(child_ok(value))
+                self.assertEqual(wrap["state"], "HOLD")
+                self.assertIs(wrap["body_matches_expected_anchor_body"], False)
+                self.assertIs(wrap["payload_is_canonical_json_of_body"], True)
+                self.assertIs(wrap["digest_rehashed_by_parent"], True)
+                self.assertIs(validate_wrap(wrap, LAKE), True)
+
+    def test_envelope_note_and_organ_are_the_library_values(self):
+        for value in ("SIGNED by the estate signer; production authorized",
+                      {"signed": True, "authority": "ALLOW"}, None, "", KeyError):
+            raw = child_ok()
+            if value is KeyError:
+                raw["envelope"].pop("note")
+            else:
+                raw["envelope"]["note"] = value
+            with self.subTest(note=value):
+                self.refuses("LAKE_ENVELOPE_NOTE_UNEXPECTED", wrap_of, raw)
+        for value in ("a11oy", None, "", LAKE["organ"].upper()):
+            raw = child_ok()
+            raw["envelope"]["organ"] = value
+            with self.subTest(organ=value):
+                self.refuses("LAKE_ENVELOPE_ORGAN_MISMATCH", wrap_of, raw)
 
     def test_envelope_keeps_only_library_fields(self):
         raw = child_ok()
@@ -576,6 +725,7 @@ class AssembleTests(Base):
                 self.assertIsNone(wrap["envelope"])
                 self.assertIs(wrap["digest_rehashed_by_parent"], False)
                 for field in ("payload_is_canonical_json_of_body",
+                              "body_matches_expected_anchor_body",
                               "digest_rederived_by_adapter_same_process", "verify_ok",
                               "verify_detail"):
                     self.assertIsNone(wrap[field], field)
@@ -702,9 +852,27 @@ class AssembleTests(Base):
                 self.refuses("LAKE_NETWORK_CLAIM_INVALID", wrap_of, child_ok(),
                              obs=observed(network_namespace=value))
         for obs in ([], {**observed(), "extra": 1}, observed(export_files=0),
-                    observed(export_skipped_entries=-1)):
+                    observed(export_skipped_entries=-1), observed(interpreter=None),
+                    observed(interpreter=dict(INTERPRETER, extra=1)),
+                    observed(interpreter=dict(INTERPRETER, prefix="venv")),
+                    observed(interpreter=dict(INTERPRETER, base_prefix=None)),
+                    observed(interpreter=dict(INTERPRETER, python="3.12")),
+                    observed(process_tree="CGROUP"),
+                    # A PID namespace is only nested inside an observed empty namespace.
+                    observed(process_tree="OWN_PID_NAMESPACE")):
             with self.subTest(obs=obs):
                 self.refuses("LAKE_OBSERVATION_INVALID", wrap_of, child_ok(), obs=obs)
+        for value in (False, None, 1):
+            with self.subTest(outside_checkout=value):
+                self.refuses("LAKE_INTERPRETER_INSIDE_CHECKOUT", wrap_of, child_ok(),
+                             obs=observed(interpreter=dict(INTERPRETER, outside_checkout=value)))
+            with self.subTest(export_rehashed_to_commit=value):
+                self.refuses("LAKE_EXPORT_MISMATCH", wrap_of, child_ok(),
+                             obs=observed(export_rehashed_to_commit=value))
+        nested = wrap_of(child_ok(), obs=observed(network_namespace=NETNS_EMPTY,
+                                                  process_tree="OWN_PID_NAMESPACE"))
+        self.assertEqual(nested["child"]["process_tree"], "OWN_PID_NAMESPACE")
+        self.assertIs(validate_wrap(nested, LAKE), True)
 
     def test_network_namespace_is_recorded_as_observed(self):
         empty = wrap_of(child_ok(), obs=observed(network_namespace=NETNS_EMPTY))
@@ -863,6 +1031,8 @@ class ValidateWrapTests(Base):
                            ("digest_rederived_by_adapter_same_process", ""),
                            ("digest_rehashed_by_parent", True),
                            ("payload_is_canonical_json_of_body", True),
+                           ("body_matches_expected_anchor_body", True),
+                           ("body_matches_expected_anchor_body", False),
                            ("adapter_rederivation_matches", True),
                            ("adapter_rederivation_matches", 0), ("verify_ok", False),
                            ("verify_detail", "unsigned-honest")):
@@ -912,6 +1082,42 @@ class ValidateWrapTests(Base):
                      self.mutated(self.good, lambda w: w["envelope"].update(
                          payloadType="application/json")), LAKE)
 
+    def test_envelope_note_and_organ_are_bound(self):
+        for wrap in (self.good, self.hold):
+            for pins in (True, False):
+                for note in ("SIGNED by the estate signer; production authorized",
+                             {"signed": True, "authority": "ALLOW"}, None):
+                    with self.subTest(note=note, state=wrap["state"], pins=pins):
+                        self.refuses("LAKE_ENVELOPE_NOTE_UNEXPECTED", validate_wrap,
+                                     self.mutated(wrap, lambda w: w["envelope"].update(
+                                         note=note)), LAKE, require_current_pins=pins)
+                for organ in ("a11oy", None):
+                    with self.subTest(organ=organ, state=wrap["state"], pins=pins):
+                        self.refuses("LAKE_ENVELOPE_ORGAN_MISMATCH", validate_wrap,
+                                     self.mutated(wrap, lambda w: w["envelope"].update(
+                                         organ=organ)), LAKE, require_current_pins=pins)
+
+    def test_body_beyond_the_adapter_body_cannot_stay_canonical(self):
+        # The reviewer's forgery: a self-consistent digest over an added authority field and
+        # a rewritten honesty block was accepted as CANONICAL_RECEIPT_EMITTED_UNSIGNED.
+        changes = {"authority": "ALLOW", "honesty": {"asserts": "correctness PROVEN"}}
+        for pins in (True, False):
+            with self.subTest(pins=pins):
+                forged = rebody(deepcopy(self.good), **changes)
+                self.refuses("LAKE_DERIVED_FIELD_MISMATCH", validate_wrap, forged, LAKE,
+                             require_current_pins=pins)
+                forged["body_matches_expected_anchor_body"] = False
+                self.refuses("LAKE_STATE_DRIFT", validate_wrap, forged, LAKE,
+                             require_current_pins=pins)
+                forged["state"] = "HOLD"
+                self.assertIs(validate_wrap(forged, LAKE, require_current_pins=pins), True)
+        for key, value in (("honesty", KeyError), ("honesty", dict(ADAPTER_HONESTY, chain="x")),
+                           ("energy", {"status": "UNAVAILABLE", "joules": None,
+                                       "reason": "0 J"}), ("signed_by", "estate")):
+            with self.subTest(key=key):
+                self.refuses("LAKE_DERIVED_FIELD_MISMATCH", validate_wrap,
+                             rebody(deepcopy(self.good), **{key: value}), LAKE)
+
     def test_body_is_decoded_independently(self):
         for key, value in (("subject", "braid-turn:" + "9" * 32),
                            ("input_digest", "sha256:" + "9" * 64), ("input_digest", INPUT),
@@ -957,6 +1163,9 @@ class ValidateWrapTests(Base):
                        lambda w: w.update(digest_rehashed_by_parent=1),
                        lambda w: w.update(payload_is_canonical_json_of_body=False),
                        lambda w: w.update(payload_is_canonical_json_of_body=None),
+                       lambda w: w.update(body_matches_expected_anchor_body=False),
+                       lambda w: w.update(body_matches_expected_anchor_body=None),
+                       lambda w: w.update(body_matches_expected_anchor_body=1),
                        lambda w: w.update(adapter_rederivation_matches=False),
                        lambda w: w.update(adapter_rederivation_matches=1),
                        lambda w: w.update(digest_rederived_by_adapter_same_process="d" * 64),
@@ -1060,7 +1269,8 @@ class ChildRunTests(Base):
         cls.bare = make_python(cls.base, "bare-python")
         cls.repos = {mode: make_lake(cls.base, mode, mode=mode) for mode in (
             "ok", "drift", "unavailable", "signed", "crash", "silent", "noise", "list",
-            "forged_digest", "payload_type", "noncanonical", "probe")}
+            "forged_digest", "payload_type", "noncanonical", "probe", "extra_field", "honesty",
+            "note", "organ")}
 
     def wrap(self, name, *, python=None, **overrides):
         kwargs = {"subject": TURN, "input_digest": INPUT, "stored_object_digest": STORED,
@@ -1105,6 +1315,31 @@ class ChildRunTests(Base):
         self.assertEqual(seen["network_namespace"], network_namespace_state())
         if seen["network_namespace"] == NETNS_EMPTY:
             self.assertEqual(raw["interfaces"], ["lo"])
+        self.assertEqual(seen["process_tree"],
+                         "OWN_PID_NAMESPACE" if pid_namespace_prefix() else "PROCESS_GROUP_ONLY")
+        if seen["process_tree"] == "OWN_PID_NAMESPACE":
+            self.assertEqual(raw["pid"], 1)
+        self.assertEqual(seen["interpreter"], {
+            "python": "%d.%d.%d" % sys.version_info[:3],
+            "prefix": os.path.abspath(Path(self.lib).parent.parent),
+            "base_prefix": sys.base_prefix, "outside_checkout": True})
+        self.assertIs(seen["export_rehashed_to_commit"], True)
+        with mock.patch.object(lake, "_PID_NAMESPACE", [None]):
+            _raw, seen = run_child(self.repos["ok"], request(), python=self.lib)
+        self.assertEqual(seen["process_tree"], "PROCESS_GROUP_ONLY")
+
+    def test_body_beyond_the_adapter_body_holds(self):
+        for name in ("extra_field", "honesty"):
+            with self.subTest(name):
+                wrap = self.wrap(name)
+                self.assertEqual(wrap["state"], "HOLD")
+                self.assertIs(wrap["body_matches_expected_anchor_body"], False)
+                self.assertIs(wrap["adapter_rederivation_matches"], True)
+                self.assertIs(validate_wrap(wrap, LAKE), True)
+
+    def test_envelope_note_or_organ_beyond_the_library_is_refused(self):
+        self.refuses("LAKE_ENVELOPE_NOTE_UNEXPECTED", self.wrap, "note")
+        self.refuses("LAKE_ENVELOPE_ORGAN_MISMATCH", self.wrap, "organ")
 
     def test_version_or_rederivation_difference_holds(self):
         old = self.wrap("ok", python=self.old)
@@ -1151,6 +1386,15 @@ class ChildRunTests(Base):
                      python=str(self.base / "no-such-python"))
         self.refuses("LAKE_CHILD_UNAVAILABLE", run_child, self.repos["ok"], request(),
                      python="python3")
+        # Each of these fails the -I -S interpreter probe, before the adapter is exported.
+        for name, code in (("false", "LAKE_INTERPRETER_PROBE_FAILED"),
+                           ("true", "LAKE_INTERPRETER_PROBE_FAILED"),
+                           ("echo", "LAKE_INTERPRETER_LAYOUT_INVALID")):
+            exe = next((p for p in ("/bin/" + name, "/usr/bin/" + name) if os.path.isfile(p)),
+                       None)
+            if exe is not None:
+                with self.subTest(name):
+                    self.refuses(code, run_child, self.repos["ok"], request(), python=exe)
 
     def test_deadline_and_output_cap_are_enforced(self):
         sleeper = make_lake(self.base, "sleep", mode="sleep")
@@ -1237,6 +1481,121 @@ class ChildRunTests(Base):
                      subject=TURN, input_digest=INPUT, stored_object_digest=STORED,
                      python=self.lib)
 
+    def swapped_root(self, repo, evil):
+        """The root tree body with the adapter entry pointing at ``evil``, and its blob id."""
+        blob = git_input(repo, "hash-object", "-w", "--stdin", stdin=evil,
+                         home=self.base).decode("ascii").strip()
+        old = git(repo, "rev-parse", "HEAD:szl_lake_receipt.py", home=self.base).decode().strip()
+        root = git(repo, "rev-parse", "HEAD^{tree}", home=self.base).decode().strip()
+        listing = git(repo, "ls-tree", root, home=self.base).decode("ascii")
+        return root, blob, listing.replace(old, blob)
+
+    def test_planted_pack_cannot_swap_a_committed_subtree(self):
+        repo = make_lake(self.base, "planted-pack", extra={"lib/helper.py": "SAFE = True\n"})
+        git(repo, "gc", "-q", home=self.base)
+        evil = b"SAFE = False\n"
+        blob = git_input(repo, "hash-object", "-w", "--stdin", stdin=evil,
+                         home=self.base).decode("ascii").strip()
+        subtree = git(repo, "rev-parse", "HEAD:lib", home=self.base).decode().strip()
+        listing = git(repo, "ls-tree", subtree, home=self.base).decode("ascii")
+        old = git(repo, "rev-parse", "HEAD:lib/helper.py", home=self.base).decode().strip()
+        swapped = git_input(repo, "mktree", stdin=listing.replace(old, blob).encode("ascii"),
+                            home=self.base).decode().strip()
+        body_of = git(repo, "cat-file", "tree", swapped, home=self.base)
+        # Valid copies of every committed object, and a different tree under the subtree's id.
+        plant_pack(repo, reachable_objects(repo, home=self.base, swap={subtree: body_of}))
+        (repo / "lib/helper.py").write_bytes(evil)
+        # Control: git itself now lists the planted bytes for the committed path, at the
+        # same commit, and the work tree agrees with that listing.
+        raw = git(repo, "ls-tree", "-r", "HEAD", home=self.base).decode("ascii")
+        listed = {line.split("\t", 1)[1]: line.split()[2] for line in raw.splitlines()}
+        self.assertEqual(listed["lib/helper.py"], blob)
+        # The census itself now re-hashes trees, so it is the first layer to refuse.
+        self.refuses("CENSUS_LISTING_NOT_COMMIT_TREE", list_tree, repo)
+        self.refuses("CENSUS_LISTING_NOT_COMMIT_TREE", verified_listing, repo)
+        self.refuses("CENSUS_LISTING_NOT_COMMIT_TREE", adapter_identity, repo,
+                     "szl_lake_receipt.py")
+        self.refuses("CENSUS_LISTING_NOT_COMMIT_TREE", wrap_report, deepcopy(LAKE), repo,
+                     subject=TURN, input_digest=INPUT, stored_object_digest=STORED,
+                     python=self.lib)
+
+    def test_replace_ref_cannot_swap_the_committed_root_tree(self):
+        repo = make_lake(self.base, "replace-ref")
+        committed = git(repo, "rev-parse", "HEAD:szl_lake_receipt.py",
+                        home=self.base).decode().strip()
+        root, blob, listing = self.swapped_root(repo, adapter("forged_digest", "REPLACED")
+                                                .encode("utf-8"))
+        swapped = git_input(repo, "mktree", stdin=listing.encode("ascii"),
+                            home=self.base).decode().strip()
+        git(repo, "replace", root, swapped, home=self.base)
+        # Control: by default git now shows the replacement for the committed path.
+        self.assertIn(blob, git(repo, "ls-tree", "HEAD", "szl_lake_receipt.py",
+                                home=self.base).decode())
+        commit, rows = verified_listing(repo)
+        self.assertEqual(tree_object_id(rows), commit_tree(repo, commit))
+        wrap = self.wrap_of_repo(repo)
+        self.assertEqual(wrap["state"], "CANONICAL_RECEIPT_EMITTED_UNSIGNED")
+        self.assertEqual((wrap["commit"], wrap["adapter_blob_sha1"]), (commit, committed))
+
+    def wrap_of_repo(self, repo, python=None):
+        return wrap_report(deepcopy(LAKE), repo, subject=TURN, input_digest=INPUT,
+                           stored_object_digest=STORED, python=python or self.lib, at=NOW)
+
+    def test_venv_inside_the_checkout_is_refused_before_it_runs(self):
+        repo = make_lake(self.base, "venv-inside")
+        marker = self.base / "lake-venv-ran"
+        line = "import pathlib; pathlib.Path(%r).write_text('ran')\n" % str(marker)
+        python = make_python(repo, ".venv", {**library_files("0.3.1"), "zz_marker.pth": line})
+        # Control: started normally, that interpreter runs code planted in the checkout.
+        subprocess.run([python, "-I", "-c", "pass"], check=True, timeout=60)
+        self.assertTrue(marker.exists())
+        marker.unlink()
+        self.refuses("LAKE_INTERPRETER_INSIDE_CHECKOUT", self.wrap_of_repo, repo, python)
+        self.refuses("LAKE_INTERPRETER_INSIDE_CHECKOUT", interpreter_layout, python, repo)
+        self.assertFalse(marker.exists())
+
+    def test_pth_lines_into_the_checkout_are_refused(self):
+        repo = make_lake(self.base, "pth-lines")
+        planted = repo / ".planted"
+        for path, text in library_files("0.3.1").items():
+            (planted / path).parent.mkdir(parents=True, exist_ok=True)
+            (planted / path).write_text(text, encoding="utf-8")
+        by_path = make_python(self.base, "pth-path-python", {"planted.pth": "%s\n" % planted})
+        self.refuses("LAKE_INTERPRETER_INSIDE_CHECKOUT", self.wrap_of_repo, repo, by_path)
+        by_code = make_python(self.base, "pth-code-python", {
+            "sneaky.pth": "import sys; sys.path.append(%r)\n" % str(planted)})
+        # An import line is code; nothing but running it shows where it points.
+        self.assertIs(interpreter_layout(by_code, repo)["outside_checkout"], True)
+        self.refuses("LAKE_INTERPRETER_INSIDE_CHECKOUT", self.wrap_of_repo, repo, by_code)
+
+
+class CommittedTreeTests(Base):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="lake-tree-")
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+
+    def test_listing_and_export_are_rehashed_to_the_commit(self):
+        repo = make_lake(self.base, "tree", extra={"a.txt": "a\n", "a-b/x": "x\n",
+                                                   "a/b.py": "b = 1\n", "a0": "0\n"})
+        os.symlink("a.txt", repo / "link")
+        git(repo, "add", "-A", home=self.base)
+        git(repo, "commit", "-q", "-m", "link", home=self.base)
+        commit, rows = verified_listing(repo)
+        tree = git(repo, "rev-parse", "HEAD^{tree}", home=self.base).decode().strip()
+        self.assertEqual((tree_object_id(rows), commit_tree(repo, commit)), (tree, tree))
+        for bad in ("0" * 40, tree, "C" * 40):
+            with self.subTest(bad=bad):
+                self.refuses("LAKE_COMMIT_OBJECT_INVALID", commit_tree, repo, bad)
+        self.refuses("LAKE_LISTING_INVALID", tree_object_id, rows + [rows[0]])
+        dest = self.base / "export"
+        dest.mkdir()
+        counts = export_tree(repo, commit, dest, max_blob_bytes=1 << 20, max_total_bytes=1 << 24)
+        self.assertEqual((counts["files"], counts["skipped_entries"]), (6, 1))
+        self.assertIs(export_matches(dest, rows), True)
+        (dest / "planted.py").write_text("x\n", encoding="utf-8")
+        self.assertIs(export_matches(dest, rows), False)
+
 
 class CliTests(Base):
     @classmethod
@@ -1309,6 +1668,27 @@ class CliTests(Base):
                          hashlib.sha256(spaced.read_bytes()).hexdigest())
         self.assertNotEqual(one["stored_object_digest"], two["stored_object_digest"])
         self.assertEqual(one["input_digest"], two["input_digest"])
+
+    def test_report_is_read_once(self):
+        report = self.write("swap.json", {"turn_id": TURN, "inputs_digest": INPUT, "ordinal": 1})
+        original = report.read_bytes()
+        real = lake.read_json
+
+        def read_then_swap(path, *, max_bytes):
+            value = real(path, max_bytes=max_bytes)
+            if path == report:
+                # The file changes after it was parsed; the stored digest must not follow it.
+                report.write_bytes(json.dumps({"turn_id": TURN, "inputs_digest": INPUT,
+                                               "ordinal": 2}).encode("utf-8"))
+            return value
+
+        output = self.out()
+        with mock.patch.object(lake, "read_json", read_then_swap):
+            code, printed = self.run_cli(report=report, output=output)
+        self.assertEqual((code, printed["state"]), (0, "CANONICAL_RECEIPT_EMITTED_UNSIGNED"))
+        wrap = json.loads(output.read_text())
+        self.assertNotEqual(report.read_bytes(), original)
+        self.assertEqual(wrap["stored_object_digest"], hashlib.sha256(original).hexdigest())
 
     def test_output_inside_the_repository_is_refused(self):
         inside = ROOT / "tests" / "lake-wrap-should-not-exist.json"

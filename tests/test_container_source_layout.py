@@ -111,6 +111,16 @@ class ContainerSourceLayoutTests(unittest.TestCase):
             self.assertIn("ModuleNotFoundError", result.stderr)
             self.assertIn("census.system_design", result.stderr)
 
+    def test_vertical_contracts_python_module_is_explicitly_packaged(self):
+        with tempfile.TemporaryDirectory(prefix="org-health-container-layout-") as directory:
+            root, copied = self.assemble(directory)
+            self.assertIn("census/vertical_contracts.py", copied)
+            (root / "census" / "vertical_contracts.py").unlink()
+            result = self.probe(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("ModuleNotFoundError", result.stderr)
+            self.assertIn("census.vertical_contracts", result.stderr)
+
     def test_checkout_cannot_mask_a_missing_container_module(self):
         with tempfile.TemporaryDirectory(prefix="org-health-container-layout-") as directory:
             root, _ = self.assemble(directory)

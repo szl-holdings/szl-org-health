@@ -395,10 +395,16 @@ class LeanCodeOnlyTests(TestCase):
         self.assertEqual(lean_code_only("x -- tail without newline"), "x ")
 
     def test_nested_block_comments(self):
+        # Each outermost block comment becomes one space, as Lean reads it.
         text = "a /- b /- c -/ still comment sorry -/ e"
-        self.assertEqual(lean_code_only(text), "a  e")
-        self.assertEqual(lean_code_only("/- outer /- inner -/ -- not a line comment\n-/z"), "z")
-        self.assertEqual(lean_code_only("/-- doc sorry -/ theorem t"), " theorem t")
+        self.assertEqual(lean_code_only(text), "a   e")
+        self.assertEqual(lean_code_only("/- outer /- inner -/ -- not a line comment\n-/z"), " z")
+        self.assertEqual(lean_code_only("/-- doc sorry -/ theorem t"), "  theorem t")
+
+    def test_a_block_comment_never_joins_the_tokens_around_it(self):
+        self.assertEqual(lean_code_only("by/- c -/sorry"), "by sorry")
+        self.assertEqual(lean_code_only("exact/- why /- nested -/ -/sorry"), "exact sorry")
+        self.assertEqual(lean_code_only("a/--/b"), "a b")
 
     def test_unterminated_block_swallows_rest(self):
         self.assertEqual(lean_code_only("keep /- open sorry"), "keep ")
@@ -825,11 +831,27 @@ class SizeBoundTests(TestCase):
     def test_axis_and_tau_bit_caps_are_exact(self):
         edge = F(1, 2 ** (MAX_AXIS_BITS - 1))
         self.assertEqual(edge.denominator.bit_length(), MAX_AXIS_BITS)
-        decide({"a": edge}, {"a": 1}, F(1, 2))
-        decide({"a": F(1, 2)}, {"a": 1}, edge)
+        self.assertTrue(verify_decision(decide({"a": edge}, {"a": 1}, F(1, 2))))
+        self.assertTrue(verify_decision(decide({"a": F(1, 2)}, {"a": 1}, edge)))
         over = F(1, 2 ** MAX_AXIS_BITS)
         self.refused("EXACT_AXIS_OUT_OF_RANGE", {"a": over}, {"a": 1}, F(1, 2))
         self.refused("EXACT_TAU_INVALID", {"a": F(1, 2)}, {"a": 1}, over)
+
+    def test_every_record_decide_accepts_reads_back_through_verify_decision(self):
+        # The widest numbers the cap admits have exactly the most digits parse_rational reads.
+        widest = 2 ** MAX_AXIS_BITS - 1
+        self.assertEqual(len(str(widest)), 401)
+        self.assertEqual(len(str(2 ** (MAX_AXIS_BITS + 1) - 1)), 402)
+        near_one = F(widest - 1, widest)
+        for axes, tau in (({"a": F(1, widest)}, F(1, 2)),
+                          ({"a": near_one, "b": F(1, widest)}, near_one),
+                          ({"a": near_one}, near_one), ({"a": F(1, 2)}, F(1, widest))):
+            with self.subTest(axes=sorted(axes)):
+                record = decide(axes, {name: 1 for name in axes}, tau)
+                self.assertTrue(verify_decision(record))
+        # The case the old 1400-bit cap let through: written by decide, unreadable by verify.
+        self.refused("EXACT_AXIS_OUT_OF_RANGE", {"a": F(1, 2 ** 1333)}, {"a": 1}, F(1, 2))
+        self.refused("EXACT_TAU_INVALID", {"a": F(1, 2)}, {"a": 1}, F(2 ** 1398 + 1, 2 ** 1399))
 
     def test_operand_cap_is_exact_at_the_boundary_and_never_a_value_error(self):
         # right = (2^619)^21 = 2^12999 has exactly MAX_OPERAND_BITS bits; 2^13000 has one more.

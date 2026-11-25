@@ -255,7 +255,8 @@ class CheckTests(TestCase):
             self.assertIs(type(report[name]), int, name)
         self.assertEqual((report["answers"], report["evaluated"], report["passed"],
                           report["failed"]), (3, 3, 2, 1))
-        self.assertEqual(report["families"], {"ARITHMETIC_CHECK": {"evaluated": 3, "passed": 2}})
+        self.assertEqual(report["families"], {"ARITHMETIC_CHECK": dict(
+            dict.fromkeys(SUMMARY_COUNTS, 0), answers=3, evaluated=3, passed=2, failed=1)})
         for flag in kat._FALSE_FLAGS:
             self.assertIs(report[flag], False)
         self.assertTrue(validate_report(report))
@@ -280,6 +281,21 @@ class CheckTests(TestCase):
                           report["evaluated"], report["answers"]), (1, 1, 1, 1, 3))
         unread = check(answer_set(answer("four")), self.census, read_current=None)
         self.assertEqual((unread["source_bytes_not_read"], unread["evaluated"]), (1, 0))
+
+    def test_each_family_keeps_its_unscored_answers_in_its_own_total(self):
+        # Six of seven answers go stale: the family must not read as one out of one.
+        changed = census_of({"src/a.lean": CHANGED})
+        stale = [dict(answer("seven", anchor=f"theorem gone{i} := rfl"), id=f"t-stale-{i}")
+                 for i in range(6)]
+        absent = answer("wrong", path="src/c.lean", family="OTHER_CHECK")
+        report = check(answer_set(answer("four"), *stale, absent), changed,
+                       read_current=reader(CHANGED))
+        zero = dict.fromkeys(SUMMARY_COUNTS, 0)
+        self.assertEqual(report["families"], {
+            "ARITHMETIC_CHECK": dict(zero, answers=7, evaluated=1, passed=1, stale=6,
+                                     rebound_by_line=1),
+            "OTHER_CHECK": dict(zero, answers=1, source_not_in_census=1)})
+        self.assertTrue(validate_report(report))
 
     def test_an_arithmetic_error_in_one_answer_refuses_only_that_answer(self):
         real = kat.evaluate
@@ -348,15 +364,50 @@ class ValidateReportTests(TestCase):
         self.refused(lambda v: v.update(passed=True), "KAT_REPORT_FIELDS_INVALID")
 
     def test_families_are_re_derived(self):
-        self.refused(lambda v: v["families"]["ARITHMETIC_CHECK"].update(passed=2),
-                     "KAT_REPORT_TOTALS_DRIFT")
-        self.refused(lambda v: v["families"].update(EXTRA_FAMILY={"evaluated": 0, "passed": 0}),
+        self.assertEqual(self.report["families"]["ARITHMETIC_CHECK"], dict(
+            dict.fromkeys(SUMMARY_COUNTS, 0), answers=3, evaluated=2, passed=1, failed=1,
+            anchor_not_at_line=1))
+        for field in SUMMARY_COUNTS:
+            with self.subTest(field=field):
+                self.refused(lambda v: v["families"]["ARITHMETIC_CHECK"].update(
+                    {field: v["families"]["ARITHMETIC_CHECK"][field] + 1}),
+                    "KAT_REPORT_TOTALS_DRIFT")
+        self.refused(lambda v: v["families"].update(EXTRA_FAMILY=dict.fromkeys(SUMMARY_COUNTS, 0)),
                      "KAT_REPORT_TOTALS_DRIFT")
         self.refused(lambda v: v["families"].pop("ARITHMETIC_CHECK"), "KAT_REPORT_TOTALS_DRIFT")
+        # The old two-field entry hid every unscored answer; it is no longer a valid shape.
+        self.refused(lambda v: v["families"].update(ARITHMETIC_CHECK={"evaluated": 2, "passed": 1}),
+                     "KAT_REPORT_FIELDS_INVALID")
+        self.refused(lambda v: v.update(families=[]), "KAT_REPORT_FIELDS_INVALID")
 
         def relabel(value):
             value["results"][0]["family"] = "OTHER_FAMILY"
         self.refused(relabel, "KAT_REPORT_TOTALS_DRIFT")
+
+    def test_a_bool_never_stands_for_a_count_and_an_empty_report_is_refused(self):
+        one = check(answer_set(answer("four")), census_of({"src/a.lean": SOURCE}),
+                    read_current=reader(SOURCE))
+        self.assertEqual((one["answers"], one["evaluated"], one["passed"]), (1, 1, 1))
+        for field in SUMMARY_COUNTS:
+            if one[field] in (0, 1):
+                with self.subTest(field=field):
+                    forged = deepcopy(one)
+                    forged[field] = bool(one[field])
+                    with self.assertRaises(InputError) as caught:
+                        validate_report(forged)
+                    self.assertEqual(caught.exception.code, "KAT_REPORT_FIELDS_INVALID")
+                    forged = deepcopy(one)
+                    forged["families"]["ARITHMETIC_CHECK"][field] = bool(one[field])
+                    with self.assertRaises(InputError) as caught:
+                        validate_report(forged)
+                    self.assertEqual(caught.exception.code, "KAT_REPORT_FIELDS_INVALID")
+        for answers in (0, False):
+            empty = deepcopy(one)
+            empty.update(dict.fromkeys(SUMMARY_COUNTS, 0), answers=answers, results=[],
+                         families={})
+            with self.subTest(answers=answers), self.assertRaises(InputError) as caught:
+                validate_report(empty)
+            self.assertEqual(caught.exception.code, "KAT_REPORT_FIELDS_INVALID")
 
     def test_family_names_follow_the_pattern(self):
         for bad in ("lowercase", "A", "A" * 49, "1ABC", "AB-CD", "", None):
@@ -365,7 +416,7 @@ class ValidateReportTests(TestCase):
         good = deepcopy(self.report)
         for item in good["results"]:
             item["family"] = "A1"
-        good["families"] = {"A1": {"evaluated": 2, "passed": 1}}
+        good["families"] = {"A1": good["families"].pop("ARITHMETIC_CHECK")}
         self.assertTrue(validate_report(good))
 
     def test_row_tampering_is_refused(self):
@@ -377,6 +428,8 @@ class ValidateReportTests(TestCase):
                      "KAT_REPORT_ROW_INVALID")
         self.refused(lambda v: v["results"][0].update(line=0), "KAT_REPORT_ROW_INVALID")
         self.refused(lambda v: v["results"][0].update(line=True), "KAT_REPORT_ROW_INVALID")
+        self.refused(lambda v: v["results"][0].update(path="src/a\ud800.lean"),
+                     "KAT_REPORT_ROW_INVALID")
         self.refused(lambda v: v["results"][0].update(repository="other/alpha"), "KAT_REPORT_ROW_INVALID")
         self.refused(lambda v: v["results"][0].update(id="T-UPPER"), "KAT_REPORT_ROW_INVALID")
         self.refused(lambda v: v["results"].reverse(), "KAT_REPORT_ROW_INVALID")
@@ -393,6 +446,7 @@ class ValidateReportTests(TestCase):
         first.update(verdict="INVALID_CLAIM", detail=None)
         value.update(passed=value["passed"] - 1, invalid_claims=1)
         value["families"]["ARITHMETIC_CHECK"]["passed"] -= 1
+        value["families"]["ARITHMETIC_CHECK"]["invalid_claims"] += 1
         with self.assertRaises(InputError):
             validate_report(value)
         first["detail"] = "KAT_ARITHMETIC_ERROR"
@@ -435,11 +489,19 @@ class AnswerSetTests(TestCase):
             with self.subTest(field=field):
                 self.refused(lambda v: v["answers"][0].update({field: bad}), "KAT_ANSWER_FIELDS_INVALID")
         for field, bad in (("line", 0), ("line", True), ("blob_sha1", "A" * 40),
-                           ("repository", "other/alpha")):
+                           ("repository", "other/alpha"), ("path", "Lutar/X\ud800.lean")):
             with self.subTest(field=field):
                 self.refused(lambda v: v["answers"][0]["source"].update({field: bad}),
                              "KAT_ANSWER_FIELDS_INVALID")
         self.refused(lambda v: v["answers"][0].update(signed=False), "KAT_ANSWER_FIELDS_INVALID")
+
+    def test_a_path_with_no_utf8_form_refuses_the_set_with_a_typed_code(self):
+        # A lone surrogate reaches here only through a JSON escape; it must never surface as an
+        # untyped UnicodeEncodeError from the cord key.
+        bad = answer_set(answer("four", path="Lutar/X\ud800.lean"), answer("seven"))
+        with self.assertRaises(InputError) as caught:
+            check(bad, census_of({"src/a.lean": SOURCE}), read_current=reader(SOURCE))
+        self.assertEqual(caught.exception.code, "KAT_ANSWER_FIELDS_INVALID")
 
     def test_shipped_set_validates_and_is_serialised_like_every_contract(self):
         answers = validate_set(self.shipped)
@@ -454,10 +516,17 @@ class AnswerSetTests(TestCase):
         for item in self.shipped["answers"]:
             # No answer reads a codex, so none is named as if it did.
             self.assertFalse(item["id"].startswith("codex-"), item["id"])
-        for name in ("52-weeks", "mod7", "quarter-weeks", "quarters"):
-            self.assertEqual(by_id[f"lean-enoch-{name}"]["family"], "CALENDAR_ASTRONOMY")
-        for name in ("lambda-nine-axis-weight-sum", "lambda-nine-axis-denominators-regular"):
-            self.assertEqual(by_id[name]["family"], "LAMBDA_CORE")
+        # Calendar cycles are one subject, whichever culture's calendar the file states.
+        for name in ("lean-enoch-52-weeks", "lean-enoch-mod7", "lean-enoch-quarter-weeks",
+                     "lean-enoch-quarters", "maya-calendar-round-lcm", "maya-gcd",
+                     "maya-haab-cycles", "maya-tzolkin-cycles"):
+            self.assertEqual(by_id[name]["family"], "CALENDAR_ASTRONOMY", name)
+        # Generic arithmetic about modern weights is not a tradition's mathematics.
+        for name in ("lambda-nine-axis-weight-sum", "lambda-nine-axis-denominators-regular",
+                     "egy-horus-roundtrip"):
+            self.assertEqual(by_id[name]["family"], "LAMBDA_CORE", name)
+        self.assertFalse({a["family"] for a in self.shipped["answers"]} &
+                         {"HEBREW_SCRIBAL", "INKA_KHIPU", "MAYA"})
         heron = by_id["bab-ybc-heron-iterate-header"]["statement"]
         self.assertIn("which line 5 itself attributes to 'the tablet'", heron)
         self.assertIn("'Calendar Round' is the source file's own name",
@@ -467,16 +536,49 @@ class AnswerSetTests(TestCase):
             if "tablet" in text or "Calendar Round" in text:
                 self.assertTrue("attributes to" in text or "own name" in text, item["id"])
 
-    def test_shipped_family_map_labels(self):
+    def test_shipped_family_map_labels_name_the_subject_not_a_tradition(self):
+        """One rule, applied to every file: a tradition family stays only where the theorems state
+        that tradition's own content (a tablet value, a table entry, the notation itself, or a
+        procedure from its own starting values). A modern object (ledger, receipt, gate, weight,
+        byte list) or a general result a file attributes to a tradition takes its subject's
+        family, and a calendar cycle is CALENDAR_ASTRONOMY whichever culture's calendar it is."""
         families = json.loads(FAMILY_MAP.read_text(encoding="utf-8"))["families"]
         lean = families["szl-holdings/lutar-lean"]
+        traditions = {"BABYLONIAN", "CHINESE", "EGYPTIAN_MATH", "HEBREW_SCRIBAL", "INDIAN",
+                      "INKA_KHIPU", "MAYA"}
+        self.assertEqual({path: family for path, family in lean.items() if family in traditions}, {
+            "Lutar/Banach/LiuHuiPi.lean": "CHINESE",
+            "Lutar/Egyptian/AkhmimTable.lean": "EGYPTIAN_MATH",
+            "Lutar/Egyptian/HorusEye.lean": "EGYPTIAN_MATH",
+            "Lutar/Innovations/round4/SexagesimalReciprocal.lean": "BABYLONIAN",
+            "Lutar/Innovations/round4/SulbaSqrtBound.lean": "INDIAN",
+            "Lutar/Innovations/round4/YBCHeronConvergence.lean": "BABYLONIAN",
+        })
         expected = {
+            "Lutar/Banach/BabylonianContraction.lean": "ANALYSIS_ALGEBRA",
+            "Lutar/Brahmi/AxisOption.lean": "GOVERNANCE_DOCTRINE",
+            "Lutar/Calibration/FalsePosition.lean": "ANALYSIS_ALGEBRA",
+            "Lutar/Crt/WeightChunking.lean": "ANALYSIS_ALGEBRA",
+            "Lutar/Egyptian.lean": "LAMBDA_CORE",
+            "Lutar/Innovations/round3/KhipuEmitMonotone.lean": "CRYPTO_PROVENANCE",
+            "Lutar/Innovations/round4/CRTReceiptShard.lean": "CRYPTO_PROVENANCE",
+            "Lutar/Innovations/round4/CopperScrollDAGHeight.lean": "CRYPTO_PROVENANCE",
             "Lutar/Innovations/round4/ELSBonferroniBound.lean": "PROBABILITY_STATISTICS",
             "Lutar/Innovations/round4/EnochEpochAlignment.lean": "CALENDAR_ASTRONOMY",
-            "Lutar/KhipuConsensus.lean": "CONSENSUS_BFT",
+            "Lutar/Innovations/round4/MasoreticChecksum.lean": "CRYPTO_PROVENANCE",
+            "Lutar/Innovations/round4/MayaLCMEpochSync.lean": "CALENDAR_ASTRONOMY",
+            "Lutar/Innovations/round4/PlimptonReciprocal.lean": "ANALYSIS_ALGEBRA",
             "Lutar/Khipu/MerkleFunctor.lean": "CRYPTO_PROVENANCE",
+            "Lutar/Khipu/NumericStability.lean": "ANALYSIS_ALGEBRA",
+            "Lutar/Khipu/SummationInvariant.lean": "CRYPTO_PROVENANCE",
+            "Lutar/KhipuConsensus.lean": "CONSENSUS_BFT",
+            "Lutar/Lambda/CompositionRing.lean": "ANALYSIS_ALGEBRA",
+            "Lutar/PACBayes/MadhavaBound.lean": "ANALYSIS_ALGEBRA",
+            "Lutar/Precision/SexagesimalRegular.lean": "LAMBDA_CORE",
             "Lutar/Propagation/RelayChain.lean": "CRYPTO_PROVENANCE",
+            "Lutar/Thresholds/QuadraticCompletion.lean": "ANALYSIS_ALGEBRA",
             "Lutar/Transduction/ReceiptInvariant.lean": "CRYPTO_PROVENANCE",
+            "Lutar/Wave14/LeibnizRemainder.lean": "ANALYSIS_ALGEBRA",
         }
         for path, family in expected.items():
             self.assertEqual(lean[path], family, path)
@@ -549,6 +651,14 @@ class CliTests(TestCase):
         self.assertEqual((code, summary["failed"]), (2, 1))
         code, summary = self.run_main([answer("four")], output="unread.json")
         self.assertEqual((code, summary["source_bytes_not_read"], summary["evaluated"]), (2, 1, 0))
+
+    def test_a_path_with_no_utf8_form_is_a_typed_refusal_not_kat_unavailable(self):
+        # json.dumps writes the lone surrogate as a \ud800 escape, as a hostile set would.
+        code, summary = self.run_main([answer("four", path="src/a\ud800.lean"), answer("seven")],
+                                      "--checkout", f"{REPO}={self.repo}")
+        self.assertEqual((code, summary["state"], summary["code"]),
+                         (3, "UNAVAILABLE", "KAT_ANSWER_FIELDS_INVALID"))
+        self.assertFalse((self.base / "out.json").exists())
 
     def test_a_checkout_that_is_not_a_top_level_work_tree_is_refused(self):
         code, summary = self.run_main([answer("four")], "--checkout", f"{REPO}={self.repo / 'src'}")
