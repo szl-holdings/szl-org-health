@@ -1,0 +1,235 @@
+name: OMS sign model
+
+# Parameterized OpenSSF Model Signing (OMS) via public Sigstore, keyless
+# GitHub Actions OIDC. Signs one public SZLHOLDINGS model at a pinned
+# revision. Does not use the proofrun key. Does not edit model cards.
+# The signed model.sig (and sign-readback.json) are Actions artifacts;
+# uploading only model.sig to Hugging Face is a separate step.
+#
+# Restricted to workflow_dispatch on main. Changing the method, or
+# signing a private model (public Rekor), needs a new named yes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_id:
+        description: Hugging Face repo id (must be SZLHOLDINGS/<name>)
+        required: true
+        type: string
+      revision:
+        description: Full 40-character commit SHA to sign
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: model-sign-${{ github.event.inputs.repo_id }}-${{ github.event.inputs.revision }}
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    name: sign and verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      MODEL_ID: ${{ github.event.inputs.repo_id }}
+      MODEL_REV: ${{ github.event.inputs.revision }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install model-signing and huggingface_hub
+        # model-signing 1.1.1 imports certifi and OpenSSL but does not declare them
+        run: python -m pip install --quiet "model-signing==1.1.1" "huggingface_hub==2.5.0" "certifi==2026.11.20" "pyOpenSSL==26.4.0"
+
+      - name: Validate inputs and refuse unsafe subjects
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, re, sys
+          from huggingface_hub import model_info
+
+          repo_id = os.environ["MODEL_ID"].strip()
+          revision = os.environ["MODEL_REV"].strip()
+          if not re.fullmatch(r"SZLHOLDINGS/[A-Za-z0-9._-]+", repo_id):
+              raise SystemExit(f"REFUSE: repo_id must be SZLHOLDINGS/<name>, got {repo_id!r}")
+          if not re.fullmatch(r"[0-9a-f]{40}", revision):
+              raise SystemExit("REFUSE: revision must be a 40-character lowercase hex SHA")
+          name = repo_id.split("/", 1)[1]
+          lowered = name.lower()
+          if "khipu" in lowered:
+              raise SystemExit("REFUSE: Khipu models are out of scope")
+          if "estate-v1" in lowered:
+              raise SystemExit("REFUSE: Estate-v1 models are out of scope")
+          if lowered == "salad-chaski-frontier-9b-op1-r15":
+              raise SystemExit("REFUSE: salad-chaski-frontier-9b-op1-r15 has an active eval writer")
+
+          info = model_info(repo_id, revision=revision)
+          if getattr(info, "private", False):
+              raise SystemExit("REFUSE: private models must not go to the public Rekor log")
+          gated = getattr(info, "gated", False)
+          if gated not in (False, None, "false"):
+              raise SystemExit(f"REFUSE: gated models are out of scope (gated={gated!r})")
+          print(f"PRECHECK_META ok repo={repo_id} rev={revision} sha={getattr(info, 'sha', None)}")
+          PY
+
+      - name: Download pinned public model snapshot
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+          snapshot_download(
+              repo_id=os.environ["MODEL_ID"],
+              revision=os.environ["MODEL_REV"],
+              local_dir="model",
+          )
+          PY
+          rm -rf model/.cache model/.huggingface
+          # Keep an existing model.sig out of the signed payload so a re-sign
+          # overwrites the detached signature only.
+          if [ -f model/model.sig ]; then
+            mv model/model.sig /tmp/previous-model.sig
+            echo "NOTE: moved existing model/model.sig aside for re-sign"
+          fi
+
+      - name: Confirm licensed weight-bearing payload
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, sys
+          from pathlib import Path
+
+          root = Path("model")
+          files = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
+          print("n_files:", len(files))
+          if any(p.endswith("model.sig") or "sigstore" in p.lower() for p in files):
+              raise SystemExit("REFUSE: snapshot still contains a model.sig / sigstore file")
+          weight_exts = (".safetensors", ".gguf", ".bin")
+          weights = [p for p in files if p.lower().endswith(weight_exts)]
+          if not weights:
+              raise SystemExit("REFUSE: no weight files (.safetensors / .gguf / .bin)")
+          print("n_weights:", len(weights))
+
+          license_names = {"license", "license.md", "license.txt", "licence", "licence.md"}
+          has_license_file = any(Path(p).name.lower() in license_names for p in files)
+          yaml_license = None
+          readme = root / "README.md"
+          if readme.is_file():
+              text = readme.read_text(encoding="utf-8", errors="replace")
+              if text.startswith("---"):
+                  end = text.find("\n---", 3)
+                  if end != -1:
+                      for line in text[3:end].splitlines():
+                          if line.lower().startswith("license:"):
+                              yaml_license = line.split(":", 1)[1].strip().strip("\"'" )
+                              break
+          print("has_license_file:", has_license_file, "yaml_license:", yaml_license)
+          bad = {"", "unknown", "unlicensed", "none", "null"}
+          if not has_license_file and (yaml_license is None or yaml_license.lower() in bad):
+              raise SystemExit("REFUSE: no LICENSE file and no license in card YAML")
+          print("PRECHECK_OK", os.environ["MODEL_ID"], os.environ["MODEL_REV"])
+          PY
+
+      - name: Sign with Sigstore keyless (ambient GitHub OIDC)
+        run: |
+          set -euo pipefail
+          echo "workflow_ref=${{ github.workflow_ref }}"
+          echo "repository=${{ github.repository }}"
+          echo "ref=${{ github.ref }}"
+          python -m model_signing sign sigstore model \
+            --signature model.sig \
+            --use_ambient_credentials \
+            --ignore-git-paths \
+            --ignore-paths model/.cache \
+            --ignore-paths model/.huggingface
+          ls -l model.sig
+
+      - name: Extract identity and Rekor log index
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, base64, os
+          from pathlib import Path
+          from cryptography import x509
+          from cryptography.hazmat.backends import default_backend
+
+          bundle = json.loads(Path("model.sig").read_text())
+          vm = bundle.get("verificationMaterial") or bundle.get("verification_material") or {}
+          tlog = vm.get("tlogEntries") or vm.get("tlog_entries") or []
+          indexes = [e.get("logIndex", e.get("log_index")) for e in tlog]
+          print("rekor_log_index:", indexes)
+
+          cert_b64 = None
+          cert_obj = vm.get("certificate") or {}
+          if isinstance(cert_obj, dict):
+              cert_b64 = cert_obj.get("rawBytes") or cert_obj.get("raw_bytes")
+          chain = vm.get("x509CertificateChain") or vm.get("x509_certificate_chain") or {}
+          if not cert_b64 and isinstance(chain, dict):
+              certs = chain.get("certificates") or []
+              if certs:
+                  c0 = certs[0]
+                  cert_b64 = c0.get("rawBytes") or c0.get("raw_bytes") if isinstance(c0, dict) else None
+
+          identity = None
+          if cert_b64:
+              der = base64.b64decode(cert_b64)
+              cert = x509.load_der_x509_certificate(der, default_backend())
+              try:
+                  san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+                  uris = san.get_values_for_type(x509.UniformResourceIdentifier)
+                  emails = san.get_values_for_type(x509.RFC822Name)
+                  identity = (uris or emails or [None])[0]
+              except x509.ExtensionNotFound:
+                  pass
+          print("sigstore_identity:", identity)
+
+          Path("sign-readback.json").write_text(json.dumps({
+              "rekor_log_index": indexes,
+              "sigstore_identity": identity,
+              "model_id": os.environ["MODEL_ID"],
+              "model_rev": os.environ["MODEL_REV"],
+              "bundle_media_type": bundle.get("mediaType") or bundle.get("media_type"),
+          }, indent=2) + "\n")
+          print("wrote sign-readback.json")
+          PY
+
+      - name: Verify signature (fail-closed)
+        run: |
+          set -euo pipefail
+          IDENTITY="https://github.com/${{ github.workflow_ref }}"
+          ISSUER="https://token.actions.githubusercontent.com"
+          echo "expected_identity=$IDENTITY"
+          python -m model_signing verify sigstore model \
+            --signature model.sig \
+            --identity "$IDENTITY" \
+            --identity_provider "$ISSUER" \
+            --ignore-git-paths \
+            --ignore-paths model/.cache \
+            --ignore-paths model/.huggingface
+          echo "VERIFY_OK"
+
+      - name: Upload signature artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: model-sig-${{ github.run_id }}
+          path: |
+            model.sig
+            sign-readback.json
+          if-no-files-found: error
+          retention-days: 30
