@@ -1,0 +1,116 @@
+name: model-verify
+
+# Reusable, verify-only OpenSSF Model Signing (OMS) check.
+# This workflow does not sign anything. A missing signature is a warning
+# in report mode and a failure only when mode=fail (after models are signed
+# and a separate yes makes verify required).
+#
+# Pins match the other workflows in this repository. Re-check SHAs if you
+# bump the tags.
+
+on:
+  workflow_call:
+    inputs:
+      model_dir:
+        description: Directory that contains the model files to verify
+        required: true
+        type: string
+      signature_path:
+        description: Path to the detached OMS / model-signing bundle
+        required: false
+        type: string
+        default: model.sig
+      mode:
+        description: "report = missing or failed signature does not fail the job; fail = fail-closed"
+        required: false
+        type: string
+        default: report
+      identity:
+        description: Expected Sigstore identity (keyless). Leave empty for key-based verify.
+        required: false
+        type: string
+        default: ""
+      identity_provider:
+        description: Expected OIDC issuer for keyless verify
+        required: false
+        type: string
+        default: "https://token.actions.githubusercontent.com"
+      public_key_path:
+        description: Public key file for key-based verify
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install model-signing
+        run: python -m pip install --quiet "model-signing==1.1.1"
+
+      - name: Verify model signature
+        env:
+          MODEL_DIR: ${{ inputs.model_dir }}
+          SIG: ${{ inputs.signature_path }}
+          MODE: ${{ inputs.mode }}
+          IDENTITY: ${{ inputs.identity }}
+          ISSUER: ${{ inputs.identity_provider }}
+          PUBKEY: ${{ inputs.public_key_path }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "$SIG" ]; then
+            echo "NO_SIGNATURE: $SIG is missing (OMS model.sig not present)."
+            if [ "$MODE" = "fail" ]; then
+              exit 1
+            fi
+            exit 0
+          fi
+          if [ -n "$IDENTITY" ]; then
+            set +e
+            python -m model_signing verify sigstore "$MODEL_DIR" \
+              --signature "$SIG" \
+              --identity "$IDENTITY" \
+              --identity_provider "$ISSUER"
+            rc=$?
+            set -e
+          elif [ -n "$PUBKEY" ]; then
+            set +e
+            python -m model_signing verify key "$MODEL_DIR" \
+              --signature "$SIG" \
+              --public_key "$PUBKEY"
+            rc=$?
+            set -e
+          else
+            echo "VERIFY_CONFIG: set identity (keyless) or public_key_path (key-based)."
+            if [ "$MODE" = "fail" ]; then
+              exit 1
+            fi
+            exit 0
+          fi
+          if [ "$rc" -eq 0 ]; then
+            echo "VERIFY_OK"
+          else
+            echo "VERIFY_FAIL rc=$rc"
+            if [ "$MODE" = "fail" ]; then
+              exit "$rc"
+            fi
+          fi
