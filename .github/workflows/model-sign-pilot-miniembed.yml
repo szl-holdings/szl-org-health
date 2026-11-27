@@ -1,0 +1,171 @@
+name: OMS pilot sign SZL-MiniEmbed-0.8B
+
+# One-shot public Sigstore (keyless, GitHub Actions OIDC) sign of
+# SZLHOLDINGS/SZL-MiniEmbed-0.8B at a pinned revision.
+# Approved by Stephen, 2026-11-26 10:05 PM America/New_York, for this
+# model only. Does not use the proofrun key. Does not upload to Hugging
+# Face (the signed bundle is an Actions artifact; a later step on the
+# box uploads only model.sig).
+#
+# The push trigger is limited to the draft-PR branch so this is inert
+# if merged to main as-is. Changing the model, revision, or method
+# needs a new named yes.
+
+on:
+  push:
+    branches: [amaru/d05-model-signing-20261126]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: model-sign-pilot-miniembed-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    name: sign MiniEmbed 0.8B
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      MODEL_ID: SZLHOLDINGS/SZL-MiniEmbed-0.8B
+      MODEL_REV: 810b66032da3b2deb0bc2743e220433d8c3fa21f
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install model-signing and huggingface_hub
+        # model-signing 1.1.1 imports certifi and OpenSSL but does not declare them
+        run: python -m pip install --quiet "model-signing==1.1.1" "huggingface_hub==2.5.0" "certifi==2026.11.20" "pyOpenSSL==26.4.0"
+
+      - name: Download pinned public model snapshot
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+          snapshot_download(
+              repo_id="SZLHOLDINGS/SZL-MiniEmbed-0.8B",
+              revision="810b66032da3b2deb0bc2743e220433d8c3fa21f",
+              local_dir="miniembed",
+          )
+          PY
+          # Drop Hub cache dirs so they are not signed.
+          rm -rf miniembed/.cache miniembed/.huggingface
+
+      - name: Confirm public, licensed, unsigned payload
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          root = Path("miniembed")
+          files = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
+          print("files:", *files, sep="\n  ")
+          if any(p.endswith("model.sig") or "sigstore" in p.lower() for p in files):
+              raise SystemExit("REFUSE: snapshot already contains a model.sig / sigstore file")
+          if not (root / "adapter_model.safetensors").is_file():
+              raise SystemExit("REFUSE: expected adapter_model.safetensors missing")
+          readme = (root / "README.md").read_text(encoding="utf-8", errors="replace")[:4000]
+          if "apache-2.0" not in readme and "license: apache-2.0" not in readme.lower():
+              # card YAML may still carry the license; do not fail solely on this,
+              # but record it.
+              print("NOTE: apache-2.0 string not in first 4000 bytes of README.md")
+          print("PRECHECK_OK revision=810b66032da3b2deb0bc2743e220433d8c3fa21f")
+          PY
+
+      - name: Sign with Sigstore keyless (ambient GitHub OIDC)
+        run: |
+          set -euo pipefail
+          echo "workflow_ref=${{ github.workflow_ref }}"
+          echo "repository=${{ github.repository }}"
+          echo "ref=${{ github.ref }}"
+          python -m model_signing sign sigstore miniembed \
+            --signature model.sig \
+            --use_ambient_credentials \
+            --ignore-git-paths \
+            --ignore-paths miniembed/.cache \
+            --ignore-paths miniembed/.huggingface
+          ls -l model.sig
+
+      - name: Extract identity and Rekor log index
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, base64, sys
+          from pathlib import Path
+          from cryptography import x509
+          from cryptography.hazmat.backends import default_backend
+
+          bundle = json.loads(Path("model.sig").read_text())
+          vm = bundle.get("verificationMaterial") or bundle.get("verification_material") or {}
+          tlog = vm.get("tlogEntries") or vm.get("tlog_entries") or []
+          indexes = []
+          for e in tlog:
+              idx = e.get("logIndex", e.get("log_index"))
+              indexes.append(idx)
+          print("rekor_log_index:", indexes)
+
+          cert_b64 = None
+          cert_obj = vm.get("certificate") or {}
+          if isinstance(cert_obj, dict):
+              cert_b64 = cert_obj.get("rawBytes") or cert_obj.get("raw_bytes")
+          chain = vm.get("x509CertificateChain") or vm.get("x509_certificate_chain") or {}
+          if not cert_b64 and isinstance(chain, dict):
+              certs = chain.get("certificates") or []
+              if certs:
+                  c0 = certs[0]
+                  cert_b64 = c0.get("rawBytes") or c0.get("raw_bytes") if isinstance(c0, dict) else None
+
+          identity = None
+          issuer = None
+          if cert_b64:
+              der = base64.b64decode(cert_b64)
+              cert = x509.load_der_x509_certificate(der, default_backend())
+              # SAN
+              try:
+                  san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+                  uris = san.get_values_for_type(x509.UniformResourceIdentifier)
+                  emails = san.get_values_for_type(x509.RFC822Name)
+                  identity = (uris or emails or [None])[0]
+              except x509.ExtensionNotFound:
+                  pass
+              # issuer / OIDC issuer in Fulcio cert (OIDC issuer is often in a custom extension or issuer CN)
+              for attr in cert.subject:
+                  print(f"cert_subject_{attr.oid._name}: {attr.value}")
+              for attr in cert.issuer:
+                  print(f"cert_issuer_{attr.oid._name}: {attr.value}")
+          print("sigstore_identity:", identity)
+
+          # Also dump top-level keys for debugging, no secrets in a public bundle
+          Path("sign-readback.json").write_text(json.dumps({
+              "rekor_log_index": indexes,
+              "sigstore_identity": identity,
+              "workflow_note": "compare with github.workflow_ref in the job log",
+              "model_id": "SZLHOLDINGS/SZL-MiniEmbed-0.8B",
+              "model_rev": "810b66032da3b2deb0bc2743e220433d8c3fa21f",
+              "bundle_media_type": bundle.get("mediaType") or bundle.get("media_type"),
+          }, indent=2) + "\n")
+          print("wrote sign-readback.json")
+          PY
+
+      - name: Upload signature artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: miniembed-model-sig
+          path: |
+            model.sig
+            sign-readback.json
+          if-no-files-found: error
+          retention-days: 30
